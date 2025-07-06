@@ -4,9 +4,12 @@ import gspread
 import json
 from google.oauth2.service_account import Credentials
 
-st.set_page_config(page_title="MalinData Analys")
+st.set_page_config(page_title="MalinData Analys", layout="wide")
+st.title("📊 MalinData\nAnalys")
 
-# Funktion: Läs eller skapa data
+SHEET_NAME = "MalinData"
+WORKSHEET_NAME = "Blad1"
+
 def load_data():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     credentials = Credentials.from_service_account_info(
@@ -14,8 +17,8 @@ def load_data():
     )
     client = gspread.authorize(credentials)
 
-    spreadsheet = client.open("MalinData")
-    worksheet = spreadsheet.worksheet("Blad1")
+    spreadsheet = client.open(SHEET_NAME)
+    worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
 
     expected_headers = [
         "Dag", "Män", "F", "R", "Dm", "Df", "Dr", "3f", "3r", "3p", "Tid s",
@@ -27,14 +30,14 @@ def load_data():
 
     current_values = worksheet.get_all_values()
     if not current_values:
-        worksheet.insert_row(expected_headers, 1)
+        worksheet.append_row(expected_headers)
         return worksheet, pd.DataFrame(columns=expected_headers)
 
     headers = current_values[0]
     if headers != expected_headers:
-        worksheet.delete_row(1)
-        worksheet.insert_row(expected_headers, 1)
-        current_values = worksheet.get_all_values()
+        worksheet.clear()
+        worksheet.append_row(expected_headers)
+        return worksheet, pd.DataFrame(columns=expected_headers)
 
     if len(current_values) <= 1:
         return worksheet, pd.DataFrame(columns=expected_headers)
@@ -44,75 +47,68 @@ def load_data():
 
     return worksheet, df
 
-# Funktion: Visa nyckeltal
-def visa_nyckeltal(df):
-    st.header("Nyckeltal")
-
-    if df.empty:
-        st.info("Ingen data att visa ännu.")
-        return
-
+def calculate_metrics(df):
     try:
+        df = df.fillna(0)
+
         max_jobb = df["Jobb"].max()
         max_grannar = df["Grannar"].max()
-        max_pv = df["Tjej oj"].max()
-        max_nils = df["Nils kom"].max()
+        max_pv = df["pv"].max() if "pv" in df.columns else 0
+        max_nils_kom = df["Nils kom"].max()
 
         total_intakt = df["Intäkter"].sum()
-        känner_tjänat = total_intakt / max((max_jobb + max_grannar + max_pv + max_nils), 1)
+        denominator = max_jobb + max_grannar + max_pv + max_nils_kom
+        känner_tjänat = total_intakt / denominator if denominator > 0 else 0
 
-        filmrader = df[df["Män"] > 0]
-        snitt_film = (df["Män"].sum() + df["F"].sum()) / len(filmrader) if len(filmrader) > 0 else 0
+        film_rows = df[df["Män"] > 0]
+        snitt_film = (df["Män"].sum() + df["GB"].sum()) / len(film_rows) if len(film_rows) > 0 else 0
 
-        malin_tjänst_snitt = df[["Män", "F", "Älskar", "Sover med"]].sum().sum()
+        malin_tjänat = df[["Män", "GB", "Älskar", "Sover med"]].sum().sum()
 
-        vita_summa = df["Män"].sum() + df["F"].sum()
-        svarta_summa = df["Svarta"].sum()
-        total_vit_svart = max((vita_summa + svarta_summa), 1)
-        vita_procent = (vita_summa - svarta_summa) / total_vit_svart * 100
-        svarta_procent = svarta_summa / total_vit_svart * 100
+        total_män = df["Män"].sum()
+        total_gb = df["GB"].sum()
+        total_svarta = df["Svarta"].sum()
+        total_vit_data = total_män + total_gb + total_svarta
 
-        st.metric("Känner tjänat", f"{känner_tjänat:.2f} kr")
-        st.metric("Snitt film", f"{snitt_film:.2f}")
-        st.metric("Malin tjänst snitt", f"{malin_tjänst_snitt:.2f}")
-        st.metric("Vita (%)", f"{vita_procent:.2f}%")
-        st.metric("Svarta (%)", f"{svarta_procent:.2f}%")
+        vita_procent = ((total_män + total_gb - total_svarta) / total_vit_data * 100) if total_vit_data > 0 else 0
+        svarta_procent = (total_svarta / total_vit_data * 100) if total_vit_data > 0 else 0
+
+        gb_numerator = df["GB"].sum()
+        gb_snitt_denominator = max_jobb + max_grannar + max_pv + max_nils_kom
+        gb_snitt = gb_numerator / gb_snitt_denominator if gb_snitt_denominator > 0 else 0
+
+        return {
+            "Känner tjänat": round(känner_tjänat, 2),
+            "Snitt film": round(snitt_film, 2),
+            "Malin tjänat": round(malin_tjänat, 2),
+            "Vita (%)": round(vita_procent, 1),
+            "Svarta (%)": round(svarta_procent, 1),
+            "GB snitt": round(gb_snitt, 2),
+            "Max Jobb": max_jobb,
+            "Max Grannar": max_grannar,
+            "Max pv": max_pv,
+            "Max Nils kom": max_nils_kom
+        }
 
     except Exception as e:
-        st.error(f"Fel vid nyckeltalsberäkning: {e}")
+        st.error(f"Fel vid beräkning: {e}")
+        return {}
 
-# Funktion: Formulär för ny post
-def nytt_inlägg(worksheet, df):
-    st.subheader("Lägg till ny rad")
-
-    with st.form("data_form"):
-        ny_rad = {}
-        for col in df.columns:
-            if col in ["Dag", "Klockan"]:
-                ny_rad[col] = st.text_input(col)
-            else:
-                ny_rad[col] = st.number_input(col, value=0, step=1)
-        submitted = st.form_submit_button("Spara")
-        if submitted:
-            rad = [ny_rad[col] for col in df.columns]
-            worksheet.append_row(rad)
-            st.success("Rad tillagd. Ladda om sidan.")
-
-# Funktion: Visa data
-def visa_tabell(df):
-    st.subheader("Datatabell")
-    if df.empty:
-        st.info("Ingen data ännu.")
-    else:
-        st.dataframe(df)
-
-# Huvudfunktion
 def main():
-    st.title("📊 MalinData Analys")
     worksheet, df = load_data()
-    visa_nyckeltal(df)
-    nytt_inlägg(worksheet, df)
-    visa_tabell(df)
+
+    if df.empty:
+        st.warning("Ingen data ännu.")
+        return
+
+    st.subheader("📌 Nyckeltal")
+    metrics = calculate_metrics(df)
+    cols = st.columns(len(metrics))
+    for col, (key, value) in zip(cols, metrics.items()):
+        col.metric(label=key, value=value)
+
+    st.subheader("📋 Data")
+    st.dataframe(df, use_container_width=True)
 
 if __name__ == "__main__":
     main()
