@@ -1,101 +1,90 @@
 import streamlit as st
+import gspread
 import pandas as pd
 import datetime
-import gspread
-from google.oauth2.service_account import Credentials
 import json
+from oauth2client.service_account import ServiceAccountCredentials
 
-# Autentisering mot Google Sheets
+# Autentisering med Google Sheets
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials = Credentials.from_service_account_info(json.loads(st.secrets["GOOGLE_CREDENTIALS"]), scopes=scope)
-client = gspread.authorize(credentials)
+credentials = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+gc = gspread.service_account_from_dict(credentials)
 
-# Google Sheets info
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1-bpY9Ahk9qKH2QIQzVUSZLX6qDc2UwjCmullMCNvENQ/edit"
+# Fil- och bladnamn
+SHEET_NAME = "MalinData"
 WORKSHEET_NAME = "Blad1"
 
-# Rubrikrader
-HEADERS = [
-    "Dag", "Män", "F", "R", "Dm", "Df", "Dr", "3f", "3r", "3p", "Tid s", "Tid d", "Tid t", "Vila",
-    "Summa s", "Summa d", "Summa t", "Summa v", "Klockan", "Älskar", "Älsk tid", "Sover med", "Känner",
-    "Jobb", "Grannar", "Nils kom", "Pv", "Tid kille", "Filmer", "Pris", "Intäkter", "Malin", "Företag",
-    "Vänner", "Hårdhet", "Svarta", "GB"
+# Förväntade kolumnrubriker i rätt ordning
+EXPECTED_COLUMNS = [
+    "Datum", "Män", "Fi", "Rö", "DM", "DF", "DR",
+    "TPP", "TAP", "TPA", "Älskar med", "Sover med", "Känner", "Jobb", "Jobb 2",
+    "Grannar", "Grannar 2", "Tjej PojkV", "Tjej PojkV 2", "Nils fam", "Nils fam 2",
+    "Totalt män", "Tid Singel", "Tid Dubbel", "Tid Trippel", "Vila",
+    "Summa singel", "Summa dubbel", "Summa trippel", "Summa vila",
+    "Summa tid", "Klockan", "Tid kille", "Suger", "Filmer",
+    "Pris", "Intäkter", "Malin lön", "Företag lön", "Vänner lön", "Hårdhet"
 ]
 
-def load_data():
-    spreadsheet = client.open_by_url(SPREADSHEET_URL)
-    worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
+def load_sheet():
+    sh = gc.open(SHEET_NAME)
+    worksheet = sh.worksheet(WORKSHEET_NAME)
+
+    # Läs befintliga data
     data = worksheet.get_all_records()
 
-    if not data:
-        worksheet.update([HEADERS])
-        df = pd.DataFrame(columns=HEADERS)
+    # Om rubrikerna är fel eller saknas, skriv in dem korrekt
+    if not data or list(data[0].keys()) != EXPECTED_COLUMNS:
+        worksheet.clear()
+        worksheet.append_row(EXPECTED_COLUMNS)
+        df = pd.DataFrame(columns=EXPECTED_COLUMNS)
     else:
         df = pd.DataFrame(data)
-
-        # Säkerställ att alla rubriker finns
-        for col in HEADERS:
-            if col not in df.columns:
-                df[col] = ""
-
-        df = df[HEADERS]
 
     return worksheet, df
 
 def save_data(worksheet, df):
-    df = df.fillna("")
-    worksheet.update([df.columns.tolist()] + df.astype(str).values.tolist())
+    # Konvertera alla värden till strängar för säker uppdatering
+    values = [df.columns.tolist()] + df.fillna("").astype(str).values.tolist()
+    worksheet.update("A1", values)
 
 def main():
-    st.title("MalinApp")
+    st.title("📝 Daglig inmatning – MalinData")
 
-    worksheet, df = load_data()
+    worksheet, df = load_sheet()
 
-    st.subheader("Lägg till ny rad")
+    # Datum: första raden anges manuellt, andra raden föreslås +1 dag
+    if df.empty:
+        datum = st.date_input("Datum", datetime.date.today())
+    else:
+        senaste_datum = pd.to_datetime(df["Datum"], errors="coerce").max()
+        datum = st.date_input("Datum", (senaste_datum + pd.Timedelta(days=1)).date())
 
-    with st.form("inmatning"):
-        today = (pd.to_datetime(df["Dag"], errors='coerce').max() + pd.Timedelta(days=1)).date() if not df.empty else datetime.date.today()
+    with st.form("inmatning_form"):
+        ny_rad = {"Datum": str(datum)}
 
-        ny_rad = {}
-        ny_rad["Dag"] = st.date_input("Dag", today)
+        heltalsfält = [
+            "Män", "Fi", "Rö", "DM", "DF", "DR", "TPP", "TAP", "TPA",
+            "Älskar med", "Sover med", "Jobb", "Grannar", "Tjej PojkV", "Nils fam"
+        ]
 
-        # Inmatningsfält
-        for col in [
-            "Män", "F", "R", "Dm", "Df", "Dr", "3f", "3r", "3p", "Tid s", "Tid d", "Tid t", "Vila",
-            "Älskar", "Älsk tid", "Sover med", "Jobb", "Grannar", "Nils kom", "Pv", "Svarta"
-        ]:
-            ny_rad[col] = st.number_input(col, value=0)
+        for fält in heltalsfält:
+            ny_rad[fält] = st.number_input(fält, min_value=0, step=1, value=0)
+
+        sekunder_fält = ["Tid Singel", "Tid Dubbel", "Tid Trippel", "Vila"]
+        for fält in sekunder_fält:
+            ny_rad[fält] = st.number_input(fält + " (sekunder)", min_value=0, step=1, value=0)
 
         submitted = st.form_submit_button("Spara")
 
     if submitted:
-        # Beräkningar
-        ny_rad["Summa s"] = ny_rad["Tid s"] * ny_rad["Män"]
-        ny_rad["Summa d"] = ny_rad["Tid d"] * ny_rad["F"]
-        ny_rad["Summa t"] = ny_rad["Tid t"] * ny_rad["R"]
-        ny_rad["Summa v"] = ny_rad["Summa s"] + ny_rad["Summa d"] + ny_rad["Summa t"]
-        ny_rad["Klockan"] = "07:00"
-        ny_rad["Känner"] = ny_rad["Jobb"] + ny_rad["Grannar"] + ny_rad["Pv"] + ny_rad["Nils kom"]
-        ny_rad["Tid kille"] = ny_rad["Män"] * ny_rad["Tid s"]
-        ny_rad["GB"] = ny_rad["Älskar"] + ny_rad["Sover med"]
-        ny_rad["Filmer"] = ny_rad["Män"] + ny_rad["GB"]
-        ny_rad["Pris"] = 19.99
-        ny_rad["Intäkter"] = ny_rad["Filmer"] * ny_rad["Pris"]
-        ny_rad["Malin"] = ny_rad["Älskar"] + ny_rad["Älsk tid"]
-        ny_rad["Företag"] = ny_rad["Jobb"]
-        ny_rad["Vänner"] = ny_rad["Känner"]
-        ny_rad["Hårdhet"] = ny_rad["GB"] * 2
-
-        for col in HEADERS:
-            if col not in ny_rad:
-                ny_rad[col] = ""
+        # Fyll övriga kolumner med tomma värden för nu
+        for kolumn in EXPECTED_COLUMNS:
+            if kolumn not in ny_rad:
+                ny_rad[kolumn] = ""
 
         df = pd.concat([df, pd.DataFrame([ny_rad])], ignore_index=True)
         save_data(worksheet, df)
-        st.success("Raden har sparats!")
-
-    st.subheader("Data i kalkylbladet")
-    st.dataframe(df)
+        st.success("✅ Data sparad!")
 
 if __name__ == "__main__":
     main()
