@@ -1,4 +1,4 @@
-[theme]
-base="light"
-primaryColor="#4CAF50"
-font="sans serif"
+[server]
+headless = true
+enableCORS = false
+port = 8501
