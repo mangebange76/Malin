@@ -1,167 +1,187 @@
 import streamlit as st
 import pandas as pd
 import gspread
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
+from google.oauth2.service_account import Credentials
 import json
-from google.oauth2 import service_account
 
 # Autentisering
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 credentials = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
 gc = gspread.service_account_from_dict(credentials)
 
-# Sheet-info
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1-bpY9Ahk9qKH2QIQzVUSZLX6qDc2UwjCmullMCNvENQ/edit?usp=drivesdk"
+# Inställningar
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1-bpY9Ahk9qKH2QIQzVUSZLX6qDc2UwjCmullMCNvENQ/edit"
 SHEET_NAME = "Blad1"
+STARTKLOCKA = datetime.strptime("07:00", "%H:%M")
 
-# Rubrikrader
-KOLUMNNAMN = [
+# Fältnamn
+FIELDS = [
     "Datum", "Män", "Fi", "Rö", "DM", "DF", "DR", "TPP", "TAP", "TPA", "Älskar",
-    "Sover med", "Känner", "Jobb", "Jobb 2", "Grannar", "Grannar 2", "Tjej PojkV",
-    "Tjej PojkV 2", "Nils fam", "Nils fam 2", "Totalt män", "Tid singel",
-    "Tid dubbel", "Tid trippel", "Vila", "Summa singel", "Summa dubbel",
-    "Summa trippel", "Summa vila", "Summa tid", "Klockan", "Tid kille",
-    "Suger", "Filmer", "Pris", "Intäkter", "Malin", "Företag", "Vänner", "Hårdhet",
-    "Känner 2"
+    "Sover med", "Känner", "Jobb", "Jobb 2", "Grannar", "Grannar 2", "Tjej PojkV", "Tjej PojkV 2",
+    "Nils Fam", "Nils Fam 2", "Totalt Män", "Tid Singel", "Tid Dubbel", "Tid Trippel", "Vila",
+    "Summa singel", "Summa dubbel", "Summa trippel", "Summa vila", "Summa tid", "Klockan",
+    "Tid kille", "Suger", "Filmer", "Pris", "Intäkter", "Malin lön", "Företag lön", "Vänner lön",
+    "Hårdhet", "Svarta"
 ]
 
-# Ladda data
+# Hjälpfunktioner
 def load_data():
     sh = gc.open_by_url(SHEET_URL)
     worksheet = sh.worksheet(SHEET_NAME)
     data = worksheet.get_all_records()
-    if not data:
-        worksheet.update([KOLUMNNAMN])
-        df = pd.DataFrame(columns=KOLUMNNAMN)
+    df = pd.DataFrame(data)
+    if df.empty:
+        worksheet.append_row(FIELDS)
+        df = pd.DataFrame(columns=FIELDS)
     else:
-        df = pd.DataFrame(data)
-        if df.columns.tolist() != KOLUMNNAMN:
-            worksheet.clear()
-            worksheet.update([KOLUMNNAMN])
-            df = pd.DataFrame(columns=KOLUMNNAMN)
+        missing_cols = [col for col in FIELDS if col not in df.columns]
+        for col in missing_cols:
+            df[col] = None
+        df = df[FIELDS]
     return worksheet, df
 
-# Spara data
-def save_data(worksheet, df):
-    worksheet.update([df.columns.tolist()] + df.fillna("").values.tolist())
+def save_row(worksheet, df, row):
+    row_data = [row.get(col, "") for col in FIELDS]
+    worksheet.append_row(row_data)
+    df.loc[len(df)] = row
+    return df
 
-# Hämta maxvärde i kolumn
-def maxhistorik(df, kolumn):
-    if kolumn in df.columns and not df[kolumn].isnull().all():
-        return int(df[kolumn].max())
-    return 0
+def calculate_fields(row, df):
+    # Datum
+    row["Datum"] = row.get("Datum") or datetime.today().strftime("%Y-%m-%d")
 
-# Huvudfunktion
+    # Känner
+    row["Känner"] = sum([row.get(f, 0) for f in ["Jobb", "Grannar", "Tjej PojkV", "Nils Fam"]])
+
+    # Känner 2
+    row["Jobb 2"] = max([df["Jobb"].max() if not df.empty else 0, row["Jobb"]])
+    row["Grannar 2"] = max([df["Grannar"].max() if not df.empty else 0, row["Grannar"]])
+    row["Tjej PojkV 2"] = max([df["Tjej PojkV"].max() if not df.empty else 0, row["Tjej PojkV"]])
+    row["Nils Fam 2"] = max([df["Nils Fam"].max() if not df.empty else 0, row["Nils Fam"]])
+    row["Känner 2"] = max([df["Känner"].max() if not df.empty else 0, row["Känner"]])
+
+    # Totalt Män
+    row["Totalt Män"] = row["Män"] + row["Känner"]
+
+    # Summeringar
+    row["Summa singel"] = row["Tid Singel"] * row["Totalt Män"]
+    row["Summa dubbel"] = row["Tid Dubbel"] * row["Totalt Män"]
+    row["Summa trippel"] = row["Tid Trippel"] * row["Totalt Män"]
+    vila = row["Vila"]
+    row["Summa vila"] = (
+        row["Totalt Män"] * vila +
+        row["DM"] * (vila + 10) +
+        row["DF"] * (vila + 15) +
+        row["DR"] * (vila + 15) +
+        row["TPP"] * (vila + 15) +
+        row["TAP"] * (vila + 15) +
+        row["TPA"] * (vila + 15)
+    )
+    row["Summa tid"] = row["Summa singel"] + row["Summa dubbel"] + row["Summa trippel"] + row["Summa vila"]
+    row["Klockan"] = (STARTKLOCKA + timedelta(seconds=row["Summa tid"])).strftime("%H:%M")
+
+    # Tid kille
+    row["Tid kille"] = round((
+        row["Summa singel"] +
+        row["Summa dubbel"] * 2 +
+        row["Summa trippel"] * 3
+    ) / row["Totalt Män"] / 60, 1)  # i minuter
+
+    # Suger
+    row["Suger"] = round(0.6 * (
+        row["Summa singel"] + row["Summa dubbel"] + row["Summa trippel"]
+    ) / row["Totalt Män"])
+
+    # Filmer
+    filmer = (
+        row["Män"] + row["Fi"] + row["Rö"]*2 + row["DM"]*2 + row["DF"]*3 +
+        row["DR"]*4 + row["TPP"]*5 + row["TAP"]*7 + row["TPA"]*6
+    )
+    row["Filmer"] = filmer
+    row["Pris"] = 19.99
+    row["Intäkter"] = round(row["Filmer"] * row["Pris"], 2)
+
+    # Malin lön
+    row["Malin lön"] = min(1500, round(0.01 * row["Intäkter"], 2))
+    row["Företag lön"] = round(0.4 * row["Intäkter"], 2)
+    row["Vänner lön"] = round(row["Intäkter"] - row["Malin lön"] - row["Företag lön"], 2)
+
+    # Hårdhet
+    hard = 0
+    if row["Män"] > 0: hard += 1
+    if row["DM"] > 0: hard += 1
+    if row["DF"] > 0: hard += 2
+    if row["DR"] > 0: hard += 1
+    if row["TPP"] > 0: hard += 4
+    if row["TAP"] > 0: hard += 5
+    if row["TPA"] > 0: hard += 4
+    row["Hårdhet"] = hard
+    return row
+
+# Streamlit UI
 def main():
-    st.title("MalinApp – Inmatning")
+    st.title("MalinApp")
 
     worksheet, df = load_data()
-    st.write("🔍 Rader i databasen:", len(df))
 
-    with st.form("data_form"):
-        datum = st.date_input("Datum", datetime.today().date(), format="YYYY-MM-DD")
-        män = st.number_input("Män", 0)
-        fi = st.number_input("Fi", 0)
-        rö = st.number_input("Rö", 0)
-        dm = st.number_input("DM", 0)
-        df_ = st.number_input("DF", 0)
-        dr = st.number_input("DR", 0)
-        tpp = st.number_input("TPP", 0)
-        tap = st.number_input("TAP", 0)
-        tpa = st.number_input("TPA", 0)
-        älskar = st.number_input("Älskar", 0)
-        sover_med = st.number_input("Sover med", 0)
-
-        jobb = st.number_input("Jobb", 0)
-        grannar = st.number_input("Grannar", 0)
-        tjej_pojkv = st.number_input("Tjej PojkV", 0)
-        nils_fam = st.number_input("Nils fam", 0)
-
-        tid_singel = st.number_input("Tid singel (sekunder)", 0)
-        tid_dubbel = st.number_input("Tid dubbel (sekunder)", 0)
-        tid_trippel = st.number_input("Tid trippel (sekunder)", 0)
-        vila = st.number_input("Vila (sekunder)", 0)
-
-        submitted = st.form_submit_button("Spara")
-
-    if submitted:
-        ny = {
-            "Datum": datum.strftime("%Y-%m-%d"),
-            "Män": män, "Fi": fi, "Rö": rö, "DM": dm, "DF": df_, "DR": dr,
-            "TPP": tpp, "TAP": tap, "TPA": tpa, "Älskar": älskar, "Sover med": sover_med,
-            "Jobb": jobb, "Grannar": grannar, "Tjej PojkV": tjej_pojkv, "Nils fam": nils_fam
-        }
-
-        ny["Känner"] = jobb + grannar + tjej_pojkv + nils_fam
-        ny["Totalt män"] = män + ny["Känner"]
-
-        ny["Tid singel"] = tid_singel
-        ny["Tid dubbel"] = tid_dubbel
-        ny["Tid trippel"] = tid_trippel
-        ny["Vila"] = vila
-
-        ny["Summa singel"] = tid_singel * ny["Totalt män"]
-        ny["Summa dubbel"] = tid_dubbel * ny["Totalt män"]
-        ny["Summa trippel"] = tid_trippel * ny["Totalt män"]
-
-        ny["Summa vila"] = (
-            ny["Totalt män"] * vila +
-            dm * (vila + 10) +
-            df_ * (vila + 15) +
-            dr * (vila + 15) +
-            tpp * (vila + 15) +
-            tap * (vila + 15) +
-            tpa * (vila + 15)
-        )
-
-        ny["Summa tid"] = (
-            ny["Summa singel"] +
-            ny["Summa dubbel"] * 2 +
-            ny["Summa trippel"] * 3 +
-            ny["Summa vila"]
-        )
-
-        start = datetime.combine(datetime.today(), time(7, 0))
-        klockan = start + timedelta(seconds=ny["Summa tid"])
-        ny["Klockan"] = klockan.strftime("%H:%M")
-
-        ny["Tid kille"] = round(
-            (ny["Summa singel"] + ny["Summa dubbel"] * 2 + ny["Summa trippel"] * 3) / ny["Totalt män"] / 60, 1
-        )
-
-        ny["Suger"] = round(
-            0.6 * (ny["Summa singel"] + ny["Summa dubbel"] + ny["Summa trippel"]) / ny["Totalt män"], 1
-        )
-
-        ny["Filmer"] = män + fi + rö * 2 + dm * 2 + df_ * 3 + dr * 4 + tpp * 5 + tap * 7 + tpa * 6
-        ny["Hårdhet"] = sum([
-            int(män > 0),
-            int(dm > 0),
-            int(df_ > 0) * 2,
-            int(dr > 0),
-            int(tpp > 0),
-            int(tap > 0),
-            int(tpa > 0)
-        ])
-
-        ny["Pris"] = 19.99
-        ny["Intäkter"] = ny["Filmer"] * ny["Hårdhet"] * 19.99
-        ny["Malin"] = min(1500, round(ny["Intäkter"] * 0.01, 2))
-        ny["Företag"] = round(ny["Intäkter"] * 0.4, 2)
-        ny["Vänner"] = round(ny["Intäkter"] - ny["Malin"] - ny["Företag"], 2)
-
-        ny["Jobb 2"] = max(jobb, maxhistorik(df, "Jobb"))
-        ny["Grannar 2"] = max(grannar, maxhistorik(df, "Grannar"))
-        ny["Tjej PojkV 2"] = max(tjej_pojkv, maxhistorik(df, "Tjej PojkV"))
-        ny["Nils fam 2"] = max(nils_fam, maxhistorik(df, "Nils fam"))
-        ny["Känner 2"] = max(ny["Känner"], maxhistorik(df, "Känner"))
-
-        df = pd.concat([df, pd.DataFrame([ny])], ignore_index=True)
-        save_data(worksheet, df)
-        st.success("✅ Data sparad!")
+    with st.form("inmatning"):
+        st.subheader("Lägg till ny rad")
+        ny_rad = {}
+        for f in FIELDS:
+            if f == "Datum":
+                ny_rad[f] = st.date_input(f, datetime.today())
+            elif f in ["Tid Singel", "Tid Dubbel", "Tid Trippel", "Vila"]:
+                ny_rad[f] = st.number_input(f, min_value=0, step=1)
+            elif f in ["Pris"]:
+                ny_rad[f] = 19.99
+            elif f in ["Klockan"]:
+                continue
+            elif f in FIELDS[FIELDS.index("Män"):FIELDS.index("Tid Singel")]:
+                ny_rad[f] = st.number_input(f, min_value=0, step=1)
+        if st.form_submit_button("Spara rad"):
+            ny_rad = calculate_fields(ny_rad, df)
+            df = save_row(worksheet, df, ny_rad)
+            st.success("Raden sparad!")
 
     if not df.empty:
-        st.subheader("Senaste raden")
-        st.dataframe(df.tail(1), use_container_width=True)
+        st.header("📊 Huvudvy")
+        total_män = df["Män"].sum()
+        total_känner = df["Känner"].sum()
+        total_älskar = df["Älskar"].sum()
+        total_malin = df["Malin lön"].sum()
+        total_vänner = df["Vänner lön"].sum()
+        total_svarta = df["Svarta"].sum()
+
+        st.markdown(f"- **Totalt Män:** {total_män}")
+        st.markdown(f"- **Malin lön:** {total_malin:.2f} USD")
+        st.markdown(f"- **Vänner lön:** {total_vänner:.2f} USD")
+        if total_män > 0:
+            vita = (total_män - total_svarta) / total_män * 100
+            svarta = total_svarta / total_män * 100
+            st.markdown(f"- **Vita (%):** {vita:.1f}%")
+            st.markdown(f"- **Svarta (%):** {svarta:.1f}%")
+
+        rader_med_värde = df[df["Män"] + df["Känner"] > 0]
+        if not rader_med_värde.empty:
+            snitt = (rader_med_värde["Män"] + rader_med_värde["Känner"]).mean()
+            st.markdown(f"- **Snitt (Män + Känner):** {snitt:.1f}")
+
+        # GangB och Älskat
+        denom = df[["Jobb 2", "Grannar 2", "Tjej PojkV 2", "Nils Fam 2"]].max().sum()
+        if denom > 0:
+            gangb = total_känner / denom
+            alskat = total_älskar / denom
+            st.markdown(f"- **GangB:** {gangb:.2f}")
+            st.markdown(f"- **Älskat:** {alskat:.2f}")
+
+        st.header("📄 Enskild rad")
+        val = st.selectbox("Välj rad", df.index[::-1])
+        rad = df.loc[val]
+        st.markdown(f"- **Klockan:** {rad['Klockan']}")
+        st.markdown(f"- **Tid kille:** {rad['Tid kille']} min")
+        st.markdown(f"- **Filmer:** {rad['Filmer']}")
+        st.markdown(f"- **Intäkter:** {rad['Intäkter']} USD")
 
 if __name__ == "__main__":
     main()
