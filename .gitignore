@@ -1,7 +1,4 @@
----
-
-## 🗂️ `.gitignore`
-```gitignore
 __pycache__/
 *.pyc
+.secrets.toml
 secrets.toml
