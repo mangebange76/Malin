@@ -1,156 +1,188 @@
 import streamlit as st
 import pandas as pd
-import datetime
 import gspread
-import json
 from google.oauth2.service_account import Credentials
+import json
+from datetime import datetime, timedelta
 
 # Autentisering
-scope = ["https://www.googleapis.com/auth/spreadsheets"]
-credentials = Credentials.from_service_account_info(
-    json.loads(st.secrets["GOOGLE_CREDENTIALS"]), scopes=scope
-)
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+credentials = Credentials.from_service_account_info(json.loads(st.secrets["GOOGLE_CREDENTIALS"]), scopes=scope)
 client = gspread.authorize(credentials)
 
-# Öppna kalkylblad
-SHEET_NAME = "Malin"
-WORKSHEET_NAME = "Data"
-spreadsheet = client.open(SHEET_NAME)
-try:
-    worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
-except gspread.WorksheetNotFound:
-    worksheet = spreadsheet.add_worksheet(title=WORKSHEET_NAME, rows="1000", cols="50")
+SHEET_NAME = "MalinData"
+WORKSHEET_NAME = "Blad1"
 
-# Kolumnrubriker
-COLUMNS = [
-    "Dag", "Killar", "F", "R", "Dm", "Df", "Dr", "3f", "3r", "3p",
-    "Tid s", "Tid d", "Tid t", "Vila", "Älskar", "Älsk tid", "Sover med",
-    "Jobb", "Grannar", "pv", "Nils kom", "Nils natt", "Filmer", "Pris", "Svarta"
-]
-
-# Säkerställ rubriker
-def ensure_headers():
-    current_headers = worksheet.row_values(1)
-    if current_headers != COLUMNS:
-        worksheet.resize(rows=1)
-        worksheet.insert_row(COLUMNS, 1)
-
-# Ladda data
+# Ladda Google Sheet
 def load_data():
-    ensure_headers()
-    rows = worksheet.get_all_records()
-    if not rows:
-        return pd.DataFrame(columns=COLUMNS)
-    df = pd.DataFrame(rows)
-    for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = 0
-    return df
+    try:
+        spreadsheet = client.open(SHEET_NAME)
+        worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
+    except Exception as e:
+        st.error(f"Kunde inte öppna arket: {e}")
+        st.stop()
 
-# Lägg till rad
-def append_row(row):
-    worksheet.append_row(row)
+    data = worksheet.get_all_records()
+    df = pd.DataFrame(data)
 
-# Töm databasen
-def clear_sheet():
-    worksheet.clear()
-    worksheet.append_row(COLUMNS)
+    # Om inga rubriker, skapa dem
+    required_columns = [
+        "Dag", "Killar", "F", "R", "Dm", "Df", "Dr", "3f", "3r", "3p", "Tid s", "Tid d", "Tid t", "Vila",
+        "Älskar", "Älsk tid", "Sover med", "Jobb", "Grannar", "pv", "Nils kom", "Nils natt", "Pris", "Svarta"
+    ]
+    derived_columns = [
+        "Summa s", "Summa d", "Summa t", "Klockan", "Känner", "Män", "Tid kille",
+        "Filmer", "Intäkter", "Malin", "Företag", "Känner (heta vänner)", "Hårdhet", "GB"
+    ]
+    all_columns = required_columns + derived_columns
 
-# Gränssnitt
-st.set_page_config(layout="wide")
-st.title("📝 Daglig registrering – Malin")
+    if df.empty or set(all_columns).difference(df.columns):
+        df = pd.DataFrame(columns=all_columns)
+        worksheet.clear()
+        worksheet.append_row(all_columns)
 
-df = load_data()
+    return worksheet, df
 
-# Välj startdatum
-if "start_date" not in st.session_state:
-    st.session_state.start_date = datetime.date(2014, 5, 6)
+# Spara ny rad
+def append_row(worksheet, row_dict):
+    existing_data = worksheet.get_all_records()
+    df = pd.DataFrame(existing_data)
+    next_row = []
 
-start_date = st.date_input("Startdatum", st.session_state.start_date)
-st.session_state.start_date = start_date
+    for col in worksheet.row_values(1):
+        next_row.append(row_dict.get(col, ""))
 
-# Beräkna nästa dag
-next_day = start_date + datetime.timedelta(days=len(df))
+    worksheet.append_row(next_row)
 
-with st.form("input_form"):
-    st.subheader(f"Registrering för: {next_day}")
+# Beräkningar per rad
+def calculate_fields(row):
+    try:
+        killar = int(row.get("Killar", 0))
+        f = int(row.get("F", 0))
+        r = int(row.get("R", 0))
+        dm = int(row.get("Dm", 0))
+        df_f = int(row.get("Df", 0))
+        dr = int(row.get("Dr", 0))
+        t3f = int(row.get("3f", 0))
+        t3r = int(row.get("3r", 0))
+        t3p = int(row.get("3p", 0))
+        tid_s = int(row.get("Tid s", 0))
+        tid_d = int(row.get("Tid d", 0))
+        tid_t = int(row.get("Tid t", 0))
+        vila = int(row.get("Vila", 0))
+        älsk_tid = int(row.get("Älsk tid", 0))
+        älskar = int(row.get("Älskar", 0))
+        sover_med = int(row.get("Sover med", 0))
+        jobb = int(row.get("Jobb", 0))
+        grannar = int(row.get("Grannar", 0))
+        pv = int(row.get("pv", 0))
+        nils_kom = int(row.get("Nils kom", 0))
+        pris = float(row.get("Pris", 0))
+        svarta = int(row.get("Svarta", 0))
 
-    data = {
-        "Dag": str(next_day),
-        "Killar": st.number_input("Killar", 0),
-        "F": st.number_input("F", 0),
-        "R": st.number_input("R", 0),
-        "Dm": st.number_input("Dm", 0),
-        "Df": st.number_input("Df", 0),
-        "Dr": st.number_input("Dr", 0),
-        "3f": st.number_input("3f", 0),
-        "3r": st.number_input("3r", 0),
-        "3p": st.number_input("3p", 0),
-        "Tid s": st.number_input("Tid s (sek)", 0),
-        "Tid d": st.number_input("Tid d (sek)", 0),
-        "Tid t": st.number_input("Tid t (sek)", 0),
-        "Vila": st.number_input("Vila (sek)", 0),
-        "Älskar": st.number_input("Älskar", 0),
-        "Älsk tid": st.number_input("Älsk tid (min)", 0),
-        "Sover med": st.number_input("Sover med", 0),
-        "Jobb": st.number_input("Jobb", 0),
-        "Grannar": st.number_input("Grannar", 0),
-        "pv": st.number_input("pv", 0),
-        "Nils kom": st.number_input("Nils kom", 0),
-        "Nils natt": st.number_input("Nils natt (0/1)", 0),
-        "Filmer": st.number_input("Filmer", 0),
-        "Pris": st.number_input("Pris", 0),
-        "Svarta": st.number_input("Svarta", 0),
-    }
+        summa_s = (killar + f + r) * tid_s + vila
+        summa_d = ((dm + df_f + dr) * tid_d + vila) * 2
+        summa_t = ((t3f + t3r + t3p) * tid_t + vila) * 3
+        känner = jobb + grannar + pv + nils_kom
+        män = killar + känner
+        tid_kille = (summa_s + summa_d + summa_t) / män / 60 if män else 0
+        filmer = 1 if killar > 0 else 0
+        intäkter = filmer * pris
+        malin = intäkter * 0.01
+        företag = intäkter * 0.40
+        heta_vänner = intäkter * 0.59
 
-    submitted = st.form_submit_button("✅ Lägg till")
-    if submitted:
-        append_row([data[col] for col in COLUMNS])
-        st.success("Raden har lagts till. Ladda om sidan för att se uppdaterade beräkningar.")
+        hårdhet = 0
+        if r > 0: hårdhet += 1
+        if dm > 0: hårdhet += 1
+        if df_f > 0: hårdhet += 1
+        if dr > 0: hårdhet += 2
+        if t3f > 0: hårdhet += 3
+        if t3r > 0: hårdhet += 5
+        if t3p > 0: hårdhet += 4
 
-# Töm databasen
-if st.button("🗑️ Töm databasen"):
-    clear_sheet()
-    st.warning("Databasen har tömts.")
+        gb = jobb + grannar + pv + nils_kom
 
-# --- Beräkningar och presentation ---
-if not df.empty:
-    df["GB"] = df["Jobb"] + df["Grannar"] + df["pv"] + df["Nils kom"]
-    df["Män"] = df["Killar"] + df["GB"]
+        klockan_tid = timedelta(seconds=(summa_s + summa_d + summa_t + (älsk_tid * älskar)))
+        klockan = (datetime.strptime("07:00", "%H:%M") + klockan_tid).strftime("%H:%M")
 
-    # Summor
-    total_män = df["Killar"].sum()
-    total_gb = df["GB"].sum()
-    total_svarta = df["Svarta"].sum()
+        return {
+            "Summa s": summa_s,
+            "Summa d": summa_d,
+            "Summa t": summa_t,
+            "Klockan": klockan,
+            "Känner": känner,
+            "Män": män,
+            "Tid kille": round(tid_kille, 2),
+            "Filmer": filmer,
+            "Intäkter": round(intäkter, 2),
+            "Malin": round(malin, 2),
+            "Företag": round(företag, 2),
+            "Känner (heta vänner)": round(heta_vänner, 2),
+            "Hårdhet": hårdhet,
+            "GB": gb
+        }
+    except Exception as e:
+        st.error(f"Fel i beräkningar: {e}")
+        return {}
 
-    vita_pct = round((total_män + total_gb - total_svarta) / (total_män + total_gb + total_svarta) * 100, 1) if (total_män + total_gb + total_svarta) else 0
-    svarta_pct = round(total_svarta / (total_män + total_gb + total_svarta) * 100, 1) if (total_män + total_gb + total_svarta) else 0
-
-    # Snitt film
-    film_rows = df[df["Killar"] > 0]
-    antal_filmer = len(film_rows)
-    snitt_film = round((df["Killar"].sum() + df["GB"].sum()) / antal_filmer, 2) if antal_filmer else 0
-
-    # Malin tjänat
-    malin_tjänat = df["Killar"].sum() + df["GB"].sum() + df["Älskar"].sum() + df["Sover med"].sum()
-
-    # Max-värden
+# Sammanställ nyckeltal
+def calculate_summary(df):
+    total_malin = df["Malin"].sum()
     max_jobb = df["Jobb"].max()
     max_grannar = df["Grannar"].max()
     max_pv = df["pv"].max()
     max_nils = df["Nils kom"].max()
-    känner_totalt = max_jobb + max_grannar + max_pv + max_nils
-    känner_tjänat = round(malin_tjänat / känner_totalt, 2) if känner_totalt else 0
+    känner_total = max_jobb + max_grannar + max_pv + max_nils
+    känner_tjänat = df["Intäkter"].sum() / känner_total if känner_total else 0
 
-    gb_snitt = round(df["GB"].sum() / känner_totalt, 2) if känner_totalt else 0
+    filmer_antal = (df["Killar"] > 0).sum()
+    snitt_film = (df["Killar"].sum() + df["GB"].sum()) / filmer_antal if filmer_antal else 0
+    malin_tjänat = df["Killar"].sum() + df["GB"].sum() + df["Älskar"].sum() + df["Sover med"].sum()
 
-    # Presentation
-    st.subheader("📊 Nyckeltal")
-    st.metric("Malin tjänat", malin_tjänat)
-    st.metric("Snitt film", snitt_film)
-    st.metric("GB snitt", gb_snitt)
-    st.metric("Känner tjänat", känner_tjänat)
-    st.metric("Vita (%)", f"{vita_pct}%")
-    st.metric("Svarta (%)", f"{svarta_pct}%")
+    total_svarta = df["Svarta"].sum()
+    vita_andel = (df["Killar"].sum() + df["GB"].sum() - total_svarta) / (df["Killar"].sum() + df["GB"].sum() + total_svarta) * 100 if (df["Killar"].sum() + df["GB"].sum() + total_svarta) else 0
+    svarta_andel = total_svarta / (df["Killar"].sum() + df["GB"].sum() + total_svarta) * 100 if (df["Killar"].sum() + df["GB"].sum() + total_svarta) else 0
 
-    st.caption(f"Max jobb: {max_jobb}, Max grannar: {max_grannar}, Max pv: {max_pv}, Max Nils kom: {max_nils}")
+    st.metric("💰 Malin totalt", f"{total_malin:.2f} kr")
+    st.metric("👥 Känner tjänat", f"{känner_tjänat:.2f} kr/person")
+    st.metric("🎬 Snitt film", f"{snitt_film:.2f}")
+    st.metric("🧮 Malin tjänat", f"{malin_tjänat}")
+    st.metric("⚪ Vita (%)", f"{vita_andel:.1f}%")
+    st.metric("⚫ Svarta (%)", f"{svarta_andel:.1f}%")
+
+# Streamlit-gränssnitt
+def main():
+    st.title("📊 MalinApp – Daglig inmatning och analys")
+
+    worksheet, df = load_data()
+    calculate_summary(df)
+
+    with st.form("dataform"):
+        start_datum = st.date_input("Startdatum", value=datetime.today())
+        rader = st.number_input("Antal dagar att lägga till", min_value=1, step=1)
+
+        inputs = {}
+        for fält in [
+            "Killar", "F", "R", "Dm", "Df", "Dr", "3f", "3r", "3p", "Tid s", "Tid d", "Tid t", "Vila",
+            "Älskar", "Älsk tid", "Sover med", "Jobb", "Grannar", "pv", "Nils kom", "Nils natt", "Pris", "Svarta"
+        ]:
+            inputs[fält] = st.number_input(fält, value=0, step=1, format="%d")
+
+        submitted = st.form_submit_button("➕ Lägg till")
+        if submitted:
+            for i in range(rader):
+                dag = (start_datum + timedelta(days=i)).strftime("%Y-%m-%d")
+                row = {"Dag": dag, **inputs}
+                beräkningar = calculate_fields(row)
+                full_row = {**row, **beräkningar}
+                append_row(worksheet, full_row)
+            st.success(f"{rader} rader har lagts till.")
+
+    if st.button("🧹 Töm databasen"):
+        worksheet.clear()
+        worksheet.append_row(df.columns.tolist())
+        st.success("Databasen har tömts.")
+
+if __name__ == "__main__":
+    main()
