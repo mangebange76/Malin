@@ -5,15 +5,15 @@ from datetime import datetime, timedelta, time
 import json
 from google.oauth2 import service_account
 
-# Autentisering från secrets
+# Autentisering
 credentials = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
 gc = gspread.service_account_from_dict(credentials)
 
-# Google Sheet-info
+# Sheet-info
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1-bpY9Ahk9qKH2QIQzVUSZLX6qDc2UwjCmullMCNvENQ/edit?usp=drivesdk"
 SHEET_NAME = "Blad1"
 
-# Rubriker
+# Rubrikrader
 KOLUMNNAMN = [
     "Datum", "Män", "Fi", "Rö", "DM", "DF", "DR", "TPP", "TAP", "TPA", "Älskar",
     "Sover med", "Känner", "Jobb", "Jobb 2", "Grannar", "Grannar 2", "Tjej PojkV",
@@ -24,7 +24,7 @@ KOLUMNNAMN = [
     "Känner 2"
 ]
 
-# Ladda data och skapa rubrikrad om den saknas
+# Ladda data
 def load_data():
     sh = gc.open_by_url(SHEET_URL)
     worksheet = sh.worksheet(SHEET_NAME)
@@ -40,11 +40,11 @@ def load_data():
             df = pd.DataFrame(columns=KOLUMNNAMN)
     return worksheet, df
 
-# Spara DataFrame till Google Sheets
+# Spara data
 def save_data(worksheet, df):
     worksheet.update([df.columns.tolist()] + df.fillna("").values.tolist())
 
-# Summera maxvärden i vissa kolumner
+# Hämta maxvärde i kolumn
 def maxhistorik(df, kolumn):
     if kolumn in df.columns and not df[kolumn].isnull().all():
         return int(df[kolumn].max())
@@ -55,70 +55,113 @@ def main():
     st.title("MalinApp – Inmatning")
 
     worksheet, df = load_data()
-
-    # Felsökning: visa antal rader
-    st.write("🔍 Antal rader i databasen:", len(df))
+    st.write("🔍 Rader i databasen:", len(df))
 
     with st.form("data_form"):
-        today = datetime.today().date()
-        datum = st.date_input("Datum", today, format="YYYY-MM-DD")
+        datum = st.date_input("Datum", datetime.today().date(), format="YYYY-MM-DD")
+        män = st.number_input("Män", 0)
+        fi = st.number_input("Fi", 0)
+        rö = st.number_input("Rö", 0)
+        dm = st.number_input("DM", 0)
+        df_ = st.number_input("DF", 0)
+        dr = st.number_input("DR", 0)
+        tpp = st.number_input("TPP", 0)
+        tap = st.number_input("TAP", 0)
+        tpa = st.number_input("TPA", 0)
+        älskar = st.number_input("Älskar", 0)
+        sover_med = st.number_input("Sover med", 0)
 
-        män = st.number_input("Män", min_value=0, step=1)
-        fi = st.number_input("Fi", min_value=0, step=1)
-        rö = st.number_input("Rö", min_value=0, step=1)
-        dm = st.number_input("DM", min_value=0, step=1)
-        df_ = st.number_input("DF", min_value=0, step=1)
-        dr = st.number_input("DR", min_value=0, step=1)
-        tpp = st.number_input("TPP", min_value=0, step=1)
-        tap = st.number_input("TAP", min_value=0, step=1)
-        tpa = st.number_input("TPA", min_value=0, step=1)
-        älskar = st.number_input("Älskar", min_value=0, step=1)
-        sover_med = st.number_input("Sover med", min_value=0, step=1)
+        jobb = st.number_input("Jobb", 0)
+        grannar = st.number_input("Grannar", 0)
+        tjej_pojkv = st.number_input("Tjej PojkV", 0)
+        nils_fam = st.number_input("Nils fam", 0)
 
-        jobb = st.number_input("Jobb", min_value=0, step=1)
-        grannar = st.number_input("Grannar", min_value=0, step=1)
-        tjej_pojkv = st.number_input("Tjej PojkV", min_value=0, step=1)
-        nils_fam = st.number_input("Nils fam", min_value=0, step=1)
-
-        tid_singel = st.number_input("Tid singel (sekunder)", min_value=0, step=1)
-        tid_dubbel = st.number_input("Tid dubbel (sekunder)", min_value=0, step=1)
-        tid_trippel = st.number_input("Tid trippel (sekunder)", min_value=0, step=1)
-        vila = st.number_input("Vila (sekunder)", min_value=0, step=1)
+        tid_singel = st.number_input("Tid singel (sekunder)", 0)
+        tid_dubbel = st.number_input("Tid dubbel (sekunder)", 0)
+        tid_trippel = st.number_input("Tid trippel (sekunder)", 0)
+        vila = st.number_input("Vila (sekunder)", 0)
 
         submitted = st.form_submit_button("Spara")
 
     if submitted:
-        ny_rad = {
+        ny = {
             "Datum": datum.strftime("%Y-%m-%d"),
-            "Män": män,
-            "Fi": fi,
-            "Rö": rö,
-            "DM": dm,
-            "DF": df_,
-            "DR": dr,
-            "TPP": tpp,
-            "TAP": tap,
-            "TPA": tpa,
-            "Älskar": älskar,
-            "Sover med": sover_med,
-            "Jobb": jobb,
-            "Grannar": grannar,
-            "Tjej PojkV": tjej_pojkv,
-            "Nils fam": nils_fam,
+            "Män": män, "Fi": fi, "Rö": rö, "DM": dm, "DF": df_, "DR": dr,
+            "TPP": tpp, "TAP": tap, "TPA": tpa, "Älskar": älskar, "Sover med": sover_med,
+            "Jobb": jobb, "Grannar": grannar, "Tjej PojkV": tjej_pojkv, "Nils fam": nils_fam
         }
 
-        # Beräkningar
-        ny_rad["Känner"] = jobb + grannar + tjej_pojkv + nils_fam
-        ny_rad["Totalt män"] = män + ny_rad["Känner"]
-        ny_rad["Tid singel"] = tid_singel
-        ny_rad["Tid dubbel"] = tid_dubbel
-        ny_rad["Tid trippel"] = tid_trippel
-        ny_rad["Vila"] = vila
+        ny["Känner"] = jobb + grannar + tjej_pojkv + nils_fam
+        ny["Totalt män"] = män + ny["Känner"]
 
-        ny_rad["Summa singel"] = tid_singel * ny_rad["Totalt män"]
-        ny_rad["Summa dubbel"] = tid_dubbel * ny_rad["Totalt män"]
-        ny_rad["Summa trippel"] = tid_trippel * ny_rad["Totalt män"]
+        ny["Tid singel"] = tid_singel
+        ny["Tid dubbel"] = tid_dubbel
+        ny["Tid trippel"] = tid_trippel
+        ny["Vila"] = vila
 
-        ny_rad["Summa vila"] = (
-            ny_rad["Totalt män"] * vila +
-            dm
+        ny["Summa singel"] = tid_singel * ny["Totalt män"]
+        ny["Summa dubbel"] = tid_dubbel * ny["Totalt män"]
+        ny["Summa trippel"] = tid_trippel * ny["Totalt män"]
+
+        ny["Summa vila"] = (
+            ny["Totalt män"] * vila +
+            dm * (vila + 10) +
+            df_ * (vila + 15) +
+            dr * (vila + 15) +
+            tpp * (vila + 15) +
+            tap * (vila + 15) +
+            tpa * (vila + 15)
+        )
+
+        ny["Summa tid"] = (
+            ny["Summa singel"] +
+            ny["Summa dubbel"] * 2 +
+            ny["Summa trippel"] * 3 +
+            ny["Summa vila"]
+        )
+
+        start = datetime.combine(datetime.today(), time(7, 0))
+        klockan = start + timedelta(seconds=ny["Summa tid"])
+        ny["Klockan"] = klockan.strftime("%H:%M")
+
+        ny["Tid kille"] = round(
+            (ny["Summa singel"] + ny["Summa dubbel"] * 2 + ny["Summa trippel"] * 3) / ny["Totalt män"] / 60, 1
+        )
+
+        ny["Suger"] = round(
+            0.6 * (ny["Summa singel"] + ny["Summa dubbel"] + ny["Summa trippel"]) / ny["Totalt män"], 1
+        )
+
+        ny["Filmer"] = män + fi + rö * 2 + dm * 2 + df_ * 3 + dr * 4 + tpp * 5 + tap * 7 + tpa * 6
+        ny["Hårdhet"] = sum([
+            int(män > 0),
+            int(dm > 0),
+            int(df_ > 0) * 2,
+            int(dr > 0),
+            int(tpp > 0),
+            int(tap > 0),
+            int(tpa > 0)
+        ])
+
+        ny["Pris"] = 19.99
+        ny["Intäkter"] = ny["Filmer"] * ny["Hårdhet"] * 19.99
+        ny["Malin"] = min(1500, round(ny["Intäkter"] * 0.01, 2))
+        ny["Företag"] = round(ny["Intäkter"] * 0.4, 2)
+        ny["Vänner"] = round(ny["Intäkter"] - ny["Malin"] - ny["Företag"], 2)
+
+        ny["Jobb 2"] = max(jobb, maxhistorik(df, "Jobb"))
+        ny["Grannar 2"] = max(grannar, maxhistorik(df, "Grannar"))
+        ny["Tjej PojkV 2"] = max(tjej_pojkv, maxhistorik(df, "Tjej PojkV"))
+        ny["Nils fam 2"] = max(nils_fam, maxhistorik(df, "Nils fam"))
+        ny["Känner 2"] = max(ny["Känner"], maxhistorik(df, "Känner"))
+
+        df = pd.concat([df, pd.DataFrame([ny])], ignore_index=True)
+        save_data(worksheet, df)
+        st.success("✅ Data sparad!")
+
+    if not df.empty:
+        st.subheader("Senaste raden")
+        st.dataframe(df.tail(1), use_container_width=True)
+
+if __name__ == "__main__":
+    main()
