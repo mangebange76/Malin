@@ -1,19 +1,17 @@
-# Daglig Registreringsapp
+# Malin – Daglig datainmatningsapp
 
-En Streamlit-app för att registrera och analysera dagliga värden relaterade till relationer, tid, ekonomi och känslor.
+En Streamlit-app för att samla in, lagra och analysera dagliga fält i Google Sheets.
 
 ## Funktioner
-- Registrering av ny dag
-- Dynamisk summering (malin, känner, snitt m.m.)
-- Redigering och radering av data
-- Google Sheets-integrerad databas
-- Mobilvänlig layout
 
-## Starta appen i Streamlit Cloud
-1. Skapa ett nytt projekt på Streamlit Cloud
-2. Ladda upp alla dessa filer
-3. Gå till `secrets.toml` och lägg in din `GOOGLE_CREDENTIALS` (se nedan)
+- Redigerbart formulär för daglig inmatning
+- Automatisk hantering av datum
+- Realtidsberäkningar (snitt, max, procent)
+- Visar nyckeltal direkt i appen
+- Stöd för att nollställa databasen
 
-## secrets.toml (instruktion)
-```toml
-GOOGLE_CREDENTIALS = """{...ditt JSON-innehåll här...}"""
+## Starta lokalt
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
