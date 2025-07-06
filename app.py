@@ -5,14 +5,14 @@ import gspread
 import json
 from google.oauth2.service_account import Credentials
 
-# Autentisering till Google Sheets via secrets
+# Autentisering
 scope = ["https://www.googleapis.com/auth/spreadsheets"]
 credentials = Credentials.from_service_account_info(
     json.loads(st.secrets["GOOGLE_CREDENTIALS"]), scopes=scope
 )
 client = gspread.authorize(credentials)
 
-# Öppna kalkylbladet
+# Öppna kalkylblad
 SHEET_NAME = "Malin"
 WORKSHEET_NAME = "Data"
 spreadsheet = client.open(SHEET_NAME)
@@ -21,110 +21,136 @@ try:
 except gspread.WorksheetNotFound:
     worksheet = spreadsheet.add_worksheet(title=WORKSHEET_NAME, rows="1000", cols="50")
 
-# Lista över kolumner
+# Kolumnrubriker
 COLUMNS = [
     "Dag", "Killar", "F", "R", "Dm", "Df", "Dr", "3f", "3r", "3p",
     "Tid s", "Tid d", "Tid t", "Vila", "Älskar", "Älsk tid", "Sover med",
     "Jobb", "Grannar", "pv", "Nils kom", "Nils natt", "Filmer", "Pris", "Svarta"
 ]
 
+# Säkerställ rubriker
+def ensure_headers():
+    current_headers = worksheet.row_values(1)
+    if current_headers != COLUMNS:
+        worksheet.resize(rows=1)
+        worksheet.insert_row(COLUMNS, 1)
+
 # Ladda data
 def load_data():
+    ensure_headers()
     rows = worksheet.get_all_records()
     if not rows:
         return pd.DataFrame(columns=COLUMNS)
     df = pd.DataFrame(rows)
+    for col in COLUMNS:
+        if col not in df.columns:
+            df[col] = 0
     return df
 
-# Skriv en ny rad
+# Lägg till rad
 def append_row(row):
     worksheet.append_row(row)
 
-# Töm hela databasen
+# Töm databasen
 def clear_sheet():
     worksheet.clear()
     worksheet.append_row(COLUMNS)
 
-# Sätt app-layout
+# Gränssnitt
 st.set_page_config(layout="wide")
-st.title("📋 Daglig registrering – Malin")
+st.title("📝 Daglig registrering – Malin")
 
-# Ladda data
 df = load_data()
 
-# Visa nyckeltal om data finns
+# Välj startdatum
+if "start_date" not in st.session_state:
+    st.session_state.start_date = datetime.date(2014, 5, 6)
+
+start_date = st.date_input("Startdatum", st.session_state.start_date)
+st.session_state.start_date = start_date
+
+# Beräkna nästa dag
+next_day = start_date + datetime.timedelta(days=len(df))
+
+with st.form("input_form"):
+    st.subheader(f"Registrering för: {next_day}")
+
+    data = {
+        "Dag": str(next_day),
+        "Killar": st.number_input("Killar", 0),
+        "F": st.number_input("F", 0),
+        "R": st.number_input("R", 0),
+        "Dm": st.number_input("Dm", 0),
+        "Df": st.number_input("Df", 0),
+        "Dr": st.number_input("Dr", 0),
+        "3f": st.number_input("3f", 0),
+        "3r": st.number_input("3r", 0),
+        "3p": st.number_input("3p", 0),
+        "Tid s": st.number_input("Tid s (sek)", 0),
+        "Tid d": st.number_input("Tid d (sek)", 0),
+        "Tid t": st.number_input("Tid t (sek)", 0),
+        "Vila": st.number_input("Vila (sek)", 0),
+        "Älskar": st.number_input("Älskar", 0),
+        "Älsk tid": st.number_input("Älsk tid (min)", 0),
+        "Sover med": st.number_input("Sover med", 0),
+        "Jobb": st.number_input("Jobb", 0),
+        "Grannar": st.number_input("Grannar", 0),
+        "pv": st.number_input("pv", 0),
+        "Nils kom": st.number_input("Nils kom", 0),
+        "Nils natt": st.number_input("Nils natt (0/1)", 0),
+        "Filmer": st.number_input("Filmer", 0),
+        "Pris": st.number_input("Pris", 0),
+        "Svarta": st.number_input("Svarta", 0),
+    }
+
+    submitted = st.form_submit_button("✅ Lägg till")
+    if submitted:
+        append_row([data[col] for col in COLUMNS])
+        st.success("Raden har lagts till. Ladda om sidan för att se uppdaterade beräkningar.")
+
+# Töm databasen
+if st.button("🗑️ Töm databasen"):
+    clear_sheet()
+    st.warning("Databasen har tömts.")
+
+# --- Beräkningar och presentation ---
 if not df.empty:
     df["GB"] = df["Jobb"] + df["Grannar"] + df["pv"] + df["Nils kom"]
-    df["Män"] = df["Killar"] + df["Jobb"] + df["Grannar"] + df["pv"] + df["Nils kom"]
-    df["Summa s"] = (df["Killar"] + df["F"] + df["R"]) * df["Tid s"] + df["Vila"]
-    df["Summa d"] = ((df["Dm"] + df["Df"] + df["Dr"]) * df["Tid d"] + df["Vila"]) * 2
-    df["Summa t"] = ((df["3f"] + df["3r"] + df["3p"]) * df["Tid t"] + df["Vila"]) * 3
-    df["Totaltid"] = df["Summa s"] + df["Summa d"] + df["Summa t"] + (df["Älskar"] * df["Älsk tid"] * 60)
-    df["Tid kille"] = (df["Summa s"] + df["Summa d"] + df["Summa t"]) / df["Män"].replace(0, 1) / 60
-    df["Intäkter"] = df["Filmer"] * df["Pris"]
-    df["Malin"] = df["Intäkter"] * 0.01
-    df["Företag"] = df["Intäkter"] * 0.40
-    df["Känner (heta)"] = df["Intäkter"] * 0.59
-    df["Hårdhet"] = (
-        (df["R"] > 0).astype(int) +
-        (df["Dm"] > 0).astype(int) +
-        (df["Df"] > 0).astype(int) +
-        (df["Dr"] > 0).astype(int)*2 +
-        (df["3f"] > 0).astype(int)*3 +
-        (df["3r"] > 0).astype(int)*5 +
-        (df["3p"] > 0).astype(int)*4
-    )
+    df["Män"] = df["Killar"] + df["GB"]
 
-    # Sammanställningar
-    total_intakt = df["Intäkter"].sum()
-    total_malin = df["Malin"].sum()
+    # Summor
+    total_män = df["Killar"].sum()
     total_gb = df["GB"].sum()
-    total_man = df["Män"].sum()
     total_svarta = df["Svarta"].sum()
-    total_alskar = df["Älskar"].sum()
-    total_sover = df["Sover med"].sum()
 
+    vita_pct = round((total_män + total_gb - total_svarta) / (total_män + total_gb + total_svarta) * 100, 1) if (total_män + total_gb + total_svarta) else 0
+    svarta_pct = round(total_svarta / (total_män + total_gb + total_svarta) * 100, 1) if (total_män + total_gb + total_svarta) else 0
+
+    # Snitt film
+    film_rows = df[df["Killar"] > 0]
+    antal_filmer = len(film_rows)
+    snitt_film = round((df["Killar"].sum() + df["GB"].sum()) / antal_filmer, 2) if antal_filmer else 0
+
+    # Malin tjänat
+    malin_tjänat = df["Killar"].sum() + df["GB"].sum() + df["Älskar"].sum() + df["Sover med"].sum()
+
+    # Max-värden
     max_jobb = df["Jobb"].max()
     max_grannar = df["Grannar"].max()
     max_pv = df["pv"].max()
     max_nils = df["Nils kom"].max()
-    max_total = max_jobb + max_grannar + max_pv + max_nils
+    känner_totalt = max_jobb + max_grannar + max_pv + max_nils
+    känner_tjänat = round(malin_tjänat / känner_totalt, 2) if känner_totalt else 0
 
-    kanner_tjanat = total_intakt / max_total if max_total else 0
-    alskar_snitt = total_alskar / max_total if max_total else 0
-    sover_snitt = total_sover / max_nils if max_nils else 0
-    gb_snitt = total_gb / max_total if max_total else 0
-    film_rows = df[df["Män"] > 0].shape[0]
-    snitt_film = (total_man + total_gb) / film_rows if film_rows else 0
-    malin_tjanat_snitt = total_man + total_gb + total_alskar + total_sover
-    total_sum = total_man + total_gb + total_svarta
-    vita_proc = (total_man + total_gb - total_svarta) / total_sum * 100 if total_sum else 0
-    svarta_proc = total_svarta / total_sum * 100 if total_sum else 0
+    gb_snitt = round(df["GB"].sum() / känner_totalt, 2) if känner_totalt else 0
 
-    # Visa nyckeltal
-    st.markdown("## 📊 Summering")
-    st.write(f"💰 Total Malin tjänat: {total_malin:.2f} kr")
-    st.write(f"🔥 Känner tjänat: {kanner_tjanat:.2f} kr")
-    st.write(f"💖 Malin tjänat snitt: {malin_tjanat_snitt}")
-    st.write(f"🎞️ Snitt film: {snitt_film:.2f}")
-    st.write(f"❤️ Älskar-snitt: {alskar_snitt:.2f}")
-    st.write(f"😴 Sover med-snitt: {sover_snitt:.2f}")
-    st.write(f"📦 Total GB: {total_gb}")
-    st.write(f"➗ GB-snitt: {gb_snitt:.2f}")
-    st.write(f"⚪ Vita: {vita_proc:.2f} %")
-    st.write(f"⚫ Svarta: {svarta_proc:.2f} %")
+    # Presentation
+    st.subheader("📊 Nyckeltal")
+    st.metric("Malin tjänat", malin_tjänat)
+    st.metric("Snitt film", snitt_film)
+    st.metric("GB snitt", gb_snitt)
+    st.metric("Känner tjänat", känner_tjänat)
+    st.metric("Vita (%)", f"{vita_pct}%")
+    st.metric("Svarta (%)", f"{svarta_pct}%")
 
-    st.markdown("### 🧩 Maxvärden")
-    st.write(f"👷 Jobb: {max_jobb}")
-    st.write(f"🏘️ Grannar: {max_grannar}")
-    st.write(f"❤️ pv: {max_pv}")
-    st.write(f"🧍 Nils kom: {max_nils}")
-    st.write(f"🔢 Totalt känner: {max_total}")
-
-# Töm databasen
-with st.expander("🗑️ Töm databasen"):
-    confirm = st.text_input("Skriv: JAG VILL TA BORT ALLT")
-    if confirm == "JAG VILL TA BORT ALLT":
-        if st.button("⚠️ Töm nu"):
-            clear_sheet()
-            st.success("Databasen har rensats.")
+    st.caption(f"Max jobb: {max_jobb}, Max grannar: {max_grannar}, Max pv: {max_pv}, Max Nils kom: {max_nils}")
