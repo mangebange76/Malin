@@ -1,118 +1,170 @@
 import streamlit as st
 import pandas as pd
 import gspread
-import json
-from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
+from oauth2client.service_account import ServiceAccountCredentials
+import json
 
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1-bpY9Ahk9qKH2QIQzVUSZLX6qDc2UwjCmullMCNvENQ/edit?usp=drivesdk"
+# Inställningar
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1-bpY9Ahk9qKH2QIQzVUSZLX6qDc2UwjCmullMCNvENQ/edit?usp=drivesdk"
 WORKSHEET_NAME = "Blad1"
+KOLUMNER = [
+    "Dag", "Män", "F", "R", "Dm", "Df", "Dr", "3f", "3r", "3p",
+    "Tid s", "Tid d", "Tid t", "Vila", "Älskar", "Älsk tid", "Sover med",
+    "Jobb", "Grannar", "Tjej PojkV", "Nils Fam", "Svarta"
+]
 
 def auth_gspread():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(st.secrets["GOOGLE_CREDENTIALS"]), scope)
+    creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
     return client
 
-def skapa_rubriker(worksheet):
-    rubriker = [
-        "Dag", "Män", "F", "R", "Dm", "Df", "Dr", "3f", "3r", "3p", "Tid s", "Tid d", "Tid t", "Vila",
-        "Älskar", "Älsk tid", "Sover med", "Jobb", "Grannar", "Tjej PojkV", "Nils Fam", "Svarta"
-    ]
-    if worksheet.row_count < 1 or worksheet.row_values(1) != rubriker:
-        worksheet.clear()
-        worksheet.append_row(rubriker)
-
 def load_data():
     gc = auth_gspread()
-    sh = gc.open_by_url(SHEET_URL)
+    sh = gc.open_by_url(SPREADSHEET_URL)
     worksheet = sh.worksheet(WORKSHEET_NAME)
-    skapa_rubriker(worksheet)
-    data = worksheet.get_all_records()
-    df = pd.DataFrame(data)
+    rows = worksheet.get_all_values()
+    if not rows or rows[0] != KOLUMNER:
+        worksheet.clear()
+        worksheet.append_row(KOLUMNER)
+        return worksheet, pd.DataFrame(columns=KOLUMNER)
+    df = pd.DataFrame(rows[1:], columns=rows[0])
+    df = df.replace("", 0)
+    for col in KOLUMNER:
+        if col == "Dag":
+            df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+        else:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
     return worksheet, df
 
-def save_data(worksheet, df):
+def spara_data(df, worksheet):
     worksheet.clear()
-    worksheet.append_row(df.columns.tolist())
-    for row in df.itertuples(index=False):
-        worksheet.append_row(list(row))
+    worksheet.append_row(KOLUMNER)
+    for _, row in df.iterrows():
+        row = [row[kol] if kol in row else "" for kol in KOLUMNER]
+        worksheet.append_row(row)
 
-def ny_rad_df(df):
-    if df.empty:
-        return datetime.today().strftime("%Y-%m-%d")
-    sista_datum = pd.to_datetime(df["Dag"], errors='coerce').max()
-    nytt_datum = sista_datum + timedelta(days=1) if pd.notnull(sista_datum) else datetime.today()
-    return nytt_datum.strftime("%Y-%m-%d")
-
-def skapa_tom_rad():
+def get_max_values(df):
     return {
-        "Män": 0, "F": 0, "R": 0, "Dm": 0, "Df": 0, "Dr": 0,
-        "3f": 0, "3r": 0, "3p": 0, "Tid s": 0, "Tid d": 0, "Tid t": 0, "Vila": 0,
-        "Älskar": 0, "Älsk tid": 0, "Sover med": 0, "Jobb": 0, "Grannar": 0, "Tjej PojkV": 0,
-        "Nils Fam": 0, "Svarta": 0
+        "Jobb 2": df["Jobb"].max(),
+        "Grannar 2": df["Grannar"].max(),
+        "Tjej PojkV 2": df["Tjej PojkV"].max(),
+        "Nils Fam 2": df["Nils Fam"].max()
     }
 
-def main():
-    st.title("MalinData App")
+def beräkna_radvärden(rad):
+    tid_singel = rad["Tid s"]
+    tid_dubbel = rad["Tid d"]
+    tid_trippel = rad["Tid t"]
+    vila = rad["Vila"]
+    älskar = rad["Älskar"]
+    älsk_tid = rad["Älsk tid"]
 
+    dm = rad["Dm"]
+    df = rad["Df"]
+    dr = rad["Dr"]
+    tpp = rad["3f"]
+    tap = rad["3r"]
+    tpa = rad["3p"]
+    män = rad["Män"]
+    känner = rad["Jobb"] + rad["Grannar"] + rad["Tjej PojkV"] + rad["Nils Fam"]
+    totalt_män = män + känner
+
+    sum_singel = tid_singel * (rad["F"] + rad["R"])
+    sum_dubbel = tid_dubbel * (dm + df + dr)
+    sum_trippel = tid_trippel * (tpp + tap + tpa)
+    sum_vila = (totalt_män * vila) + (dm + df + dr) * (vila + 7) + (tpp + tap + tpa) * (vila + 15)
+    summa_tid = sum_singel + sum_dubbel + sum_trippel + sum_vila + (älskar * älsk_tid)
+
+    klockan = (datetime.strptime("07:00", "%H:%M") + timedelta(minutes=summa_tid // 60)).strftime("%H:%M")
+
+    filmer = män
+    intäkter = filmer * 19.99
+    tid_kille = summa_tid / män if män > 0 else 0
+
+    return {
+        "Tid kille": tid_kille,
+        "Filmer": filmer,
+        "Intäkter": intäkter,
+        "Klockan": klockan
+    }
+
+def presentera_huvudvy(df):
+    st.header("📊 Huvudvy")
+
+    df["Känner"] = df["Jobb"] + df["Grannar"] + df["Tjej PojkV"] + df["Nils Fam"]
+    df["Totalt Män"] = df["Män"] + df["Känner"]
+    totalt_män = df["Män"].sum()
+    totalt_känner = df["Känner"].sum()
+
+    snitt = (totalt_män + totalt_känner) / len(df[df["Män"] + df["Känner"] > 0]) if len(df) > 0 else 0
+    filmer = totalt_män
+    intäkter = filmer * 19.99
+    malin_lön = min(1500, intäkter * 0.01)
+    företag_lön = intäkter * 0.4
+    vänner_lön = intäkter - malin_lön - företag_lön
+
+    maxvärden = get_max_values(df)
+    gangb = totalt_känner / (maxvärden["Jobb 2"] + maxvärden["Grannar 2"] + maxvärden["Tjej PojkV 2"] + maxvärden["Nils Fam 2"]) if sum(maxvärden.values()) > 0 else 0
+    älskat = df["Älskar"].sum() / totalt_känner if totalt_känner > 0 else 0
+    vita = (totalt_män - df["Svarta"].sum()) / totalt_män * 100 if totalt_män > 0 else 0
+    svarta = df["Svarta"].sum() / totalt_män * 100 if totalt_män > 0 else 0
+
+    st.metric("Totalt Män", totalt_män)
+    st.metric("Snitt (Män + Känner)", round(snitt, 2))
+    st.metric("Intäkter", f"{intäkter:.2f} USD")
+    st.metric("Malin lön", f"{malin_lön:.2f} USD")
+    st.metric("Företag lön", f"{företag_lön:.2f} USD")
+    st.metric("Vänner lön", f"{vänner_lön:.2f} USD")
+    st.metric("GangB", f"{gangb:.2f}")
+    st.metric("Älskat", f"{älskat:.2f}")
+    st.metric("Vita (%)", f"{vita:.2f}%")
+    st.metric("Svarta (%)", f"{svarta:.2f}%")
+
+def presentera_radvy(df):
+    st.header("📄 Radvy")
+    if df.empty:
+        st.info("Ingen data tillgänglig ännu.")
+        return
+
+    rad = df.iloc[-1]
+    beräkning = beräkna_radvärden(rad)
+    st.subheader(f"Senaste dag: {rad['Dag']}")
+    st.write(f"**Tid kille:** {beräkning['Tid kille']:.2f} min" + (" ⚠️ Bör ökas!" if beräkning["Tid kille"] < 10 else ""))
+    st.write(f"**Filmer:** {int(beräkning['Filmer'])}")
+    st.write(f"**Intäkter:** {beräkning['Intäkter']:.2f} USD")
+    st.write(f"**Klockan:** {beräkning['Klockan']}")
+
+def lägg_till_rad(df, ny_rad, worksheet):
+    ny_rad_df = pd.DataFrame([ny_rad], columns=KOLUMNER)
+    df = pd.concat([df, ny_rad_df], ignore_index=True)
+    spara_data(df, worksheet)
+    st.success("Ny rad tillagd.")
+    st.experimental_rerun()
+
+def main():
     worksheet, df = load_data()
 
+    # PRESENTATION
+    presentera_huvudvy(df)
+    presentera_radvy(df)
+
+    # REDIGERA SENASTE RAD
+    st.subheader("✏️ Redigera senaste rad (Tid s, d, t)")
     if not df.empty:
-        st.subheader("Nuvarande data")
-        st.dataframe(df)
-
-    st.subheader("Lägg till ny rad")
-
-    ny_dag = ny_rad_df(df)
-    st.write(f"Dagens datum: **{ny_dag}**")
-
-    with st.form("dataform"):
-        ny_data = skapa_tom_rad()
-        for kolumn in ny_data:
-            ny_data[kolumn] = st.number_input(kolumn, min_value=0, step=1)
-
-        submitted = st.form_submit_button("Lägg till rad")
-        if submitted:
-            ny_data["Dag"] = ny_dag
-            df = pd.concat([df, pd.DataFrame([ny_data])], ignore_index=True)
-            save_data(worksheet, df)
-            st.success("Raden sparades!")
-
-    st.subheader("Snabbknappar för vilodagar")
-    if st.button("Vilodag jobb"):
-        if df.empty:
-            st.warning("Ingen data finns för att hämta maxvärden.")
-        else:
-            rad = {
-                "Dag": ny_rad_df(df),
-                "Jobb": round(df["Jobb"].max() * 0.5),
-                "Grannar": round(df["Grannar"].max() * 0.5),
-                "Tjej PojkV": round(df["Tjej PojkV"].max() * 0.5),
-                "Nils Fam": round(df["Nils Fam"].max() * 0.5),
-                "Älskar": 12,
-                "Sover med": 1
-            }
-            for kol in skapa_tom_rad().keys():
-                rad.setdefault(kol, 0)
-            df = pd.concat([df, pd.DataFrame([rad])], ignore_index=True)
-            save_data(worksheet, df)
-            st.success("Vilodag jobb sparad!")
-
-    if st.button("Vilodag hemma"):
-        rad = {
-            "Dag": ny_rad_df(df),
-            "Jobb": 3,
-            "Grannar": 3,
-            "Tjej PojkV": 3,
-            "Nils Fam": 3,
-            "Älskar": 6
-        }
-        for kol in skapa_tom_rad().keys():
-            rad.setdefault(kol, 0)
-        df = pd.concat([df, pd.DataFrame([rad])], ignore_index=True)
-        save_data(worksheet, df)
-        st.success("Vilodag hemma sparad!")
+        senast = df.iloc[-1].copy()
+        tid_s = st.number_input("Tid s", value=int(senast["Tid s"]), step=1)
+        tid_d = st.number_input("Tid d", value=int(senast["Tid d"]), step=1)
+        tid_t = st.number_input("Tid t", value=int(senast["Tid t"]), step=1)
+        if st.button("Spara ändringar"):
+            df.at[df.index[-1], "Tid s"] = tid_s
+            df.at[df.index[-1], "Tid d"] = tid_d
+            df.at[df.index[-1], "Tid t"] = tid_t
+            spara_data(df, worksheet)
+            st.success("Ändringar sparade.")
+            st.experimental_rerun()
 
 if __name__ == "__main__":
     main()
