@@ -1,17 +1,18 @@
-# Malin – Daglig datainmatningsapp
+# 📊 MalinData – Streamlit App
 
-En Streamlit-app för att samla in, lagra och analysera dagliga fält i Google Sheets.
+Denna app används för att mata in och analysera data från Google Sheets med hjälp av Streamlit.
 
-## Funktioner
+## 🧾 Funktioner
 
-- Redigerbart formulär för daglig inmatning
-- Automatisk hantering av datum
-- Realtidsberäkningar (snitt, max, procent)
-- Visar nyckeltal direkt i appen
-- Stöd för att nollställa databasen
+- Automatisk skapande av rubriker i Google Sheet (`MalinData > Blad1`)
+- Visar nyckeltal som:
+  - Vita % / Svarta %
+  - Snitt film
+  - Malin tjänst snitt
+  - Känner tjänat
+- Möjlighet att lägga till nya rader via formulär
 
-## Starta lokalt
+## 🔧 Installation
 
 ```bash
 pip install -r requirements.txt
-streamlit run app.py
