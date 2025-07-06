@@ -1,88 +1,108 @@
-# app.py
 import streamlit as st
+import pandas as pd
 import datetime
 import gspread
+import json
 from google.oauth2.service_account import Credentials
-import pandas as pd
 
-# Autentisering till Google Sheets
+# Autentisering till Google Sheets via secrets
 scope = ["https://www.googleapis.com/auth/spreadsheets"]
-credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
-gc = gspread.authorize(credentials)
+credentials = Credentials.from_service_account_info(
+    json.loads(st.secrets["GOOGLE_CREDENTIALS"]), scopes=scope
+)
+client = gspread.authorize(credentials)
 
-# Ange namn på Google Sheet
-SPREADSHEET_NAME = "Din Appdata"
+# Öppna kalkylbladet
+SHEET_NAME = "Malin"
 WORKSHEET_NAME = "Data"
-sh = gc.open(SPREADSHEET_NAME)
+spreadsheet = client.open(SHEET_NAME)
 try:
-    worksheet = sh.worksheet(WORKSHEET_NAME)
+    worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
 except gspread.WorksheetNotFound:
-    worksheet = sh.add_worksheet(title=WORKSHEET_NAME, rows="1000", cols="50")
+    worksheet = spreadsheet.add_worksheet(title=WORKSHEET_NAME, rows="1000", cols="50")
 
-# Definiera kolumner
+# Lista över kolumner
 COLUMNS = [
     "Dag", "Killar", "F", "R", "Dm", "Df", "Dr", "3f", "3r", "3p",
-    "Tid s", "Tid d", "Tid t", "Vila", "Summa s", "Summa d", "Summa t", "Klockan",
-    "Älskar", "Älsk tid", "Sover med", "Jobb", "Grannar", "pv", "Nils kom",
-    "Nils natt", "Filmer", "Pris", "Intäkter", "Malin", "Företag", "Känner (heta)",
-    "GB", "Män", "Tid kille", "Hårdhet", "Svarta"
+    "Tid s", "Tid d", "Tid t", "Vila", "Älskar", "Älsk tid", "Sover med",
+    "Jobb", "Grannar", "pv", "Nils kom", "Nils natt", "Filmer", "Pris", "Svarta"
 ]
 
 # Ladda data
 def load_data():
-    data = worksheet.get_all_records()
-    df = pd.DataFrame(data)
-    if df.empty:
+    rows = worksheet.get_all_records()
+    if not rows:
         return pd.DataFrame(columns=COLUMNS)
-    return df[COLUMNS]
+    df = pd.DataFrame(rows)
+    return df
 
-# Spara rad
+# Skriv en ny rad
 def append_row(row):
     worksheet.append_row(row)
 
-# Töm databas
-def clear_data():
-    worksheet.resize(rows=1)
-    worksheet.update('A1:AJ1', [COLUMNS])
+# Töm hela databasen
+def clear_sheet():
+    worksheet.clear()
+    worksheet.append_row(COLUMNS)
 
-# Räkna maxvärden för känna-snittsberäkningar
-def get_max_values(df):
-    return {
-        "Jobb": df["Jobb"].max(),
-        "Grannar": df["Grannar"].max(),
-        "pv": df["pv"].max(),
-        "Nils kom": df["Nils kom"].max()
-    }
-
-# Layout
+# Sätt app-layout
 st.set_page_config(layout="wide")
-st.title("📊 Daglig registrering och summering")
+st.title("📋 Daglig registrering – Malin")
 
+# Ladda data
 df = load_data()
 
-# Toppsummering
+# Visa nyckeltal om data finns
 if not df.empty:
+    df["GB"] = df["Jobb"] + df["Grannar"] + df["pv"] + df["Nils kom"]
+    df["Män"] = df["Killar"] + df["Jobb"] + df["Grannar"] + df["pv"] + df["Nils kom"]
+    df["Summa s"] = (df["Killar"] + df["F"] + df["R"]) * df["Tid s"] + df["Vila"]
+    df["Summa d"] = ((df["Dm"] + df["Df"] + df["Dr"]) * df["Tid d"] + df["Vila"]) * 2
+    df["Summa t"] = ((df["3f"] + df["3r"] + df["3p"]) * df["Tid t"] + df["Vila"]) * 3
+    df["Totaltid"] = df["Summa s"] + df["Summa d"] + df["Summa t"] + (df["Älskar"] * df["Älsk tid"] * 60)
+    df["Tid kille"] = (df["Summa s"] + df["Summa d"] + df["Summa t"]) / df["Män"].replace(0, 1) / 60
+    df["Intäkter"] = df["Filmer"] * df["Pris"]
+    df["Malin"] = df["Intäkter"] * 0.01
+    df["Företag"] = df["Intäkter"] * 0.40
+    df["Känner (heta)"] = df["Intäkter"] * 0.59
+    df["Hårdhet"] = (
+        (df["R"] > 0).astype(int) +
+        (df["Dm"] > 0).astype(int) +
+        (df["Df"] > 0).astype(int) +
+        (df["Dr"] > 0).astype(int)*2 +
+        (df["3f"] > 0).astype(int)*3 +
+        (df["3r"] > 0).astype(int)*5 +
+        (df["3p"] > 0).astype(int)*4
+    )
+
+    # Sammanställningar
     total_intakt = df["Intäkter"].sum()
     total_malin = df["Malin"].sum()
-    total_killar = df["Killar"].sum()
     total_gb = df["GB"].sum()
-    total_svarta = df["Svarta"].sum()
     total_man = df["Män"].sum()
+    total_svarta = df["Svarta"].sum()
     total_alskar = df["Älskar"].sum()
     total_sover = df["Sover med"].sum()
 
-    max_vals = get_max_values(df)
-    max_total = sum(max_vals.values())
-    kanner_tjanat = total_intakt / max_total if max_total > 0 else 0
-    alskar_snitt = total_alskar / max_total if max_total > 0 else 0
-    sover_snitt = total_sover / max_vals["Nils kom"] if max_vals["Nils kom"] > 0 else 0
-    gb_snitt = total_gb / max_total if max_total > 0 else 0
-    snitt_film = (total_man + total_gb) / df[df["Män"] > 0].shape[0] if df[df["Män"] > 0].shape[0] > 0 else 0
-    malin_tjanat_snitt = total_man + total_gb + total_alskar + total_sover
-    vita_proc = (total_man + total_gb - total_svarta) / (total_man + total_gb + total_svarta) * 100 if (total_man + total_gb + total_svarta) > 0 else 0
-    svarta_proc = total_svarta / (total_man + total_gb + total_svarta) * 100 if (total_man + total_gb + total_svarta) > 0 else 0
+    max_jobb = df["Jobb"].max()
+    max_grannar = df["Grannar"].max()
+    max_pv = df["pv"].max()
+    max_nils = df["Nils kom"].max()
+    max_total = max_jobb + max_grannar + max_pv + max_nils
 
-    st.markdown("### 📈 Nyckeltal")
+    kanner_tjanat = total_intakt / max_total if max_total else 0
+    alskar_snitt = total_alskar / max_total if max_total else 0
+    sover_snitt = total_sover / max_nils if max_nils else 0
+    gb_snitt = total_gb / max_total if max_total else 0
+    film_rows = df[df["Män"] > 0].shape[0]
+    snitt_film = (total_man + total_gb) / film_rows if film_rows else 0
+    malin_tjanat_snitt = total_man + total_gb + total_alskar + total_sover
+    total_sum = total_man + total_gb + total_svarta
+    vita_proc = (total_man + total_gb - total_svarta) / total_sum * 100 if total_sum else 0
+    svarta_proc = total_svarta / total_sum * 100 if total_sum else 0
+
+    # Visa nyckeltal
+    st.markdown("## 📊 Summering")
     st.write(f"💰 Total Malin tjänat: {total_malin:.2f} kr")
     st.write(f"🔥 Känner tjänat: {kanner_tjanat:.2f} kr")
     st.write(f"💖 Malin tjänat snitt: {malin_tjanat_snitt}")
@@ -95,13 +115,16 @@ if not df.empty:
     st.write(f"⚫ Svarta: {svarta_proc:.2f} %")
 
     st.markdown("### 🧩 Maxvärden")
-    for k, v in max_vals.items():
-        st.write(f"{k}: {v}")
+    st.write(f"👷 Jobb: {max_jobb}")
+    st.write(f"🏘️ Grannar: {max_grannar}")
+    st.write(f"❤️ pv: {max_pv}")
+    st.write(f"🧍 Nils kom: {max_nils}")
+    st.write(f"🔢 Totalt känner: {max_total}")
 
-# Bekräftad tömning
+# Töm databasen
 with st.expander("🗑️ Töm databasen"):
-    confirm = st.text_input("Skriv exakt: JAG VILL TA BORT ALLT")
+    confirm = st.text_input("Skriv: JAG VILL TA BORT ALLT")
     if confirm == "JAG VILL TA BORT ALLT":
-        if st.button("⚠️ TÖM NU"):
-            clear_data()
-            st.success("Databasen är tömd.")
+        if st.button("⚠️ Töm nu"):
+            clear_sheet()
+            st.success("Databasen har rensats.")
