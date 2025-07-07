@@ -50,18 +50,19 @@ def load_data():
 
     return worksheet, df
 
-# Spara eller uppdatera rad i sheet (append eller update)
+# Spara rad i sheet (append)
 def append_row(worksheet, row_dict):
     values = [row_dict.get(col, 0) for col in worksheet.row_values(1)]
     worksheet.append_row(values)
 
+# Uppdatera rad i sheet
 def update_row(worksheet, index, row_dict):
     col_names = worksheet.row_values(1)
     values = [row_dict.get(col, 0) for col in col_names]
     range_str = f"A{index+2}:{chr(ord('A')+len(col_names)-1)}{index+2}"
     worksheet.update(range_str, [values])
 
-# Hjälpfunktion: nästkommande datum efter sista datumet i df
+# Hjälpfunktion: nästa datum efter sista datumet i df
 def nästa_datum(df):
     if df.empty or df["Datum"].isnull().all():
         return datetime.today().strftime("%Y-%m-%d")
@@ -74,10 +75,10 @@ def nästa_datum(df):
 
 # Uppdatera alla beräkningar i df
 def update_calculations(df):
-    # Beräkna känna
+    # Känner
     df["Känner"] = df[["Jobb","Grannar","Tjej PojkV","Nils fam"]].sum(axis=1)
 
-    # Hämta maxvärden för 2-kolumner
+    # Maxvärden för 2-kolumner
     df["Jobb 2"] = df["Jobb"].max()
     df["Grannar 2"] = df["Grannar"].max()
     df["Tjej PojkV 2"] = df["Tjej PojkV"].max()
@@ -100,10 +101,10 @@ def update_calculations(df):
                       (df["DM"] + df["DF"] + df["DR"]) * (df["Vila"] + 7) + \
                       (df["TPP"] + df["TAP"] + df["TPA"]) * (df["Vila"] + 15)
 
-    # Summa tid = singel + dubbel + trippel
+    # Summa tid
     df["Summa tid"] = df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"]
 
-    # Suger (60% av summa tid delat på totalt män)
+    # Suger (60% av summa tid per totalt män)
     df["Suger"] = 0
     mask = df["Totalt män"] > 0
     df.loc[mask, "Suger"] = (df.loc[mask, "Summa tid"] * 0.6) / df.loc[mask, "Totalt män"]
@@ -122,7 +123,8 @@ def update_calculations(df):
     df["Hårdhet"] = df.apply(calc_hårdhet, axis=1)
 
     # Filmer
-    df["Filmer"] = (df["Män"] + df["Fi"] + df["Rö"] + df["DM"]*2 + df["DF"]*2 + df["DR"]*3 + df["TPP"]*4 + df["TAP"]*6 + df["TPA"]*5) * df["Hårdhet"]
+    df["Filmer"] = (df["Män"] + df["Fi"] + df["Rö"] + df["DM"]*2 + df["DF"]*2 + df["DR"]*3 +
+                    df["TPP"]*4 + df["TAP"]*6 + df["TPA"]*5) * df["Hårdhet"]
 
     # Pris
     df["Pris"] = 19.99
@@ -130,17 +132,15 @@ def update_calculations(df):
     # Intäkter
     df["Intäkter"] = df["Filmer"] * df["Pris"]
 
-    # Malin lön (5% av intäkter, max 1500)
+    # Malin lön
     df["Malin lön"] = df["Intäkter"] * 0.05
     df.loc[df["Malin lön"] > 1500, "Malin lön"] = 1500
 
-    # Företagets lön (40% av intäkter)
+    # Företag lön
     df["Företag lön"] = df["Intäkter"] * 0.4
 
-    # Vänner lön (intäkter - Malin lön - företagets lön) / känner 2
-    df["Vänner lön"] = 0
-    mask_vänner = df["Känner"] > 0
-    df.loc[mask_vänner, "Vänner lön"] = (df.loc[mask_vänner, "Intäkter"] - df.loc[mask_vänner, "Malin lön"] - df.loc[mask_vänner, "Företag lön"]) / df.loc[mask_vänner, "Känner"]
+    # Vänner lön
+    df["Vänner lön"] = (df["Intäkter"] - df["Malin lön"] - df["Företag lön"]) / df["Känner"].replace(0,1)
 
     # DeepT, Grabbar, Snitt, Sekunder, Varv, Total tid, Tid kille DT, Runk
     df["DeepT"] = df.get("DeepT", 0)
@@ -152,16 +152,21 @@ def update_calculations(df):
     df["Tid kille DT"] = df["Total tid"] / df["Totalt män"].replace(0,1)
     df["Runk"] = (df["Total tid"] * 0.6) / df["Totalt män"].replace(0,1)
 
-    # Tid kille = tid s + 2*tid d + 3*tid t + suger + tid kille DT + runk
+    # Tid kille
     df["Tid kille"] = df["Tid Singel"] + 2*df["Tid Dubbel"] + 3*df["Tid Trippel"] + df["Suger"] + df["Tid kille DT"] + df["Runk"]
 
-    # Klockan = 07:00 + (Summa singel + Summa dubbel + Summa trippel + Total tid) i minuter
+    # Klockan med fix (returnerar serie)
     def calc_klockan(row):
-        start = datetime.strptime("07:00", "%H:%M")
-        total_seconds = row["Summa singel"] + row["Summa dubbel"] + row["Summa trippel"] + row["Total tid"]
-        total_minutes = total_seconds / 60
-        klockan = (start + timedelta(minutes=total_minutes)).strftime("%H:%M")
-        return klockan
+        try:
+            start = datetime.strptime("07:00", "%H:%M")
+            total_seconds = (row.get("Summa singel", 0) + row.get("Summa dubbel", 0) +
+                             row.get("Summa trippel", 0) + row.get("Total tid", 0))
+            total_minutes = total_seconds / 60
+            klockan = (start + timedelta(minutes=total_minutes)).strftime("%H:%M")
+            return klockan
+        except:
+            return ""
+
     df["Klockan"] = df.apply(calc_klockan, axis=1)
 
     return df
@@ -184,7 +189,6 @@ def inmatning(df, worksheet):
 
         submitted = st.form_submit_button("Spara")
         if submitted:
-            # Sätt defaultvärden för kolumner vi inte matade in
             ny_rad.update({
                 "Runk": 0, "Snitt": 0, "Total tid": 0, "Tid kille DT": 0,
                 "Känner": 0, "Jobb 2": 0, "Grannar 2": 0, "Tjej PojkV 2": 0,
@@ -306,6 +310,7 @@ def huvudvy(df):
     st.write(f"**Känner (Kompisar):** {totalt_känner}")
     st.write(f"**Jobb:** {jobb_2}")
     st.write(f"**Grannar:** {grannar_2}")
+
     st.write(f"**Tjej PojkV:** {tjej_2}")
     st.write(f"**Nils fam:** {nils_2}")
     st.write(f"**Snitt film:** {snitt_film:.2f}")
