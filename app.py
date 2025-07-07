@@ -3,12 +3,12 @@ import pandas as pd
 from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import json
+import random
 
 # Autentisera Google Sheets
 def auth_gspread():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(st.secrets["GOOGLE_CREDENTIALS"]), scope)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["GOOGLE_CREDENTIALS"], scope)
     client = gspread.authorize(creds)
     return client
 
@@ -33,14 +33,14 @@ def load_data():
     df = pd.DataFrame(worksheet.get_all_records())
     return worksheet, df
 
-# Spara ny rad till Google Sheet
+# Spara ny rad
 def append_row(row_dict):
     client = auth_gspread()
     sheet = client.open_by_url(st.secrets["SHEET_URL"])
     worksheet = sheet.worksheet("Blad1")
     worksheet.append_row([row_dict.get(col, 0) for col in worksheet.row_values(1)])
 
-# Hämta nästa datum
+# Nästa datum
 def nästa_datum(df):
     if df.empty or "Dag" not in df.columns:
         return datetime.today().date()
@@ -50,11 +50,7 @@ def nästa_datum(df):
     except:
         return datetime.today().date()
 
-# Summera specifika kolumner
-def summera(df, kolumner):
-    return sum(df[k] for k in kolumner if k in df.columns)
-
-# Hämta maxvärden för beräkning
+# Maxvärden för beräkning
 def get_max_values(df):
     return {
         "Jobb 2": df["Jobb"].max() if "Jobb" in df else 0,
@@ -86,14 +82,15 @@ def inmatning(df):
 def vilodag(df, jobb=True):
     ny_rad = {
         "Dag": nästa_datum(df).isoformat(),
-        "Älskar": 6,
+        "Älskar": 8,
         "Sover med": 1 if jobb else 0,
-        "Jobb": 3, "Grannar": 3, "Tjej PojkV": 3, "Nils Fam": 3
+        "Jobb": 3, "Grannar": 3, "Tjej PojkV": 3, "Nils Fam": 3,
+        "Vila": 7, "Älsk tid": 30
     }
     append_row(ny_rad)
     st.success(f"✅ Vilodag {'jobb' if jobb else 'hemma'} tillagd.")
 
-# Kopiera två rader med flest Totalt män
+# Kopiera två största
 def kopiera_max(df):
     df["Känner"] = df["Jobb"] + df["Grannar"] + df["Tjej PojkV"] + df["Nils Fam"]
     df["Totalt män"] = df["Män"] + df["Känner"]
@@ -105,6 +102,22 @@ def kopiera_max(df):
         df = df.append(ny, ignore_index=True)
     st.success("✅ Två rader kopierades från högsta Totalt män.")
 
+# Slumpknapp
+def slumpmässig_rad(df):
+    ny_rad = {}
+    for col in df.columns:
+        if col in ["Dag", "Älskar", "Sover med", "Vila", "Älsk tid"]:
+            continue
+        if df[col].dtype in [int, float]:
+            ny_rad[col] = random.randint(int(df[col].min()), int(df[col].max()))
+    ny_rad["Älskar"] = 8
+    ny_rad["Sover med"] = 1
+    ny_rad["Vila"] = 7
+    ny_rad["Älsk tid"] = 30
+    ny_rad["Dag"] = nästa_datum(df).isoformat()
+    append_row(ny_rad)
+    st.success("✅ Slumprad tillagd.")
+
 # Huvudvy
 def huvudvy(df):
     st.header("📊 Huvudvy")
@@ -115,7 +128,6 @@ def huvudvy(df):
     malin_lön = min(1500, intäkter * 0.01)
     företag_lön = intäkter * 0.4
     vänner_lön = intäkter - malin_lön - företag_lön
-
     maxvärden = get_max_values(df)
     gangb = totalt_känner / sum(maxvärden.values()) if sum(maxvärden.values()) > 0 else 0
     älskat = df["Älskar"].sum() / totalt_känner if totalt_känner > 0 else 0
@@ -169,22 +181,20 @@ def radvy(df):
                 worksheet.update(f"K{len(df)+1}:M{len(df)+1}", [[rad["Tid s"], rad["Tid d"], rad["Tid t"]]])
                 st.success("⏱️ Tider uppdaterade!")
 
-# Huvudfunktion
+# Main
 def main():
     worksheet, df = load_data()
 
-    # Knappfunktioner
     if st.button("➕ Lägg till vilodag jobb"):
         vilodag(df, jobb=True)
     if st.button("➕ Lägg till vilodag hemma"):
         vilodag(df, jobb=False)
     if st.button("📋 Kopiera två största"):
         kopiera_max(df)
+    if st.button("🎲 Slumpa ny rad"):
+        slumpmässig_rad(df)
 
-    # Formulär för manuell inmatning
     inmatning(df)
-
-    # Presentation
     huvudvy(df)
     radvy(df)
 
