@@ -48,6 +48,9 @@ def load_data():
         if col not in df.columns:
             df[col] = 0
 
+    # Konvertera datumkolumn till datetime, hantera fel
+    df["Datum"] = pd.to_datetime(df["Datum"], errors="coerce")
+
     return worksheet, df
 
 # Spara eller uppdatera rad i sheet (append eller update)
@@ -60,7 +63,8 @@ def update_row(worksheet, index, row_dict):
     # Uppdatera rad index+2 (eftersom rad 1 är header, och index är 0-baserat i df)
     col_names = worksheet.row_values(1)
     values = [row_dict.get(col, 0) for col in col_names]
-    range_str = f"A{index+2}:{chr(ord('A')+len(col_names)-1)}{index+2}"
+    end_col_letter = chr(ord('A') + len(col_names) - 1)
+    range_str = f"A{index+2}:{end_col_letter}{index+2}"
     worksheet.update(range_str, [values])
 
 # Hjälpfunktion: nästkommande datum efter sista datumet i df
@@ -69,10 +73,20 @@ def nästa_datum(df):
         return datetime.today().strftime("%Y-%m-%d")
     else:
         try:
-            sista = pd.to_datetime(df["Datum"], errors='coerce').max()
+            sista = df["Datum"].max()
+            if pd.isna(sista):
+                return datetime.today().strftime("%Y-%m-%d")
             return (sista + timedelta(days=1)).strftime("%Y-%m-%d")
         except Exception:
             return datetime.today().strftime("%Y-%m-%d")
+
+# Beräkning av klockan per rad
+def calc_klockan(row):
+    start = datetime.strptime("07:00", "%H:%M")
+    total_seconds = row.get("Summa singel", 0) + row.get("Summa dubbel", 0) + row.get("Summa trippel", 0) + row.get("Total tid", 0)
+    total_minutes = total_seconds / 60
+    klockan = (start + timedelta(minutes=total_minutes)).strftime("%H:%M")
+    return klockan
 
 # Uppdatera alla beräkningar i df
 def update_calculations(df):
@@ -87,6 +101,11 @@ def update_calculations(df):
 
     # Totalt män
     df["Totalt män"] = df["Män"] + df["Känner"]
+
+    # Säkerställ numeriska kolumner för beräkning, fyll NaN med 0
+    numeric_cols = ["Tid Singel","Tid Dubbel","Tid Trippel","Vila","DM","DF","DR","TPP","TAP","TPA"]
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
     # Summa singel
     df["Summa singel"] = (df["Tid Singel"] + df["Vila"]) * df["Totalt män"]
@@ -109,6 +128,8 @@ def update_calculations(df):
     df["Suger"] = 0
     mask = df["Totalt män"] > 0
     df.loc[mask, "Suger"] = (df.loc[mask, "Summa tid"] * 0.6) / df.loc[mask, "Totalt män"]
+
+# ... Fortsättning i del 2
 
     # Hårdhet
     def calc_hårdhet(row):
@@ -139,15 +160,17 @@ def update_calculations(df):
     # Företagets lön (40% av intäkter)
     df["Företag lön"] = df["Intäkter"] * 0.4
 
-    # Vänner lön (intäkter - Malin lön - företagets lön) / känner 2
-    df["Vänner lön"] = (df["Intäkter"] - df["Malin lön"] - df["Företag lön"]) / df["Känner"]
+    # Vänner lön (intäkter - Malin lön - företagets lön) / känner
+    df["Vänner lön"] = 0
+    mask_känner = df["Känner"] > 0
+    df.loc[mask_känner, "Vänner lön"] = (df.loc[mask_känner, "Intäkter"] - df.loc[mask_känner, "Malin lön"] - df.loc[mask_känner, "Företag lön"]) / df.loc[mask_känner, "Känner"]
 
-    # DeepT, Grabbar, Snitt, Sekunder, Varv, Total tid, Tid kille DT, Runk (exempel med 0 eller samma värde)
-    df["DeepT"] = df.get("DeepT", 0)
-    df["Grabbar"] = df.get("Grabbar", 1)
+    # DeepT, Grabbar, Snitt, Sekunder, Varv, Total tid, Tid kille DT, Runk
+    df["DeepT"] = pd.to_numeric(df.get("DeepT", 0), errors='coerce').fillna(0)
+    df["Grabbar"] = pd.to_numeric(df.get("Grabbar", 1), errors='coerce').fillna(1)
     df["Snitt"] = df["DeepT"] / df["Grabbar"].replace(0,1)
-    df["Sekunder"] = df.get("Sekunder", 0)
-    df["Varv"] = df.get("Varv", 0)
+    df["Sekunder"] = pd.to_numeric(df.get("Sekunder", 0), errors='coerce').fillna(0)
+    df["Varv"] = pd.to_numeric(df.get("Varv", 0), errors='coerce').fillna(0)
     df["Total tid"] = df["Snitt"] * (df["Sekunder"] * df["Varv"])
     df["Tid kille DT"] = df["Total tid"] / df["Totalt män"].replace(0,1)
     df["Runk"] = (df["Total tid"] * 0.6) / df["Totalt män"].replace(0,1)
@@ -155,13 +178,7 @@ def update_calculations(df):
     # Tid kille = tid s + 2*tid d + 3*tid t + suger + tid kille DT + runk
     df["Tid kille"] = df["Tid Singel"] + 2*df["Tid Dubbel"] + 3*df["Tid Trippel"] + df["Suger"] + df["Tid kille DT"] + df["Runk"]
 
-    # Klockan = 07:00 + (Summa singel + Summa dubbel + Summa trippel + Total tid) i minuter
-    def calc_klockan(row):
-        start = datetime.strptime("07:00", "%H:%M")
-        total_seconds = row["Summa singel"] + row["Summa dubbel"] + row["Summa trippel"] + row["Total tid"]
-        total_minutes = total_seconds / 60
-        klockan = (start + timedelta(minutes=total_minutes)).strftime("%H:%M")
-        return klockan
+    # Klockan
     df["Klockan"] = df.apply(calc_klockan, axis=1)
 
     return df
