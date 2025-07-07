@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
-import random
-from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime, timedelta
+import random
 
 # Autentisering
 def auth_gspread():
@@ -12,50 +12,77 @@ def auth_gspread():
     client = gspread.authorize(creds)
     return client
 
-# Ladda data från Google Sheet
+# Laddar in data
 def load_data():
     client = auth_gspread()
     sheet = client.open_by_url(st.secrets["SHEET_URL"])
     worksheet = sheet.worksheet("Blad1")
     data = worksheet.get_all_records()
     df = pd.DataFrame(data)
-    headers = worksheet.row_values(1)
-    # Säkerställ att alla kolumner finns
-    expected_columns = [  # Här listar vi bara några nyckelkolumner för exempel
-        "Datum", "Män", "F", "R", "Dm", "Df", "Dr", "TPP", "TAP", "TPA", "Älskar", "Sover med",
-        "DeepT", "Grabbar", "Sekunder", "Varv", "Tid s", "Tid d", "Tid t", "Vila"
-    ]
-    for col in expected_columns:
-        if col not in headers:
-            headers.append(col)
-            df[col] = 0
-    worksheet.update("A1:1", [headers])  # Fixad syntax
     return worksheet, df
 
-# Huvudfunktion för appen
+# Skriver rubriker + data om de saknas
+def update_sheet_if_needed(worksheet, df, expected_columns):
+    current_cols = worksheet.row_values(1)
+    if current_cols != expected_columns:
+        worksheet.update("A1", [expected_columns])
+    if df.empty:
+        return pd.DataFrame(columns=expected_columns)
+    return df
+
+# Spara ny rad till Google Sheet
+def save_new_row(worksheet, new_row):
+    worksheet.append_row(new_row)
+
+# UI-komponent för att lägga till ny rad
+def add_row_ui(worksheet, df, columns):
+    st.subheader("➕ Lägg till ny rad")
+
+    new_data = {}
+    for col in columns:
+        if col == "Dag":
+            new_data[col] = st.date_input("Datum", datetime.today()).strftime("%Y-%m-%d")
+        elif col in ["Älskar"]:
+            new_data[col] = 8
+        elif col in ["Sover med"]:
+            new_data[col] = 1
+        elif col == "Vila":
+            new_data[col] = 7
+        elif col == "Älsk tid":
+            new_data[col] = 30
+        elif col in ["Snitt"]:
+            new_data[col] = 0.0
+        else:
+            new_data[col] = st.number_input(col, value=0, step=1)
+
+    if st.button("💾 Spara rad"):
+        new_row = [new_data[col] for col in columns]
+        save_new_row(worksheet, new_row)
+        st.success("✅ Ny rad tillagd! Ladda om sidan för att se den.")
+        st.stop()
+
 def main():
-    st.set_page_config(layout="wide")
-    st.title("MalinData")
+    st.set_page_config(page_title="MalinData", layout="wide")
+    st.title("📊 MalinData")
+
+    # Definiera alla kolumner som ska finnas
+    expected_columns = [
+        "Dag", "Män", "F", "R", "Dm", "Df", "Dr", "TPP", "TAP", "TPA",
+        "Älskar", "Sover med", "Jobb", "Grannar", "Tjej PojkV", "Nils fam",
+        "Tid s", "Tid d", "Tid t", "Vila", "Älsk tid", "DeepT", "Grabbar",
+        "Sekunder", "Varv"
+    ]
 
     worksheet, df = load_data()
+    df = update_sheet_if_needed(worksheet, df, expected_columns)
 
-    st.write("## Förhandsvisning av data")
-    st.dataframe(df)
-
-    if st.button("Skapa ny rad (test)"):
-        new_row = {col: 0 for col in df.columns}
-        new_row["Datum"] = datetime.today().strftime("%Y-%m-%d")
-        new_row["Älskar"] = 8
-        new_row["Sover med"] = 1
-        new_row["Vila"] = 7
-        new_row["Älsk tid"] = 30
-        for col in new_row:
-            if col in ["Älskar", "Sover med", "Vila", "Älsk tid", "Datum"]:
-                continue
-            if df[col].dtype in [int, float] and df[col].max() > 0:
-                new_row[col] = random.randint(0, int(df[col].max()))
-        worksheet.append_row([new_row.get(col, "") for col in df.columns])
-        st.success("Ny rad skapad! Ladda om sidan för att se den.")
+    if df.empty:
+        st.warning("🔹 Inga data ännu – fyll i nedan för att börja!")
+        add_row_ui(worksheet, df, expected_columns)
+    else:
+        st.success("✅ Data inläst!")
+        st.dataframe(df)
+        add_row_ui(worksheet, df, expected_columns)
 
 if __name__ == "__main__":
     main()
