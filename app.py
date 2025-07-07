@@ -5,20 +5,17 @@ from datetime import datetime, timedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-st.set_page_config(page_title="MalinAppen", layout="wide")
-
 # --- Autentisering ---
 def auth_gspread():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["GOOGLE_CREDENTIALS"], scope)
-    client = gspread.authorize(creds)
-    return client
+    return gspread.authorize(creds)
 
 # --- Ladda data ---
 def load_data():
     client = auth_gspread()
     sheet = client.open_by_url(st.secrets["SHEET_URL"])
-    worksheet = sheet.worksheet("Blad1")
+    worksheet = sheet.sheet1
     data = worksheet.get_all_records()
     df = pd.DataFrame(data)
     return worksheet, df
@@ -27,122 +24,70 @@ def load_data():
 def append_row(worksheet, row):
     worksheet.append_row(row)
 
-# --- Slumpa ny rad ---
-def skapa_slumprad(df):
-    def slumpa(kolumn):
-        if kolumn in df.columns and pd.api.types.is_numeric_dtype(df[kolumn]):
-            if df[kolumn].dropna().empty:
-                return 0
-            return random.randint(int(df[kolumn].min()), int(df[kolumn].max()))
-        return 0
-
-    ny_rad = {
-        "MÃ¤n": slumpa("MÃ¤n"),
-        "F": slumpa("F"),
-        "R": slumpa("R"),
-        "Dm": slumpa("Dm"),
-        "Df": slumpa("Df"),
-        "Dr": slumpa("Dr"),
-        "3f": slumpa("3f"),
-        "3r": slumpa("3r"),
-        "3p": slumpa("3p"),
-        "Tid s": slumpa("Tid s"),
-        "Tid d": slumpa("Tid d"),
-        "Tid t": slumpa("Tid t"),
-        "Vila": 7,
-        "Ãlskar": 8,
-        "Ãlsk tid": 30,
-        "Sover med": 1,
-        "Jobb": slumpa("Jobb"),
-        "Grannar": slumpa("Grannar"),
-        "Tjej PojkV": slumpa("Tjej PojkV"),
-        "Nils Fam": slumpa("Nils Fam"),
-        "Svarta": slumpa("Svarta"),
-        "Dag": datetime.today().strftime("%Y-%m-%d")
-    }
-    return ny_rad
-
-# --- LÃ¤gg till vila jobb ---
-def skapa_vilodag_jobbrad(df):
-    def maxv(kol):
-        return int(df[kol].max()) if kol in df.columns else 0
-
+# --- Hämta maxvärden för varje relevant kolumn ---
+def get_max_values(df):
     return {
-        "MÃ¤n": 0, "F": 0, "R": 0, "Dm": 0, "Df": 0, "Dr": 0,
-        "3f": 0, "3r": 0, "3p": 0, "Tid s": 0, "Tid d": 0, "Tid t": 0,
-        "Vila": 7, "Ãlskar": 12, "Ãlsk tid": 30, "Sover med": 1,
-        "Jobb": round(maxv("Jobb") * 0.5), "Grannar": round(maxv("Grannar") * 0.5),
-        "Tjej PojkV": round(maxv("Tjej PojkV") * 0.5), "Nils Fam": round(maxv("Nils Fam") * 0.5),
-        "Svarta": 0, "Dag": datetime.today().strftime("%Y-%m-%d")
+        "Jobb": df["Jobb"].max() if not df["Jobb"].isna().all() else 0,
+        "Grannar": df["Grannar"].max() if not df["Grannar"].isna().all() else 0,
+        "Tjej PojkV": df["Tjej PojkV"].max() if not df["Tjej PojkV"].isna().all() else 0,
+        "Nils Fam": df["Nils Fam"].max() if not df["Nils Fam"].isna().all() else 0,
     }
 
-# --- LÃ¤gg till vila hemma ---
-def skapa_vilodag_hemma():
-    return {
-        "MÃ¤n": 0, "F": 0, "R": 0, "Dm": 0, "Df": 0, "Dr": 0,
-        "3f": 0, "3r": 0, "3p": 0, "Tid s": 0, "Tid d": 0, "Tid t": 0,
-        "Vila": 7, "Ãlskar": 6, "Ãlsk tid": 30, "Sover med": 0,
-        "Jobb": 3, "Grannar": 3, "Tjej PojkV": 3, "Nils Fam": 3,
-        "Svarta": 0, "Dag": datetime.today().strftime("%Y-%m-%d")
+# --- Funktion för slumpknapp ---
+def generate_random_row(df):
+    max_vals = {col: df[col].max() for col in df.columns if df[col].dtype != "O"}
+    new_row = {
+        col: random.randint(0, int(max_vals.get(col, 1))) for col in df.columns
+        if col not in ["Älskar", "Sover med", "Vila", "Älsk tid", "Dag"]
     }
+    new_row["Älskar"] = 8
+    new_row["Sover med"] = 1
+    new_row["Vila"] = 7
+    new_row["Älsk tid"] = 30
+    new_row["Dag"] = datetime.today().strftime("%Y-%m-%d")
+    return [new_row.get(col, 0) for col in df.columns]
 
-# --- Streamlit UI ---
+# --- UI och app-logik ---
 def main():
-    st.title("MalinAppen â Full Version")
+    st.title("Malin-appen")
 
     worksheet, df = load_data()
 
-    st.subheader("LÃ¤gg till ny data manuellt")
-    with st.form("lÃ¤gg_till"):
-        col1, col2, col3 = st.columns(3)
-        ny_post = {
-            "MÃ¤n": col1.number_input("MÃ¤n", value=0),
-            "F": col1.number_input("F", value=0),
-            "R": col1.number_input("R", value=0),
-            "Dm": col1.number_input("Dm", value=0),
-            "Df": col2.number_input("Df", value=0),
-            "Dr": col2.number_input("Dr", value=0),
-            "3f": col2.number_input("3f", value=0),
-            "3r": col3.number_input("3r", value=0),
-            "3p": col3.number_input("3p", value=0),
-            "Tid s": col3.number_input("Tid s", value=0),
-            "Tid d": col1.number_input("Tid d", value=0),
-            "Tid t": col1.number_input("Tid t", value=0),
-            "Vila": col1.number_input("Vila", value=7),
-            "Ãlskar": col2.number_input("Ãlskar", value=8),
-            "Ãlsk tid": col2.number_input("Ãlsk tid", value=30),
-            "Sover med": col2.number_input("Sover med", value=1),
-            "Jobb": col3.number_input("Jobb", value=0),
-            "Grannar": col3.number_input("Grannar", value=0),
-            "Tjej PojkV": col3.number_input("Tjej PojkV", value=0),
-            "Nils Fam": col3.number_input("Nils Fam", value=0),
-            "Svarta": col3.number_input("Svarta", value=0),
-            "Dag": datetime.today().strftime("%Y-%m-%d")
-        }
+    # Huvudvy: Visa nyckeldata och beräkningar
+    st.header("📊 Huvudvy")
+    if not df.empty:
+        df["Känner"] = df["Jobb"] + df["Grannar"] + df["Tjej PojkV"] + df["Nils Fam"]
+        totalt_män = df["Män"].sum()
+        totalt_känner = df["Känner"].sum()
+        gangb = round(totalt_känner / max(get_max_values(df).values()), 2)
+        älskat = round(df["Älskar"].sum() / totalt_känner, 2) if totalt_känner else 0
+        snitt = round((totalt_män + totalt_känner) / df.shape[0], 2)
+        kompisar = sum(get_max_values(df).values())
+        sovermed_kvot = round(df["Sover med"].sum() / get_max_values(df)["Nils Fam"], 2) if get_max_values(df)["Nils Fam"] else 0
 
-        submitted = st.form_submit_button("LÃ¤gg till rad")
-        if submitted:
-            append_row(worksheet, list(ny_post.values()))
-            st.success("Ny rad tillagd!")
+        st.write(f"Totalt Män: {totalt_män}")
+        st.write(f"Totalt Känner: {totalt_känner}")
+        st.write(f"Snitt (Män + Känner): {snitt}")
+        st.write(f"GangB: {gangb}")
+        st.write(f"Älskat: {älskat}")
+        st.write(f"Kompisar: {kompisar}")
+        st.write(f"Sover med/Nils Fam 2: {sovermed_kvot}")
 
-    st.subheader("Snabbkommandon")
-    if st.button("SlumpmÃ¤ssig rad"):
-        ny = skapa_slumprad(df)
-        append_row(worksheet, list(ny.values()))
-        st.success("Slumprad tillagd!")
+    # Radvyn: Visa varje rad med tid kille
+    st.header("📋 Rader")
+    for i, rad in df.iterrows():
+        st.subheader(f"Rad {i+1}")
+        tid_kille = rad["Tid s"] + rad["Tid d"] + rad["Tid t"]
+        st.write(f"Totalt Tid kille: {tid_kille:.2f} minuter")
+        if tid_kille < 10:
+            st.error("⚠️ Tid kille är under 10 minuter – bör ökas!")
 
-    if st.button("Vilodag jobb"):
-        ny = skapa_vilodag_jobbrad(df)
-        append_row(worksheet, list(ny.values()))
-        st.success("Vilodag jobb tillagd!")
-
-    if st.button("Vilodag hemma"):
-        ny = skapa_vilodag_hemma()
-        append_row(worksheet, list(ny.values()))
-        st.success("Vilodag hemma tillagd!")
-
-    st.subheader("Data")
-    st.dataframe(df)
+    # Knappar för att lägga till ny rad
+    st.header("➕ Lägg till ny data")
+    if st.button("Slumpa ny rad"):
+        new_row = generate_random_row(df)
+        append_row(worksheet, new_row)
+        st.success("Slumpmässig rad tillagd!")
 
 if __name__ == "__main__":
     main()
