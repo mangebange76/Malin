@@ -8,12 +8,12 @@ import random
 
 # Google Sheets autentisering
 def auth_gspread():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets","https://www.googleapis.com/auth/drive"]
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scopes)
     client = gspread.authorize(creds)
     return client
 
-# Säkerställ rubriker i sheet, skapa om de saknas eller ändra ordning
+# Säkerställ rubriker i sheet
 def ensure_headers(worksheet, headers):
     current_headers = worksheet.row_values(1)
     if current_headers != headers:
@@ -27,30 +27,28 @@ def load_data():
     worksheet = sheet.worksheet("Blad1")
 
     headers = [
-        "Datum","Män","Fi","Rö","DM","DF","DR","TPP","TAP","TPA",
-        "Älskar","Sover med","Känner","Jobb","Jobb 2","Grannar","Grannar 2",
-        "Tjej PojkV","Tjej PojkV 2","Nils fam","Nils fam 2","Totalt män",
-        "Tid Singel","Tid Dubbel","Tid Trippel","Vila",
-        "Summa singel","Summa dubbel","Summa trippel","Summa vila","Summa tid",
-        "Klockan","Tid kille","Suger","Filmer","Pris","Intäkter",
-        "Malin lön","Företag lön","Vänner lön","Hårdhet",
-        "DeepT","Grabbar","Snitt","Sekunder","Varv","Total tid","Tid kille DT","Runk",
+        "Datum", "Män", "Fi", "Rö", "DM", "DF", "DR", "TPP", "TAP", "TPA",
+        "Älskar", "Sover med", "Känner", "Jobb", "Jobb 2", "Grannar", "Grannar 2",
+        "Tjej PojkV", "Tjej PojkV 2", "Nils fam", "Nils fam 2", "Totalt män",
+        "Tid Singel", "Tid Dubbel", "Tid Trippel", "Vila",
+        "Summa singel", "Summa dubbel", "Summa trippel", "Summa vila", "Summa tid",
+        "Klockan", "Tid kille", "Suger", "Filmer", "Pris", "Intäkter",
+        "Malin lön", "Företag lön", "Vänner lön", "Hårdhet",
+        "DeepT", "Grabbar", "Snitt", "Sekunder", "Varv", "Total tid", "Tid kille DT", "Runk",
         "Svarta"
     ]
 
     ensure_headers(worksheet, headers)
-
     records = worksheet.get_all_records()
     df = pd.DataFrame(records)
 
-    # Säkerställ att alla kolumner finns i df, annars lägg till med 0 som default
     for col in headers:
         if col not in df.columns:
             df[col] = 0
 
     return worksheet, df
 
-# Spara eller uppdatera rad i sheet
+# Spara eller uppdatera rad
 def append_row(worksheet, row_dict):
     values = [row_dict.get(col, 0) for col in worksheet.row_values(1)]
     worksheet.append_row(values)
@@ -71,30 +69,27 @@ def nästa_datum(df):
     except Exception:
         return datetime.today().strftime("%Y-%m-%d")
 
-# Huvudberäkningar
+# Uppdatera alla beräkningar
 def update_calculations(df):
-    df["Känner"] = df[["Jobb","Grannar","Tjej PojkV","Nils fam"]].sum(axis=1)
-
+    df["Känner"] = df[["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]].sum(axis=1)
+    df["Totalt män"] = df["Män"] + df["Känner"]
+    
     df["Jobb 2"] = df["Jobb"].max()
     df["Grannar 2"] = df["Grannar"].max()
     df["Tjej PojkV 2"] = df["Tjej PojkV"].max()
     df["Nils fam 2"] = df["Nils fam"].max()
-
-    df["Totalt män"] = df["Män"] + df["Känner"]
 
     df["Summa singel"] = (df["Tid Singel"] + df["Vila"]) * df["Totalt män"]
     df["Summa dubbel"] = ((df["Tid Dubbel"] + df["Vila"]) + 9) * (df["DM"] + df["DF"] + df["DR"])
     df["Summa trippel"] = ((df["Tid Trippel"] + df["Vila"]) + 15) * (df["TPP"] + df["TAP"] + df["TPA"])
 
     df["Summa vila"] = (df["Totalt män"] * df["Vila"]) + \
-                      (df["DM"] + df["DF"] + df["DR"]) * (df["Vila"] + 7) + \
-                      (df["TPP"] + df["TAP"] + df["TPA"]) * (df["Vila"] + 15)
+                       (df["DM"] + df["DF"] + df["DR"]) * (df["Vila"] + 7) + \
+                       (df["TPP"] + df["TAP"] + df["TPA"]) * (df["Vila"] + 15)
 
     df["Summa tid"] = df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"]
 
-    df["Suger"] = 0
-    mask = df["Totalt män"] > 0
-    df.loc[mask, "Suger"] = (df.loc[mask, "Summa tid"] * 0.6) / df.loc[mask, "Totalt män"]
+    df["Suger"] = np.where(df["Totalt män"] > 0, df["Summa tid"] * 0.6 / df["Totalt män"], 0)
 
     def calc_hårdhet(row):
         h = 0
@@ -106,38 +101,42 @@ def update_calculations(df):
         if row["TAP"] > 0: h += 6
         if row["TPA"] > 0: h += 5
         return h
+
     df["Hårdhet"] = df.apply(calc_hårdhet, axis=1)
 
-    df["Filmer"] = (df["Män"] + df["Fi"] + df["Rö"] + df["DM"]*2 + df["DF"]*2 + df["DR"]*3 +
-                    df["TPP"]*4 + df["TAP"]*6 + df["TPA"]*5) * df["Hårdhet"]
+    df["Filmer"] = (df["Män"] + df["Fi"] + df["Rö"] + df["DM"]*2 + df["DF"]*2 +
+                    df["DR"]*3 + df["TPP"]*4 + df["TAP"]*6 + df["TPA"]*5) * df["Hårdhet"]
 
     df["Pris"] = 19.99
     df["Intäkter"] = df["Filmer"] * df["Pris"]
-    df["Malin lön"] = df["Intäkter"] * 0.05
-    df.loc[df["Malin lön"] > 1500, "Malin lön"] = 1500
+
+    df["Malin lön"] = np.minimum(df["Intäkter"] * 0.02, 1000)
     df["Företag lön"] = df["Intäkter"] * 0.4
-    df["Vänner lön"] = (df["Intäkter"] - df["Malin lön"] - df["Företag lön"]) / df["Känner"].replace(0,1)
+
+    df["Vänner lön"] = np.where(df["Känner"] > 0,
+        (df["Intäkter"] - df["Malin lön"] - df["Företag lön"]) / df["Känner"], 0)
 
     df["Snitt"] = df["DeepT"] / df["Grabbar"].replace(0, 1)
-    df["Total tid"] = df["Snitt"] * (df["Sekunder"] * df["Varv"])
-    df["Tid kille DT"] = df["Total tid"] / df["Totalt män"].replace(0,1)
-    df["Runk"] = (df["Total tid"] * 0.6) / df["Totalt män"].replace(0,1)
-    df["Tid kille"] = df["Tid Singel"] + 2*df["Tid Dubbel"] + 3*df["Tid Trippel"] + \
+    df["Total tid"] = df["Snitt"] * df["Sekunder"] * df["Varv"]
+    df["Tid kille DT"] = df["Total tid"] / df["Totalt män"].replace(0, 1)
+    df["Runk"] = (df["Total tid"] * 0.6) / df["Totalt män"].replace(0, 1)
+
+    df["Tid kille"] = df["Tid Singel"] + df["Tid Dubbel"] * 2 + df["Tid Trippel"] * 3 + \
                       df["Suger"] + df["Tid kille DT"] + df["Runk"]
 
     def calc_klockan(row):
         try:
             start = datetime.strptime("07:00", "%H:%M")
-            total_seconds = row["Summa singel"] + row["Summa dubbel"] + row["Summa trippel"] + row["Total tid"]
-            total_minutes = total_seconds / 60
-            return (start + timedelta(minutes=total_minutes)).strftime("%H:%M")
+            minuter = (row["Summa singel"] + row["Summa dubbel"] +
+                       row["Summa trippel"] + row["Total tid"]) / 60
+            return (start + timedelta(minutes=minuter)).strftime("%H:%M")
         except:
-            return ""
-    df["Klockan"] = df.apply(calc_klockan, axis=1)
+            return "07:00"
 
+    df["Klockan"] = df.apply(calc_klockan, axis=1)
     return df
 
-# Formulär: Lägg till ny rad
+# Lägg till ny rad via formulär
 def inmatning(df, worksheet):
     st.header("➕ Lägg till ny rad")
     with st.form("form_ny_rad"):
@@ -155,25 +154,26 @@ def inmatning(df, worksheet):
 
         submitted = st.form_submit_button("Spara")
         if submitted:
+            for col in worksheet.row_values(1):
+                ny_rad.setdefault(col, 0)
             append_row(worksheet, ny_rad)
             st.success("✅ Ny rad sparad. Ladda om appen för att se uppdatering.")
 
-# Knapp: Vilodag jobb
+# Vilodag jobb – sätt 30% av max för respektive kolumn
 def vilodag_jobb(df, worksheet):
     ny_rad = {col: 0 for col in worksheet.row_values(1)}
     ny_rad["Datum"] = nästa_datum(df)
-    ny_rad.update({
-        "Älskar": 12,
-        "Sover med": 1,
-        "Jobb": int(df["Jobb"].max()) if not df.empty else 0,
-        "Grannar": int(df["Grannar"].max()) if not df.empty else 0,
-        "Tjej PojkV": int(df["Tjej PojkV"].max()) if not df.empty else 0,
-        "Nils fam": int(df["Nils fam"].max()) if not df.empty else 0,
-    })
+
+    for col in ["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]:
+        max_val = df[col].max() if col in df.columns and not df.empty else 0
+        ny_rad[col] = int(round(max_val * 0.3))
+
+    ny_rad["Älskar"] = 12
+    ny_rad["Sover med"] = 1
     append_row(worksheet, ny_rad)
     st.success("✅ Vilodag jobb tillagd.")
 
-# Knapp: Vilodag hemma
+# Vilodag hemma – fasta värden
 def vilodag_hemma(df, worksheet):
     ny_rad = {col: 0 for col in worksheet.row_values(1)}
     ny_rad["Datum"] = nästa_datum(df)
@@ -188,28 +188,27 @@ def vilodag_hemma(df, worksheet):
     append_row(worksheet, ny_rad)
     st.success("✅ Vilodag hemma tillagd.")
 
-# Knapp: Kopiera största raden
+# Kopiera EN rad med högst Totalt män
 def kopiera_max(df, worksheet):
     if df.empty:
         st.warning("Ingen data att kopiera.")
         return
-    df["Känner"] = df["Jobb"] + df["Grannar"] + df["Tjej PojkV"] + df["Nils fam"]
-    df["Totalt män"] = df["Män"] + df["Känner"]
-    rad = df.sort_values("Totalt män", ascending=False).iloc[0]
-    ny = rad.to_dict()
+    df = update_calculations(df)
+    max_row = df.loc[df["Totalt män"].idxmax()]
+    ny = max_row.to_dict()
     ny["Datum"] = nästa_datum(df)
     append_row(worksheet, ny)
     st.success("✅ Största raden kopierades.")
 
-# Knapp: Slumpa ny rad
+# Slumpa ny rad och utför beräkningar direkt
 def slumpa_rad(df, worksheet):
     if df.empty:
         st.warning("Ingen data att slumpa från.")
         return
     cols_to_randomize = [
         "Män","Fi","Rö","DM","DF","DR","TPP","TAP","TPA",
-        "Älskar","Sover med","Jobb","Grannar","Tjej PojkV","Nils fam","Svarta",
-        "Tid Singel","Tid Dubbel","Tid Trippel","Vila",
+        "Jobb","Grannar","Tjej PojkV","Nils fam","Svarta",
+        "Tid Singel","Tid Dubbel","Tid Trippel",
         "DeepT","Grabbar","Sekunder","Varv"
     ]
     ny_rad = {}
@@ -217,33 +216,41 @@ def slumpa_rad(df, worksheet):
         if col in df.columns and pd.api.types.is_numeric_dtype(df[col]):
             min_val = int(df[col].min())
             max_val = int(df[col].max())
-            if col == "Älskar":
-                ny_rad[col] = 8
-            elif col == "Sover med":
-                ny_rad[col] = 1
-            elif col == "Vila":
-                ny_rad[col] = 7
-            else:
-                ny_rad[col] = random.randint(min_val, max_val)
+            ny_rad[col] = random.randint(min_val, max_val)
         else:
             ny_rad[col] = 0
+
+    # Sätt fasta värden
+    ny_rad["Älskar"] = 8
+    ny_rad["Sover med"] = 1
+    ny_rad["Vila"] = 7
     ny_rad["Datum"] = nästa_datum(df)
-    append_row(worksheet, ny_rad)
-    st.success("✅ Slumpad rad tillagd.")
+
+    # Fyll tomma fält som behövs för beräkning
+    for col in worksheet.row_values(1):
+        ny_rad.setdefault(col, 0)
+
+    tmp_df = pd.concat([df, pd.DataFrame([ny_rad])], ignore_index=True)
+    tmp_df = update_calculations(tmp_df)
+    final_row = tmp_df.iloc[-1].to_dict()
+    append_row(worksheet, final_row)
+    st.success("✅ Slumpad rad tillagd med beräkningar.")
 
 # Presentation huvudvy
 def huvudvy(df):
     st.header("📊 Huvudvy")
+
+    df = update_calculations(df)
 
     df["Känner"] = df["Jobb"] + df["Grannar"] + df["Tjej PojkV"] + df["Nils fam"]
     df["Totalt män"] = df["Män"] + df["Känner"]
     totalt_män = df["Totalt män"].sum()
     totalt_känner = df["Känner"].sum()
 
-    jobb_2 = df["Jobb"].max() if not df.empty else 0
-    grannar_2 = df["Grannar"].max() if not df.empty else 0
-    tjej_2 = df["Tjej PojkV"].max() if not df.empty else 0
-    nils_2 = df["Nils fam"].max() if not df.empty else 0
+    jobb_2 = df["Jobb"].max()
+    grannar_2 = df["Grannar"].max()
+    tjej_2 = df["Tjej PojkV"].max()
+    nils_2 = df["Nils fam"].max()
 
     gangb = totalt_känner / (jobb_2 + grannar_2 + tjej_2 + nils_2) if (jobb_2 + grannar_2 + tjej_2 + nils_2) > 0 else 0
     älskat = df["Älskar"].sum() / totalt_känner if totalt_känner > 0 else 0
@@ -286,8 +293,6 @@ def radvy(df, worksheet):
         return
 
     rad = df.iloc[-1]
-
-    # Tid kille i minuter
     tid_kille_min = rad["Tid kille"] / 60 if rad["Tid kille"] else 0
     marker = "⚠️ Öka tid!" if tid_kille_min < 10 else ""
 
@@ -296,7 +301,6 @@ def radvy(df, worksheet):
     st.write(f"**Intäkter:** ${rad['Intäkter']:.2f}")
     st.write(f"**Klockan:** {rad['Klockan']}")
 
-    # Möjlighet att justera tid s, tid d, tid t, sekunder, varv
     with st.form("form_justera_tid"):
         tid_s = st.number_input("Tid Singel", value=int(rad["Tid Singel"]), step=1)
         tid_d = st.number_input("Tid Dubbel", value=int(rad["Tid Dubbel"]), step=1)
@@ -312,7 +316,6 @@ def radvy(df, worksheet):
             df.at[index, "Sekunder"] = sekunder
             df.at[index, "Varv"] = varv
 
-            # Uppdatera beräkningar efter ändring
             df_updated = update_calculations(df)
             row_dict = df_updated.iloc[index].to_dict()
             update_row(worksheet, index, row_dict)
@@ -333,7 +336,7 @@ def main():
         if st.button("➕ Vilodag hemma"):
             vilodag_hemma(df, worksheet)
     with col3:
-        if st.button("📋 Kopiera största raden"):
+        if st.button("📋 Kopiera största"):
             kopiera_max(df, worksheet)
     with col4:
         if st.button("🎲 Slumpa rad"):
