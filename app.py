@@ -298,33 +298,52 @@ def presentation(df):
 # --- Huvudfunktion ---
 def main():
     st.title("MalinData App")
-    worksheet, df = load_data()
 
+    worksheet, df = load_data()
+    df = ensure_columns_exist(df, worksheet)
     df = update_calculations(df)
 
-    # Visa summering
+    with st.form("add_row"):
+        st.subheader("Lägg till ny rad")
+        ny_rad = {}
+        for col in df.columns:
+            if col in ["Dag", "Totalt män", "Känner 2", "Grabbar", "Snitt", "Total tid", "Tid kille DT", "Runk", "Summa singel", "Summa dubbel", "Summa trippel", "Summa tid", "Klockan", "Tid kille", "Suger", "Filmer", "Pris", "Intäkter", "Malin lön", "Företagets lön", "Vänner lön"]:
+                continue
+            ny_rad[col] = st.number_input(f"{col}", min_value=0, step=1)
+
+        submitted = st.form_submit_button("Spara rad")
+        if submitted:
+            ny_rad["Dag"] = df["Dag"].max() + 1 if not df.empty else 1
+            append_row(ny_rad)
+            st.success("Raden sparad. Ladda om appen.")
+
+    # Visa knappar
+    st.markdown("### Snabbval")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        if st.button("Vilodag hemma"):
+            vilodag_hemma(df)
+            st.experimental_rerun()
+    with col2:
+        if st.button("Vilodag jobb"):
+            vilodag_jobb(df)
+            st.experimental_rerun()
+    with col3:
+        if st.button("Slumpa rad"):
+            slumpa_rad(df)
+            st.experimental_rerun()
+    with col4:
+        if st.button("Kopiera största raden"):
+            kopiera_storsta(df)
+            st.experimental_rerun()
+
+    # Visa huvudvy
     presentation(df)
 
-    # Knapp-funktioner
-    if st.button("Slumpa rad"):
-        slumpa_rad(df)
-        st.experimental_rerun()
-
-    if st.button("Vilodag hemma"):
-        vilodag_hemma(df)
-        st.experimental_rerun()
-
-    if st.button("Vilodag jobb"):
-        vilodag_jobb(df)
-        st.experimental_rerun()
-
-    if st.button("Kopiera största raden"):
-        kopiera_storsta(df)
-        st.experimental_rerun()
-
     # Visa radvy
-    radvy(df, worksheet)
+    with st.expander("📋 Redigera rader"):
+        radvy(df, worksheet)
 
-# Kör appen
+
 if __name__ == "__main__":
     main()
