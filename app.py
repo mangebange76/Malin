@@ -70,10 +70,15 @@ def update_calculations(df):
 
     df["Tid kille"] = df["Tid Singel"] + (df["Tid Dubbel"] * 2) + (df["Tid Trippel"] * 3) + df["Suger"] + df["Tid kille DT"] + df["Runk"]
 
+    # Fixad funktion – säkrare klockberäkning
     def calc_klockan(row):
-        total_min = row["Summa tid"] + row["Total tid"]
-        tid = pd.to_datetime("07:00", format="%H:%M") + pd.to_timedelta(total_min, unit="m")
-        return tid.strftime("%H:%M")
+        try:
+            total_min = float(row["Summa tid"]) + float(row["Total tid"])
+            tid = pd.to_datetime("07:00", format="%H:%M") + pd.to_timedelta(total_min, unit="m")
+            return tid.strftime("%H:%M")
+        except Exception:
+            return "Fel"
+
     df["Klockan"] = df.apply(calc_klockan, axis=1)
 
     df["Filmer"] = df["Män"] > 0
