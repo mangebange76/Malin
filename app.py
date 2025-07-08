@@ -248,22 +248,28 @@ def main():
     # Lägg till ny rad manuellt
     with st.form("add_row"):
         st.subheader("➕ Lägg till ny rad manuellt")
+
+        # Endast dessa fält ska vara manuellt ifyllda – i denna ordning
+        inmatningsfält = [
+            "Män", "Älskar", "Sover med", "Vila", "Älsk tid",
+            "Tid Singel", "Tid Dubbel", "Tid Trippel",
+            "Dm", "Df", "Dr", "TPP", "TAP", "TPA",
+            "DeepT", "Sekunder", "Varv", "Suger",
+            "Jobb", "Grannar", "Tjej PojkV", "Nils fam"
+        ]
+
         ny_rad = {}
-        for col in df.columns:
-            if col in [
-                "Dag", "Totalt män", "Känner 2", "Grabbar", "Snitt", "Total tid",
-                "Tid kille DT", "Runk", "Summa singel", "Summa dubbel", "Summa trippel",
-                "Summa tid", "Klockan", "Tid kille", "Suger", "Filmer", "Pris",
-                "Intäkter", "Malin lön", "Företagets lön", "Vänner lön"
-            ]:
-                continue
+        for col in inmatningsfält:
             ny_rad[col] = st.number_input(f"{col}", min_value=0, step=1)
 
         submitted = st.form_submit_button("Spara rad")
         if submitted:
-            ny_rad["Dag"] = df["Dag"].max() + 1 if not df.empty else 1
-            append_row(ny_rad)
-            st.success("Raden sparad. Ladda om appen.")
+            try:
+                ny_rad["Dag"] = df["Dag"].max() + 1 if not df.empty else 1
+                append_row(ny_rad)
+                st.success("Raden sparad. Ladda om appen.")
+            except Exception as e:
+                st.error(f"Fel vid sparning: {e}")
 
     # Knappar
     st.markdown("### ⚡ Snabbval")
