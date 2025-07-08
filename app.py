@@ -78,175 +78,120 @@ def update_calculations(df):
 
     return df
 
+
 def calc_tidsåtgång(row):
-    total_min = (
-        row.get("Summa singel", 0)
-        + row.get("Summa dubbel", 0)
-        + row.get("Summa trippel", 0)
-        + (row.get("Snitt", 0) * row.get("Sekunder", 0) * row.get("Varv", 0)) / 60
-    )
-    timmar = int(total_min // 60)
-    minuter = int(total_min % 60)
-    return f"{timmar} timmar {minuter} minuter"
+    try:
+        summa_singel = float(row.get("Summa singel", 0) or 0)
+        summa_dubbel = float(row.get("Summa dubbel", 0) or 0)
+        summa_trippel = float(row.get("Summa trippel", 0) or 0)
+        snitt = float(row.get("Snitt", 0) or 0)
+        sek = float(row.get("Sekunder", 0) or 0)
+        varv = float(row.get("Varv", 0) or 0)
 
-# ---- Inmatning av ny rad ----
-def inmatning(df, worksheet):
-    st.subheader("➕ Lägg till ny rad")
-    with st.form("form_ny_rad"):
-        ny_rad = {}
-        ny_rad["Dag"] = int(df["Dag"].max() + 1) if not df.empty else 1
+        extra_tid = (snitt * sek * varv) / 60
+        total_min = summa_singel + summa_dubbel + summa_trippel + extra_tid
 
-        fält_ordning = [
-            "Nya män", "Fitta", "Rumpa", "Dubbelmacka", "Dubbel fitta", "Dubbel röv",
-            "Trippel fitta", "Trippel röv", "Trippel penet", "Älskar", "Älsk tid",
-            "Sover med", "Jobb", "Grannar", "Tjej PojkV", "Nils fam",
-            "Tid singel", "Tid dubbel", "Tid trippel", "Vila", "DeepT", "Sekunder", "Varv"
-        ]
+        timmar = int(total_min // 60)
+        minuter = int(total_min % 60)
+        return f"{timmar} timmar {minuter} minuter"
+    except Exception:
+        return "0 timmar 0 minuter"
 
-        for fält in fält_ordning:
-            if "Tid" in fält or fält in ["Snitt"]:
-                ny_rad[fält] = st.number_input(fält, value=0.0, step=0.1)
-            else:
-                ny_rad[fält] = st.number_input(fält, value=0, step=1)
+# ---- Inmatningsformulär ----
+def skapa_inmatningsformulär():
+    with st.form("data_form"):
+        kol1, kol2, kol3 = st.columns(3)
 
-        if st.form_submit_button("💾 Spara rad"):
-            ny_df = pd.DataFrame([ny_rad])
-            ny_df = update_calculations(ny_df)
-            append_row(ny_df.iloc[0].to_dict())
-            st.success("✅ Raden sparades!")
-            st.experimental_rerun()
+        with kol1:
+            nya_män = st.number_input("Nya män", min_value=0, step=1)
+            fitta = st.number_input("Fitta", min_value=0, step=1)
+            rumpa = st.number_input("Rumpa", min_value=0, step=1)
+            dubbelmacka = st.number_input("Dubbelmacka", min_value=0, step=1)
+            dubbel_fitta = st.number_input("Dubbel fitta", min_value=0, step=1)
+            dubbel_röv = st.number_input("Dubbel röv", min_value=0, step=1)
+            trippel_fitta = st.number_input("Trippel fitta", min_value=0, step=1)
+            trippel_röv = st.number_input("Trippel röv", min_value=0, step=1)
+            trippel_penet = st.number_input("Trippel penet", min_value=0, step=1)
 
-# ---- Redigera befintliga rader ----
-def redigera_rader(df, worksheet):
-    st.subheader("📝 Redigera befintliga rader")
-    for i, row in df.iterrows():
-        with st.expander(f"Dag {int(row['Dag'])}"):
-            with st.form(f"form_edit_{i}"):
-                uppdaterad = {}
-                redigerbara = [
-                    "Nya män", "Fitta", "Rumpa", "Dubbelmacka", "Dubbel fitta", "Dubbel röv",
-                    "Trippel fitta", "Trippel röv", "Trippel penet", "Älskar", "Älsk tid",
-                    "Sover med", "Jobb", "Grannar", "Tjej PojkV", "Nils fam",
-                    "Tid singel", "Tid dubbel", "Tid trippel", "Vila", "DeepT", "Sekunder", "Varv"
-                ]
-                for fält in redigerbara:
-                    if "Tid" in fält:
-                        uppdaterad[fält] = st.number_input(f"{fält}", value=float(row[fält]), step=0.1, key=f"{fält}_{i}")
-                    else:
-                        uppdaterad[fält] = st.number_input(f"{fält}", value=int(row[fält]), step=1, key=f"{fält}_{i}")
+        with kol2:
+            älskar = st.number_input("Älskar", min_value=0, step=1)
+            älsk_tid = st.number_input("Älsk tid", min_value=0, step=1)
+            sover_med = st.number_input("Sover med", min_value=0, step=1)
+            jobb = st.number_input("Jobb", min_value=0, step=1)
+            grannar = st.number_input("Grannar", min_value=0, step=1)
+            tjej_pojkv = st.number_input("Tjej PojkV", min_value=0, step=1)
+            nils_fam = st.number_input("Nils fam", min_value=0, step=1)
 
-                if st.form_submit_button("Uppdatera rad"):
-                    for key, val in uppdaterad.items():
-                        df.at[i, key] = val
-                    df = update_calculations(df)
-                    update_row(worksheet, i, df.iloc[i].to_dict())
-                    st.success("✅ Raden uppdaterades.")
-                    st.experimental_rerun()
+        with kol3:
+            tid_singel = st.number_input("Tid singel", min_value=0, step=1)
+            tid_dubbel = st.number_input("Tid dubbel", min_value=0, step=1)
+            tid_trippel = st.number_input("Tid trippel", min_value=0, step=1)
+            vila = st.number_input("Vila", min_value=0, step=1)
+            deept = st.number_input("DeepT", min_value=0, step=1)
+            sekunder = st.number_input("Sekunder", min_value=0, step=1)
+            varv = st.number_input("Varv", min_value=0, step=1)
 
-# ---- Kommandon ----
+        submitted = st.form_submit_button("Spara rad")
 
-def kopiera_storsta(df):
-    if df.empty:
-        return
-    idx = df["Totalt män"].idxmax()
-    ny_rad = df.loc[idx].copy()
-    ny_rad["Dag"] = int(df["Dag"].max()) + 1
-    ny_df = pd.DataFrame([ny_rad])
-    ny_df = update_calculations(ny_df)
-    append_row(ny_df.iloc[0].to_dict())
-
-def slumpa_rad(df):
-    if df.empty:
-        ny_dag = 1
+    if submitted:
+        return {
+            "Dag": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M"),
+            "Nya män": nya_män,
+            "Fitta": fitta,
+            "Rumpa": rumpa,
+            "Dubbelmacka": dubbelmacka,
+            "Dubbel fitta": dubbel_fitta,
+            "Dubbel röv": dubbel_röv,
+            "Trippel fitta": trippel_fitta,
+            "Trippel röv": trippel_röv,
+            "Trippel penet": trippel_penet,
+            "Älskar": älskar,
+            "Älsk tid": älsk_tid,
+            "Sover med": sover_med,
+            "Jobb": jobb,
+            "Grannar": grannar,
+            "Tjej PojkV": tjej_pojkv,
+            "Nils fam": nils_fam,
+            "Tid singel": tid_singel,
+            "Tid dubbel": tid_dubbel,
+            "Tid trippel": tid_trippel,
+            "Vila": vila,
+            "DeepT": deept,
+            "Sekunder": sekunder,
+            "Varv": varv
+        }
     else:
-        ny_dag = int(df["Dag"].max()) + 1
+        return None
 
-    ny_rad = {
-        "Dag": ny_dag,
-        "Älskar": 8,
-        "Sover med": 1,
-        "Vila": 7,
-        "Älsk tid": 30
-    }
+# ---- Spara till Google Sheets ----
+def spara_rad(worksheet, ny_rad):
+    befintlig = worksheet.get_all_values()
+    if len(befintlig) == 0:
+        worksheet.append_row(list(ny_rad.keys()))
+    worksheet.append_row(list(ny_rad.values()))
 
-    inmatningsfält = [
-        "Nya män", "Fitta", "Rumpa", "Dubbelmacka", "Dubbel fitta", "Dubbel röv",
-        "Trippel fitta", "Trippel röv", "Trippel penet", "Jobb", "Grannar", "Tjej PojkV", "Nils fam",
-        "Tid singel", "Tid dubbel", "Tid trippel", "DeepT", "Sekunder", "Varv"
-    ]
 
-    for fält in inmatningsfält:
-        if fält in df.columns:
-            min_val = int(df[fält].min())
-            max_val = int(df[fält].max())
-            ny_rad[fält] = random.randint(min_val, max_val) if max_val > 0 else 0
-        else:
-            ny_rad[fält] = 0
-
-    ny_df = pd.DataFrame([ny_rad])
-    ny_df = update_calculations(ny_df)
-    append_row(ny_df.iloc[0].to_dict())
-
-def vilodag_hemma(df):
-    ny_rad = {
-        "Dag": int(df["Dag"].max() + 1) if not df.empty else 1,
-        "Vila": 7,
-        "Älskar": 8,
-        "Sover med": 1,
-        "Älsk tid": 30
-    }
-    ny_df = pd.DataFrame([ny_rad])
-    ny_df = update_calculations(ny_df)
-    append_row(ny_df.iloc[0].to_dict())
-
-def vilodag_jobb(df):
-    ny_rad = {
-        "Dag": int(df["Dag"].max() + 1) if not df.empty else 1,
-        "Vila": 7,
-        "Älskar": 8,
-        "Sover med": 1,
-        "Älsk tid": 30
-    }
-    for fält in ["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]:
-        max_val = int(df[fält].max()) if fält in df.columns else 0
-        ny_rad[fält] = int(max_val * 0.3)
-    ny_df = pd.DataFrame([ny_rad])
-    ny_df = update_calculations(ny_df)
-    append_row(ny_df.iloc[0].to_dict())
-
+# ---- Huvudfunktion ----
 def main():
-    st.set_page_config(page_title="MalinData", layout="wide")
-    st.title("📊 MalinData-app")
+    st.title("MalinApp – Datainmatning & Beräkningar")
 
     worksheet, df = load_data()
+    ny_rad = skapa_inmatningsformulär()
+
+    if ny_rad:
+        ny_df = pd.DataFrame([ny_rad])
+        ny_df = update_calculations(ny_df)
+        spara_rad(worksheet, ny_df.iloc[0])
+        st.success("Rad sparad!")
+
+    if df.empty:
+        st.warning("Databasen är tom.")
+        return
+
     df = update_calculations(df)
+    st.subheader("Databasen")
+    st.dataframe(df.tail(10), use_container_width=True)
 
-    st.markdown("## ➕ Ny inmatning")
-    inmatning(df, worksheet)
-
-    st.markdown("---")
-    st.markdown("## ✏️ Redigera rader")
-    redigera_rader(df, worksheet)
-
-    st.markdown("---")
-    st.markdown("## ⚙️ Snabbkommandon")
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        if st.button("🏠 Vilodag hemma"):
-            vilodag_hemma(df)
-            st.experimental_rerun()
-    with col2:
-        if st.button("💼 Vilodag jobb"):
-            vilodag_jobb(df)
-            st.experimental_rerun()
-    with col3:
-        if st.button("🎲 Slumpa rad"):
-            slumpa_rad(df)
-            st.experimental_rerun()
-    with col4:
-        if st.button("📋 Kopiera största raden"):
-            kopiera_storsta(df)
-            st.experimental_rerun()
-
+# ---- Starta appen ----
 if __name__ == "__main__":
     main()
