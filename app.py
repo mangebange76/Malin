@@ -1,181 +1,210 @@
+# app.py – Del 1: Importer och Google Sheets-anslutning
+
 import streamlit as st
 import pandas as pd
-import numpy as np
 import gspread
 from google.oauth2.service_account import Credentials
+from datetime import datetime, timedelta
 
-# ---- Ladda data från Google Sheets ----
-def load_data():
-    scope = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds_dict = {
-        "type": st.secrets["GOOGLE_CREDENTIALS"]["type"],
-        "project_id": st.secrets["GOOGLE_CREDENTIALS"]["project_id"],
-        "private_key_id": st.secrets["GOOGLE_CREDENTIALS"]["private_key_id"],
-        "private_key": st.secrets["GOOGLE_CREDENTIALS"]["private_key"],
-        "client_email": st.secrets["GOOGLE_CREDENTIALS"]["client_email"],
-        "client_id": st.secrets["GOOGLE_CREDENTIALS"]["client_id"],
-        "auth_uri": st.secrets["GOOGLE_CREDENTIALS"]["auth_uri"],
-        "token_uri": st.secrets["GOOGLE_CREDENTIALS"]["token_uri"],
-        "auth_provider_x509_cert_url": st.secrets["GOOGLE_CREDENTIALS"]["auth_provider_x509_cert_url"],
-        "client_x509_cert_url": st.secrets["GOOGLE_CREDENTIALS"]["client_x509_cert_url"]
+st.set_page_config(page_title="MalinData App", layout="wide")
+
+# Autentisering mot Google Sheets via secrets.toml
+scope = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+credentials = Credentials.from_service_account_info(
+    st.secrets["GOOGLE_CREDENTIALS"], scopes=scope
+)
+client = gspread.authorize(credentials)
+
+# Öppna kalkylarket
+sheet = client.open_by_url(st.secrets["SHEET_URL"])
+worksheet = sheet.worksheet("Blad1")
+
+# Läs data till DataFrame
+data = worksheet.get_all_records()
+df = pd.DataFrame(data)
+
+# Säkerställ att vissa kolumner finns (kompletteras i Del 2)
+
+# Del 2: Kolumnhantering och maxvärdeskontroll
+
+def ensure_columns_exist(df):
+    required_columns = [
+        "Veckodag", "Dag", "Nya killar", "Fitta", "Röv", "DM", "DF", "DA",
+        "TPP", "TAP", "TP", "Älskar", "Sover med", "Tid S", "Tid D", "Vila",
+        "Jobb", "Grannar", "Tjej PojkV", "Nils familj", "Svarta", "Känner", "Män",
+        "Summa singel", "Summa dubbel", "Summa trippel", "Summa tid", "Suger",
+        "Tid kille", "Filmer", "Pris", "Intäkter", "Malin lön", "Kompisar", "Hårdhet"
+    ]
+    for col in required_columns:
+        if col not in df.columns:
+            df[col] = 0
+    return df
+
+def hamta_maxvarden(df):
+    maxrad = df[df["Dag"] == 0]
+    if maxrad.empty:
+        return {"Jobb": 0, "Grannar": 0, "Tjej PojkV": 0, "Nils familj": 0}
+    rad = maxrad.iloc[0]
+    return {
+        "Jobb": rad.get("Jobb", 0),
+        "Grannar": rad.get("Grannar", 0),
+        "Tjej PojkV": rad.get("Tjej PojkV", 0),
+        "Nils familj": rad.get("Nils familj", 0),
     }
 
-    credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
-    client = gspread.authorize(credentials)
-    sheet = client.open_by_url(st.secrets["SHEET_URL"])
-    worksheet = sheet.worksheet("Blad1")
+def validera_maxvarden(ny_rad, maxvarden):
+    for kolumn in ["Jobb", "Grannar", "Tjej PojkV", "Nils familj"]:
+        if ny_rad[kolumn] > maxvarden[kolumn]:
+            st.error(f"{kolumn} överskrider maxvärdet {maxvarden[kolumn]}! Uppdatera Dag = 0 först.")
+            return False
+    return True
 
-    data = worksheet.get_all_records()
-    df = pd.DataFrame(data)
+# Del 3: Beräkningsfunktion
 
-    # Alla kolumner som ska finnas
-    alla_kolumner = [
-        "Dag", "Nya män", "Fitta", "Rumpa", "Dubbelmacka", "Dubbel fitta", "Dubbel röv",
-        "Trippel fitta", "Trippel röv", "Trippel penet", "Älskar", "Älsk tid", "Sover med",
-        "Jobb", "Grannar", "Tjej PojkV", "Nils fam", "Tid singel", "Tid dubbel", "Tid trippel",
-        "Vila", "DeepT", "Sekunder", "Varv"
-    ]
-    for kolumn in alla_kolumner:
-        if kolumn not in df.columns:
-            df[kolumn] = 0
-
-    return worksheet, df
-
-# ---- Hjälpberäkningar ----
 def update_calculations(df):
-    df["Känner 2"] = df[["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]].max(axis=0).sum()
-    df["Totalt män"] = df["Nya män"] + df["Känner 2"]
+    df = ensure_columns_exist(df)
 
-    df["Summa singel"] = (df["Tid singel"] + df["Vila"]) * df["Totalt män"]
-    df["Summa dubbel"] = ((df["Tid dubbel"] + df["Vila"]) + 9) * (df["Dubbelmacka"] + df["Dubbel fitta"] + df["Dubbel röv"])
-    df["Summa trippel"] = ((df["Tid trippel"] + df["Vila"]) + 15) * (df["Trippel fitta"] + df["Trippel röv"] + df["Trippel penet"])
+    # Veckodag: Dag 1 = Lördag
+    veckodagar = ["Lördag", "Söndag", "Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag"]
+    df["Veckodag"] = df["Dag"].apply(lambda x: veckodagar[(x - 1) % 7] if x > 0 else "")
 
-    df["Suger"] = 0.6 * (df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"]) / df["Totalt män"].replace(0, np.nan)
-    df["Suger"] = df["Suger"].fillna(0)
+    # Känner = Jobb + Grannar + Tjej PojkV + Nils familj
+    df["Känner"] = df["Jobb"] + df["Grannar"] + df["Tjej PojkV"] + df["Nils familj"]
 
-    df["Snitt"] = df["DeepT"] / df["Känner 2"].replace(0, np.nan)
-    df["Snitt"] = df["Snitt"].fillna(0)
+    # Män = Nya killar + Känner
+    df["Män"] = df["Nya killar"] + df["Känner"]
 
-    df["Total tid"] = df["Snitt"] * (df["Sekunder"] * df["Varv"])
-    df["Tid kille DT"] = df["Total tid"] / df["Totalt män"].replace(0, np.nan)
-    df["Tid kille DT"] = df["Tid kille DT"].fillna(0)
+    # Summa singel = Tid S × Män
+    df["Summa singel"] = df["Tid S"] * df["Män"]
 
-    df["Runk"] = (df["Total tid"] * 0.6) / df["Totalt män"].replace(0, np.nan)
-    df["Runk"] = df["Runk"].fillna(0)
+    # Summa dubbel = Tid D × (DM + DF + DA)
+    df["Summa dubbel"] = df["Tid D"] * (df["DM"] + df["DF"] + df["DA"])
 
+    # Tid T sätts till 180 sekunder (kan justeras senare)
+    df["Tid T"] = 180
+
+    # Summa trippel = Tid T × (TPP + TAP + TP)
+    df["Summa trippel"] = df["Tid T"] * (df["TPP"] + df["TAP"] + df["TP"])
+
+    # Summa tid = singel + dubbel + trippel
+    df["Summa tid"] = df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"]
+
+    # Suger = 60% av Summa tid / Män (undvik division med 0)
+    df["Suger"] = df.apply(lambda row: 0 if row["Män"] == 0 else 0.6 * row["Summa tid"] / row["Män"], axis=1)
+
+    # Tid kille = Tid S + (Tid D * 2 × dubbel) + (Tid T * 3 × trippel) + Suger
     df["Tid kille"] = (
-        df["Tid singel"] +
-        (df["Tid dubbel"] * 2) +
-        (df["Tid trippel"] * 3) +
-        df["Suger"] +
-        df["Tid kille DT"] +
-        df["Runk"]
+        df["Tid S"] +
+        df["Tid D"] * 2 * (df["DM"] + df["DF"] + df["DA"]) +
+        df["Tid T"] * 3 * (df["TPP"] + df["TAP"] + df["TP"]) +
+        df["Suger"]
     )
 
-    df["Tidsåtgång"] = (
-        df["Summa singel"] +
-        df["Summa dubbel"] +
-        df["Summa trippel"] +
-        df["Total tid"]
+    # Filmer = avrundat antal = Män / 2 (exempel, kan justeras)
+    df["Filmer"] = (df["Män"] / 2).round().astype(int)
+
+    # Pris = alltid 39.99
+    df["Pris"] = 39.99
+
+    # Intäkter = Filmer × Pris
+    df["Intäkter"] = df["Filmer"] * df["Pris"]
+
+    # Malin lön = 1% av Intäkter, max 700
+    df["Malin lön"] = df["Intäkter"].apply(lambda x: min(x * 0.01, 700))
+
+    # Summering av Dag = 0 för Kompisar-beräkning
+    dag0_sum = df[df["Dag"] == 0][["Jobb", "Grannar", "Tjej PojkV", "Nils familj"]].sum().sum()
+    df["Kompisar"] = df.apply(
+        lambda row: 0 if dag0_sum == 0 else (row["Intäkter"] - row["Malin lön"]) / dag0_sum,
+        axis=1
+    )
+
+    # Hårdhet = (Summa tid + Tid kille) / Män (exempelberäkning)
+    df["Hårdhet"] = df.apply(
+        lambda row: 0 if row["Män"] == 0 else (row["Summa tid"] + row["Tid kille"]) / row["Män"],
+        axis=1
     )
 
     return df
 
-# ---- Inmatningsformulär ----
-def skapa_inmatningsformulär():
-    st.subheader("Lägg till ny rad")
-    with st.form("ny_rad"):
-        dag = st.number_input("Dag", value=1, step=1)
-        nya_män = st.number_input("Nya män", value=0, step=1)
-        fitta = st.number_input("Fitta", value=0, step=1)
-        rumpa = st.number_input("Rumpa", value=0, step=1)
-        dubbelmacka = st.number_input("Dubbelmacka", value=0, step=1)
-        dubbel_fitta = st.number_input("Dubbel fitta", value=0, step=1)
-        dubbel_röv = st.number_input("Dubbel röv", value=0, step=1)
-        trippel_fitta = st.number_input("Trippel fitta", value=0, step=1)
-        trippel_röv = st.number_input("Trippel röv", value=0, step=1)
-        trippel_penet = st.number_input("Trippel penet", value=0, step=1)
-        älskar = st.number_input("Älskar", value=0, step=1)
-        älsk_tid = st.number_input("Älsk tid", value=0, step=1)
-        sover_med = st.number_input("Sover med", value=0, step=1)
-        jobb = st.number_input("Jobb", value=0, step=1)
-        grannar = st.number_input("Grannar", value=0, step=1)
-        tjej_pojkv = st.number_input("Tjej PojkV", value=0, step=1)
-        nils_fam = st.number_input("Nils fam", value=0, step=1)
-        tid_singel = st.number_input("Tid singel", value=0, step=1)
-        tid_dubbel = st.number_input("Tid dubbel", value=0, step=1)
-        tid_trippel = st.number_input("Tid trippel", value=0, step=1)
-        vila = st.number_input("Vila", value=0, step=1)
-        deept = st.number_input("DeepT", value=0, step=1)
-        sekunder = st.number_input("Sekunder", value=0, step=1)
-        varv = st.number_input("Varv", value=0, step=1)
+# Del 4: Inmatningsformulär
 
-        submitted = st.form_submit_button("Spara rad")
-        if submitted:
-            return {
-                "Dag": dag,
-                "Nya män": nya_män,
-                "Fitta": fitta,
-                "Rumpa": rumpa,
-                "Dubbelmacka": dubbelmacka,
-                "Dubbel fitta": dubbel_fitta,
-                "Dubbel röv": dubbel_röv,
-                "Trippel fitta": trippel_fitta,
-                "Trippel röv": trippel_röv,
-                "Trippel penet": trippel_penet,
-                "Älskar": älskar,
-                "Älsk tid": älsk_tid,
-                "Sover med": sover_med,
-                "Jobb": jobb,
-                "Grannar": grannar,
-                "Tjej PojkV": tjej_pojkv,
-                "Nils fam": nils_fam,
-                "Tid singel": tid_singel,
-                "Tid dubbel": tid_dubbel,
-                "Tid trippel": tid_trippel,
-                "Vila": vila,
-                "DeepT": deept,
-                "Sekunder": sekunder,
-                "Varv": varv
-            }
-    return None
+st.header("Ny inmatning")
 
-# ---- Spara till Google Sheets ----
-def spara_rad(worksheet, ny_rad):
-    if isinstance(ny_rad, pd.Series):
-        ny_rad = ny_rad.to_dict()
+# Filtrera bort Dag = 0 för att räkna fram nästa dag
+dagar = df[df["Dag"] > 0]["Dag"]
+ny_dag = 1 if dagar.empty else dagar.max() + 1
 
-    befintlig = worksheet.get_all_values()
-    if len(befintlig) == 0:
-        worksheet.append_row(list(ny_rad.keys()))  # Lägg till rubriker om arket är tomt
+with st.form("ny_rad_form"):
+    st.subheader(f"Ny rad för Dag {ny_dag}")
 
-    header = worksheet.row_values(1)
-    row_values = [ny_rad.get(col, "") for col in header]
-    worksheet.append_row(row_values)
+    nya_killar = st.number_input("Nya killar", min_value=0, step=1)
+    fitta = st.number_input("Fitta", min_value=0, step=1)
+    rov = st.number_input("Röv", min_value=0, step=1)
+    dm = st.number_input("DM", min_value=0, step=1)
+    df_f = st.number_input("DF", min_value=0, step=1)
+    da = st.number_input("DA", min_value=0, step=1)
+    tpp = st.number_input("TPP", min_value=0, step=1)
+    tap = st.number_input("TAP", min_value=0, step=1)
+    tp = st.number_input("TP", min_value=0, step=1)
+    alskar = st.number_input("Älskar", min_value=0, step=1)
+    sover_med = st.number_input("Sover med", min_value=0, step=1)
+    tid_s = st.number_input("Tid S (sekunder)", min_value=0, step=1)
+    tid_d = st.number_input("Tid D (sekunder)", min_value=0, step=1)
+    vila = st.number_input("Vila (sekunder)", min_value=0, step=1)
+    jobb = st.number_input("Jobb", min_value=0, step=1)
+    grannar = st.number_input("Grannar", min_value=0, step=1)
+    pojkv = st.number_input("Tjej PojkV", min_value=0, step=1)
+    nils = st.number_input("Nils familj", min_value=0, step=1)
+    svarta = st.number_input("Svarta", min_value=0, step=1)
 
+    submitted = st.form_submit_button("Spara rad")
 
-# ---- Huvudfunktion ----
+    if submitted:
+        ny_rad = {
+            "Dag": ny_dag,
+            "Nya killar": nya_killar,
+            "Fitta": fitta,
+            "Röv": rov,
+            "DM": dm,
+            "DF": df_f,
+            "DA": da,
+            "TPP": tpp,
+            "TAP": tap,
+            "TP": tp,
+            "Älskar": alskar,
+            "Sover med": sover_med,
+            "Tid S": tid_s,
+            "Tid D": tid_d,
+            "Vila": vila,
+            "Jobb": jobb,
+            "Grannar": grannar,
+            "Tjej PojkV": pojkv,
+            "Nils familj": nils,
+            "Svarta": svarta
+        }
+
+        maxvarden = hamta_maxvarden(df)
+        if validera_maxvarden(ny_rad, maxvarden):
+            df = pd.concat([df, pd.DataFrame([ny_rad])], ignore_index=True)
+            df = update_calculations(df)
+            worksheet.update([df.columns.values.tolist()] + df.values.tolist())
+            st.success("Raden sparades!")
+
+# Del 5: Huvudfunktion och appstart
+
 def main():
-    st.title("MalinApp – Inmatning och Beräkning")
-
-    worksheet, df = load_data()
-
-    ny_rad = skapa_inmatningsformulär()
-
-    if ny_rad is not None:
-        ny_df = pd.DataFrame([ny_rad])
-        ny_df = update_calculations(ny_df)
-        spara_rad(worksheet, ny_df.iloc[0].to_dict())
-        st.success("Rad sparad!")
-
-    if df.empty:
-        st.warning("Databasen är tom.")
-        return
-
+    global df
+    df = ensure_columns_exist(df)
     df = update_calculations(df)
-    st.subheader("Databasen")
-    st.dataframe(df.tail(10), use_container_width=True)
 
-# ---- Starta appen ----
+    # Visa senaste raderna (exkludera Dag = 0)
+    st.subheader("Senaste inmatningar")
+    st.dataframe(df[df["Dag"] > 0].sort_values("Dag", ascending=False), use_container_width=True)
+
+# Kör appen
 if __name__ == "__main__":
     main()
