@@ -165,6 +165,10 @@ def skapa_inmatningsformulär():
 
 # ---- Spara till Google Sheets ----
 def spara_rad(worksheet, ny_rad):
+    # Konvertera till dict om det är en Series
+    if isinstance(ny_rad, pd.Series):
+        ny_rad = ny_rad.to_dict()
+
     befintlig = worksheet.get_all_values()
     if len(befintlig) == 0:
         worksheet.append_row(list(ny_rad.keys()))
@@ -181,7 +185,7 @@ def main():
     if ny_rad:
         ny_df = pd.DataFrame([ny_rad])
         ny_df = update_calculations(ny_df)
-        spara_rad(worksheet, ny_df.iloc[0])
+        spara_rad(worksheet, ny_df.iloc[0])  # fixad rad
         st.success("Rad sparad!")
 
     if df.empty:
