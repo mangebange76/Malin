@@ -1,46 +1,44 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import random
-from datetime import datetime
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+import random
+from google.oauth2.service_account import Credentials
 
-# --- Ladda data från Google Sheets ---
+# ---- Ladda data från Google Sheets ----
 def load_data():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    scope = ["https://www.googleapis.com/auth/spreadsheets"]
     creds_dict = {
-        "type": st.secrets["type"],
-        "project_id": st.secrets["project_id"],
-        "private_key_id": st.secrets["private_key_id"],
-        "private_key": st.secrets["private_key"].replace("\\n", "\n"),
-        "client_email": st.secrets["client_email"],
-        "client_id": st.secrets["client_id"],
-        "auth_uri": st.secrets["auth_uri"],
-        "token_uri": st.secrets["token_uri"],
-        "auth_provider_x509_cert_url": st.secrets["auth_provider_x509_cert_url"],
-        "client_x509_cert_url": st.secrets["client_x509_cert_url"]
+        "type": st.secrets["GOOGLE_CREDENTIALS"]["type"],
+        "project_id": st.secrets["GOOGLE_CREDENTIALS"]["project_id"],
+        "private_key_id": st.secrets["GOOGLE_CREDENTIALS"]["private_key_id"],
+        "private_key": st.secrets["GOOGLE_CREDENTIALS"]["private_key"],
+        "client_email": st.secrets["GOOGLE_CREDENTIALS"]["client_email"],
+        "client_id": st.secrets["GOOGLE_CREDENTIALS"]["client_id"],
+        "auth_uri": st.secrets["GOOGLE_CREDENTIALS"]["auth_uri"],
+        "token_uri": st.secrets["GOOGLE_CREDENTIALS"]["token_uri"],
+        "auth_provider_x509_cert_url": st.secrets["GOOGLE_CREDENTIALS"]["auth_provider_x509_cert_url"],
+        "client_x509_cert_url": st.secrets["GOOGLE_CREDENTIALS"]["client_x509_cert_url"]
     }
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
 
-    sheet = client.open("MalinData")
+    credentials = Credentials.from_service_account_info(creds_dict, scopes=scope)
+    client = gspread.authorize(credentials)
+    sheet = client.open_by_url(st.secrets["SHEET_URL"])
     worksheet = sheet.worksheet("Blad1")
-    records = worksheet.get_all_records()
-    df = pd.DataFrame.from_dict(records)
 
-    # Lägg till kolumner som saknas
-    expected_columns = [
-        "Dag", "Nya män", "Fitta", "Rumpa",
-        "dubbelmacka", "dubbel fitta", "dubbel röv",
-        "trippel fitta", "trippel röv", "trippel penet",
-        "Älskar", "Älsk tid", "Sover med", "Jobb", "Grannar",
-        "Tjej PojkV", "Nils fam", "Tid singel", "Tid dubbel", "Tid trippel",
+    data = worksheet.get_all_records()
+    df = pd.DataFrame(data)
+
+    # Säkerställ att alla kolumner som krävs finns
+    alla_kolumner = [
+        "Dag", "Nya män", "Fitta", "Rumpa", "Dubbelmacka", "Dubbel fitta", "Dubbel röv",
+        "Trippel fitta", "Trippel röv", "Trippel penet", "Älskar", "Älsk tid", "Sover med",
+        "Jobb", "Grannar", "Tjej PojkV", "Nils fam", "Tid singel", "Tid dubbel", "Tid trippel",
         "Vila", "DeepT", "Sekunder", "Varv"
     ]
-    for col in expected_columns:
-        if col not in df.columns:
-            df[col] = 0
+    for kolumn in alla_kolumner:
+        if kolumn not in df.columns:
+            df[kolumn] = 0
 
     return worksheet, df
 
