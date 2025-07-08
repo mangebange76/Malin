@@ -42,91 +42,52 @@ def load_data():
 
     return worksheet, df
 
-# ---- Uppdatera rad i Google Sheets ----
-def update_row(worksheet, index, row_dict):
-    cell_list = worksheet.range(index+2, 1, index+2, len(row_dict))
-    for i, key in enumerate(row_dict):
-        cell_list[i].value = row_dict[key]
-    worksheet.update_cells(cell_list)
-
-# ---- Lägg till ny rad i Google Sheets ----
-def append_row(data):
-    worksheet, _ = load_data()
-    worksheet.append_row(list(data.values()))
-
-# ---- Beräkningar ----
+# ---- Kalkylfunktioner ----
 def update_calculations(df):
     df = df.copy()
 
-    # Känner (kompisar) – maxvärden
-    jobb2 = df["Jobb"].max()
-    grannar2 = df["Grannar"].max()
-    tjej2 = df["Tjej PojkV"].max()
-    fam2 = df["Nils fam"].max()
+    df["Totalt män"] = df["Nya män"] + df[["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]].max(axis=1)
 
-    df["Jobb 2"] = jobb2
-    df["Grannar 2"] = grannar2
-    df["Tjej PojkV 2"] = tjej2
-    df["Nils fam 2"] = fam2
-
-    df["Känner 2"] = jobb2 + grannar2 + tjej2 + fam2
-    df["Totalt män"] = df["Nya män"] + df["Känner 2"]
-
-    # Summa singel, dubbel, trippel
     df["Summa singel"] = (df["Tid singel"] + df["Vila"]) * df["Totalt män"]
     df["Summa dubbel"] = ((df["Tid dubbel"] + df["Vila"]) + 9) * (df["Dubbelmacka"] + df["Dubbel fitta"] + df["Dubbel röv"])
     df["Summa trippel"] = ((df["Tid trippel"] + df["Vila"]) + 15) * (df["Trippel fitta"] + df["Trippel röv"] + df["Trippel penet"])
 
-    df["Summa tid"] = df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"]
+    df["Snitt"] = df["DeepT"] / df["Totalt män"].replace(0, np.nan)
+    df["Total tid"] = df["Snitt"] * df["Sekunder"] * df["Varv"]
+    df["Tid kille dt"] = df["Total tid"] / df["Totalt män"].replace(0, np.nan)
+    df["Runk"] = (df["Total tid"] * 0.6) / df["Totalt män"].replace(0, np.nan)
 
-    # Suger = 60% av summa / totalt män
-    df["Suger"] = (df["Summa tid"] * 0.6) / df["Totalt män"]
-
-    # Grabbar & snitt
-    df["Grabbar"] = df["Nya män"] + df["Känner 2"]
-    df["Snitt"] = df["DeepT"] / df["Grabbar"]
-
-    # Total tid & tid per kille
-    df["Total tid"] = df["Snitt"] * (df["Sekunder"] * df["Varv"])
-    df["Tid kille DT"] = df["Total tid"] / df["Totalt män"]
-    df["Runk"] = (df["Total tid"] * 0.6) / df["Totalt män"]
+    df["Suger"] = 0.6 * (df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"]) / df["Totalt män"].replace(0, np.nan)
 
     df["Tid kille"] = (
-        df["Tid singel"] +
-        (df["Tid dubbel"] * 2) +
-        (df["Tid trippel"] * 3) +
-        df["Suger"] +
-        df["Tid kille DT"] +
-        df["Runk"]
+        df["Tid singel"]
+        + (df["Tid dubbel"] * 2)
+        + (df["Tid trippel"] * 3)
+        + df["Suger"]
+        + df["Tid kille dt"]
+        + df["Runk"]
     )
 
-    # Tidsåtgång i format "X h Y min"
-    def calc_tidsåtgång(row):
-        total_min = float(row.get("Summa tid", 0)) + float(row.get("Total tid", 0))
-        timmar = int(total_min // 60)
-        minuter = int(total_min % 60)
-        return f"{timmar} h {minuter} min"
+    df["Intäkter"] = df["Tid kille"] * 1.2
+    df["Malins lön"] = np.minimum(df["Intäkter"] * 0.02, 1000)
+    df["Företagets lön"] = np.minimum(df["Intäkter"] - df["Malins lön"], 10000)
+    df["Vänners lön"] = df["Intäkter"] - df["Malins lön"] - df["Företagets lön"]
+    df["Hårdhet"] = df["Fitta"] + df["Rumpa"] + df["Dubbel fitta"] + df["Dubbel röv"]
 
     df["Tidsåtgång"] = df.apply(calc_tidsåtgång, axis=1)
 
-    # Övriga beräkningar
-    df["Filmer"] = df["Nya män"] > 0
-    df["Pris"] = 39.99
-    df["Intäkter"] = df["Filmer"] * df["Pris"]
-    df["Malin lön"] = np.minimum(df["Intäkter"] * 0.02, 1000)
-    df["Företagets lön"] = 10000
-
-    int_sum = df["Intäkter"].sum()
-    malin_sum = df["Malin lön"].sum()
-    foretag_sum = df["Företagets lön"].sum()
-    känner2 = df["Känner 2"].iloc[0] if "Känner 2" in df else 0
-
-    if känner2 > 0:
-        df["Vänner lön"] = (int_sum - malin_sum - foretag_sum) / känner2
-    else:
-        df["Vänner lön"] = 0
-
     return df
+
+def calc_tidsåtgång(row):
+    total_min = (
+        row.get("Summa singel", 0)
+        + row.get("Summa dubbel", 0)
+        + row.get("Summa trippel", 0)
+        + (row.get("Snitt", 0) * row.get("Sekunder", 0) * row.get("Varv", 0)) / 60
+    )
+    timmar = int(total_min // 60)
+    minuter = int(total_min % 60)
+    return f"{timmar} timmar {minuter} minuter"
 
 # ---- Inmatning av ny rad ----
 def inmatning(df, worksheet):
