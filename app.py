@@ -269,3 +269,5 @@ def main():
     # --- Radredigering (expander) ---
     with st.expander("📋 Redigera rader"):
         radvy(df, worksheet)
+if __name__ == "__main__":
+    main()
