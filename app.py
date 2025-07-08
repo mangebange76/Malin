@@ -2,14 +2,25 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import random
+from datetime import datetime
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime
 
-# ---- Ladda data från Google Sheets ----
+# --- Ladda data från Google Sheets ---
 def load_data():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds_dict = dict(st.secrets["GOOGLE_CREDENTIALS"])
+    creds_dict = {
+        "type": st.secrets["type"],
+        "project_id": st.secrets["project_id"],
+        "private_key_id": st.secrets["private_key_id"],
+        "private_key": st.secrets["private_key"].replace("\\n", "\n"),
+        "client_email": st.secrets["client_email"],
+        "client_id": st.secrets["client_id"],
+        "auth_uri": st.secrets["auth_uri"],
+        "token_uri": st.secrets["token_uri"],
+        "auth_provider_x509_cert_url": st.secrets["auth_provider_x509_cert_url"],
+        "client_x509_cert_url": st.secrets["client_x509_cert_url"]
+    }
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
 
@@ -18,24 +29,20 @@ def load_data():
     records = worksheet.get_all_records()
     df = pd.DataFrame.from_dict(records)
 
-    return worksheet, df
-
-# ---- Se till att rätt kolumner alltid finns ----
-def ensure_columns_exist(df, worksheet):
+    # Lägg till kolumner som saknas
     expected_columns = [
-        "Dag", "Nya män", "Fitta", "Rumpa", "Dubbelmacka", "Dubbel fitta", "Dubbel röv",
-        "Trippel fitta", "Trippel röv", "Trippel penet",
-        "Älskar", "Älsk tid", "Sover med", "Jobb", "Grannar", "Tjej PojkV", "Nils fam",
-        "Tid singel", "Tid dubbel", "Tid trippel", "Vila", "DeepT", "Sekunder", "Varv",
-        "Jobb 2", "Grannar 2", "Tjej PojkV 2", "Nils fam 2", "Känner 2", "Totalt män",
-        "Summa singel", "Summa dubbel", "Summa trippel", "Summa tid", "Grabbar", "Snitt",
-        "Total tid", "Tid kille DT", "Runk", "Tid kille", "Klockan", "Suger", "Filmer",
-        "Pris", "Intäkter", "Malin lön", "Företagets lön", "Vänner lön"
+        "Dag", "Nya män", "Fitta", "Rumpa",
+        "dubbelmacka", "dubbel fitta", "dubbel röv",
+        "trippel fitta", "trippel röv", "trippel penet",
+        "Älskar", "Älsk tid", "Sover med", "Jobb", "Grannar",
+        "Tjej PojkV", "Nils fam", "Tid singel", "Tid dubbel", "Tid trippel",
+        "Vila", "DeepT", "Sekunder", "Varv"
     ]
     for col in expected_columns:
         if col not in df.columns:
             df[col] = 0
-    return df
+
+    return worksheet, df
 
 # ---- Uppdatera rad i Google Sheets ----
 def update_row(worksheet, index, row_dict):
@@ -74,7 +81,7 @@ def update_calculations(df):
 
     df["Summa tid"] = df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"]
 
-    # Suger = 60% av (summa singel + dubbel + trippel) / totalt män
+    # Suger = 60% av summa / totalt män
     df["Suger"] = (df["Summa tid"] * 0.6) / df["Totalt män"]
 
     # Grabbar & snitt
@@ -95,13 +102,14 @@ def update_calculations(df):
         df["Runk"]
     )
 
-    # Klockan = 07:00 + summa tid + total tid
-    def calc_klockan(row):
-        total_min = row["Summa tid"] + row["Total tid"]
-        tid = pd.to_datetime("07:00", format="%H:%M") + pd.to_timedelta(total_min, unit="m")
-        return tid.strftime("%H:%M")
+    # Tidsåtgång i format "X h Y min"
+    def calc_tidsåtgång(row):
+        total_min = float(row.get("Summa tid", 0)) + float(row.get("Total tid", 0))
+        timmar = int(total_min // 60)
+        minuter = int(total_min % 60)
+        return f"{timmar} h {minuter} min"
 
-    df["Klockan"] = df.apply(calc_klockan, axis=1)
+    df["Tidsåtgång"] = df.apply(calc_tidsåtgång, axis=1)
 
     # Övriga beräkningar
     df["Filmer"] = df["Nya män"] > 0
@@ -176,13 +184,8 @@ def redigera_rader(df, worksheet):
                     st.success("✅ Raden uppdaterades.")
                     st.experimental_rerun()
 
-# ---- Lägg till rad i Google Sheet ----
-def append_row(data):
-    worksheet, _ = load_data()
-    values = [data.get(col, 0) for col in worksheet.row_values(1)]
-    worksheet.append_row(values)
+# ---- Kommandon ----
 
-# ---- Kopiera största raden ----
 def kopiera_storsta(df):
     if df.empty:
         return
@@ -193,7 +196,6 @@ def kopiera_storsta(df):
     ny_df = update_calculations(ny_df)
     append_row(ny_df.iloc[0].to_dict())
 
-# ---- Slumpa rad ----
 def slumpa_rad(df):
     if df.empty:
         ny_dag = 1
@@ -226,7 +228,6 @@ def slumpa_rad(df):
     ny_df = update_calculations(ny_df)
     append_row(ny_df.iloc[0].to_dict())
 
-# ---- Vilodag hemma ----
 def vilodag_hemma(df):
     ny_rad = {
         "Dag": int(df["Dag"].max() + 1) if not df.empty else 1,
@@ -239,7 +240,6 @@ def vilodag_hemma(df):
     ny_df = update_calculations(ny_df)
     append_row(ny_df.iloc[0].to_dict())
 
-# ---- Vilodag jobb ----
 def vilodag_jobb(df):
     ny_rad = {
         "Dag": int(df["Dag"].max() + 1) if not df.empty else 1,
@@ -260,33 +260,31 @@ def main():
     st.title("📊 MalinData-app")
 
     worksheet, df = load_data()
-    df = ensure_columns_exist(df, worksheet)
     df = update_calculations(df)
 
-    # 📌 Huvudvyn – valbara delar senare
-    st.markdown("### 📋 Ny inmatning")
+    st.markdown("## ➕ Ny inmatning")
     inmatning(df, worksheet)
 
-    # 🔧 Redigeringsvy
     st.markdown("---")
+    st.markdown("## ✏️ Redigera rader")
     redigera_rader(df, worksheet)
 
-    # ⚙️ Snabbkommandon
-    st.markdown("### ⚡ Kommandon")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
+    st.markdown("---")
+    st.markdown("## ⚙️ Snabbkommandon")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
         if st.button("🏠 Vilodag hemma"):
             vilodag_hemma(df)
             st.experimental_rerun()
-    with c2:
+    with col2:
         if st.button("💼 Vilodag jobb"):
             vilodag_jobb(df)
             st.experimental_rerun()
-    with c3:
+    with col3:
         if st.button("🎲 Slumpa rad"):
             slumpa_rad(df)
             st.experimental_rerun()
-    with c4:
+    with col4:
         if st.button("📋 Kopiera största raden"):
             kopiera_storsta(df)
             st.experimental_rerun()
