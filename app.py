@@ -85,7 +85,7 @@ def update_calculations(df):
 def skapa_inmatningsformulär():
     st.subheader("Lägg till ny rad")
     with st.form("ny_rad"):
-        dag = st.date_input("Dag")
+        dag = st.number_input("Dag", value=1, step=1)
         nya_män = st.number_input("Nya män", value=0, step=1)
         fitta = st.number_input("Fitta", value=0, step=1)
         rumpa = st.number_input("Rumpa", value=0, step=1)
@@ -113,7 +113,7 @@ def skapa_inmatningsformulär():
         submitted = st.form_submit_button("Spara rad")
         if submitted:
             return {
-                "Dag": str(dag),
+                "Dag": dag,
                 "Nya män": nya_män,
                 "Fitta": fitta,
                 "Rumpa": rumpa,
@@ -147,7 +147,7 @@ def spara_rad(worksheet, ny_rad):
 
     befintlig = worksheet.get_all_values()
     if len(befintlig) == 0:
-        worksheet.append_row(list(ny_rad.keys()))  # Lägg till rubriker om tomt
+        worksheet.append_row(list(ny_rad.keys()))  # Lägg till rubriker om arket är tomt
 
     header = worksheet.row_values(1)
     row_values = [ny_rad.get(col, "") for col in header]
