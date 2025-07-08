@@ -134,6 +134,9 @@ def update_calculations(df):
 
 st.header("Ny inmatning")
 
+# Tvinga omvandling till heltal för att undvika TypeError
+df["Dag"] = pd.to_numeric(df["Dag"], errors="coerce").fillna(0).astype(int)
+
 # Filtrera bort Dag = 0 för att räkna fram nästa dag
 dagar = df[df["Dag"] > 0]["Dag"]
 ny_dag = 1 if dagar.empty else dagar.max() + 1
