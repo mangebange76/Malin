@@ -36,10 +36,12 @@ def update_row(worksheet, index, row_dict):
         cell_list[i].value = row_dict[key]
     worksheet.update_cells(cell_list)
 
-# --- Lägg till rad i Google Sheets ---
+# --- Lägg till rad i Google Sheets (med rätt kolumnordning) ---
 def append_row(data):
     worksheet, _ = load_data()
-    worksheet.append_row(list(data.values()))
+    headers = worksheet.row_values(1)
+    values = [data.get(col, 0) for col in headers]
+    worksheet.append_row(values)
 
 def update_calculations(df):
     df = df.copy()
@@ -70,7 +72,6 @@ def update_calculations(df):
 
     df["Tid kille"] = df["Tid Singel"] + (df["Tid Dubbel"] * 2) + (df["Tid Trippel"] * 3) + df["Suger"] + df["Tid kille DT"] + df["Runk"]
 
-    # Fixad funktion – säkrare klockberäkning
     def calc_klockan(row):
         try:
             total_min = float(row["Summa tid"]) + float(row["Total tid"])
@@ -94,32 +95,23 @@ def update_calculations(df):
 def inmatning(df, worksheet):
     with st.expander("➕ Lägg till ny dag"):
         with st.form("ny_rad_form"):
-            kolumner = [col for col in df.columns if col not in [
-                "Summa singel", "Summa dubbel", "Summa trippel", "Summa tid",
-                "Grabbar", "Snitt", "Total tid", "Tid kille DT", "Runk",
-                "Tid kille", "Klockan", "Filmer", "Pris", "Intäkter",
-                "Malin lön", "Företagets lön", "Vänner lön",
-                "Känner 2", "Totalt män", "Jobb 2", "Grannar 2",
-                "Tjej PojkV 2", "Nils fam 2"
-            ]]
+            kolumner = [
+                "Män", "Älskar", "Sover med", "Vila", "Älsk tid",
+                "Tid Singel", "Tid Dubbel", "Tid Trippel",
+                "Dm", "Df", "Dr", "TPP", "TAP", "TPA",
+                "DeepT", "Sekunder", "Varv", "Suger",
+                "Jobb", "Grannar", "Tjej PojkV", "Nils fam"
+            ]
 
             inputs = {}
             for col in kolumner:
-                if col in ["Dag", "DeepT", "Sekunder", "Varv"]:
-                    inputs[col] = st.number_input(col, value=0, step=1)
-                elif col in ["Tid Singel", "Tid Dubbel", "Tid Trippel", "Suger"]:
-                    inputs[col] = st.number_input(col, value=0.0, step=0.1)
-                else:
-                    inputs[col] = st.number_input(col, value=0, step=1)
+                inputs[col] = st.number_input(col, value=0, step=1)
 
             submitted = st.form_submit_button("Lägg till rad")
             if submitted:
-                ny_rad = inputs.copy()
-                ny_rad = {k: [v] for k, v in ny_rad.items()}
-                ny_df = pd.DataFrame(ny_rad)
-                ny_df = update_calculations(ny_df)
-                df = pd.concat([df, ny_df], ignore_index=True)
-                worksheet.append_row(list(df.iloc[-1]))
+                ny_rad = {k: v for k, v in inputs.items()}
+                ny_rad["Dag"] = df["Dag"].max() + 1 if not df.empty else 1
+                append_row(ny_rad)
                 st.success("Raden har lagts till!")
 
 # --- Redigera befintliga rader ---
@@ -129,23 +121,21 @@ def radvy(df, worksheet):
         with st.expander(f"Dag {int(rad['Dag'])}"):
             with st.form(f"form_{index}"):
                 inputs = {}
-                for col in df.columns:
-                    if col in [
-                        "Tid Singel", "Tid Dubbel", "Tid Trippel",
-                        "Suger", "DeepT", "Sekunder", "Varv", "Dag"
-                    ]:
-                        default_val = rad[col]
-                        if isinstance(default_val, (int, float)):
-                            inputs[col] = st.number_input(
-                                f"{col} (Dag {int(rad['Dag'])})", value=float(default_val), step=1.0 if isinstance(default_val, float) else 1
-                            )
+                for col in [
+                    "Tid Singel", "Tid Dubbel", "Tid Trippel",
+                    "Suger", "DeepT", "Sekunder", "Varv", "Dag"
+                ]:
+                    default_val = rad[col]
+                    inputs[col] = st.number_input(
+                        f"{col} (Dag {int(rad['Dag'])})",
+                        value=float(default_val), step=1.0
+                    )
                 submitted = st.form_submit_button("Uppdatera rad")
                 if submitted:
                     for col, val in inputs.items():
                         df.at[index, col] = val
                     df = update_calculations(df)
-                    row_dict = df.iloc[index].to_dict()
-                    update_row(worksheet, index, row_dict)
+                    update_row(worksheet, index, df.iloc[index].to_dict())
                     st.success("Raden har uppdaterats.")
 
 # --- Slumpa rad ---
@@ -156,7 +146,6 @@ def slumpa_rad(df):
         ny_dag = df["Dag"].max() + 1
 
     ny_rad = {col: 0 for col in df.columns}
-
     for col in df.columns:
         if col in ["Dag", "Älskar", "Sover med", "Vila", "Älsk tid"]:
             continue
@@ -248,8 +237,6 @@ def main():
     # Lägg till ny rad manuellt
     with st.form("add_row"):
         st.subheader("➕ Lägg till ny rad manuellt")
-
-        # Endast dessa fält ska vara manuellt ifyllda – i denna ordning
         inmatningsfält = [
             "Män", "Älskar", "Sover med", "Vila", "Älsk tid",
             "Tid Singel", "Tid Dubbel", "Tid Trippel",
@@ -257,7 +244,6 @@ def main():
             "DeepT", "Sekunder", "Varv", "Suger",
             "Jobb", "Grannar", "Tjej PojkV", "Nils fam"
         ]
-
         ny_rad = {}
         for col in inmatningsfält:
             ny_rad[col] = st.number_input(f"{col}", min_value=0, step=1)
