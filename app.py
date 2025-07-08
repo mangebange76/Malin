@@ -4,20 +4,20 @@ import numpy as np
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# Laddar data från Google Sheets
+# --- Ladda data från Google Sheets ---
 def load_data():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = {
-        "type": st.secrets["type"],
-        "project_id": st.secrets["project_id"],
-        "private_key_id": st.secrets["private_key_id"],
-        "private_key": st.secrets["private_key"].replace("\\n", "\n"),
-        "client_email": st.secrets["client_email"],
-        "client_id": st.secrets["client_id"],
-        "auth_uri": st.secrets["auth_uri"],
-        "token_uri": st.secrets["token_uri"],
-        "auth_provider_x509_cert_url": st.secrets["auth_provider_x509_cert_url"],
-        "client_x509_cert_url": st.secrets["client_x509_cert_url"]
+        "type": st.secrets["GOOGLE_CREDENTIALS"]["type"],
+        "project_id": st.secrets["GOOGLE_CREDENTIALS"]["project_id"],
+        "private_key_id": st.secrets["GOOGLE_CREDENTIALS"]["private_key_id"],
+        "private_key": st.secrets["GOOGLE_CREDENTIALS"]["private_key"].replace("\\n", "\n"),
+        "client_email": st.secrets["GOOGLE_CREDENTIALS"]["client_email"],
+        "client_id": st.secrets["GOOGLE_CREDENTIALS"]["client_id"],
+        "auth_uri": st.secrets["GOOGLE_CREDENTIALS"]["auth_uri"],
+        "token_uri": st.secrets["GOOGLE_CREDENTIALS"]["token_uri"],
+        "auth_provider_x509_cert_url": st.secrets["GOOGLE_CREDENTIALS"]["auth_provider_x509_cert_url"],
+        "client_x509_cert_url": st.secrets["GOOGLE_CREDENTIALS"]["client_x509_cert_url"]
     }
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     client = gspread.authorize(creds)
@@ -26,7 +26,6 @@ def load_data():
     worksheet = sheet.worksheet("Blad1")
     records = worksheet.get_all_records()
     df = pd.DataFrame.from_dict(records)
-
     return worksheet, df
 
 def update_calculations(df):
