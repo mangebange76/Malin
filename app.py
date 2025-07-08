@@ -57,6 +57,38 @@ def validera_maxvarden(rad, maxvarden):
             fel.append(f"{kategori} överskrider maxvärdet {maxvarden.get(kategori, 0)}! Uppdatera Dag = 0 först.")
     return fel
 
+def formulär_maxvärden(df):
+    st.subheader("⚙️ Sätt maxvärden för Dag = 0")
+
+    dag0 = df[df["Dag"] == 0]
+    if not dag0.empty:
+        maxrad = dag0.iloc[0]
+    else:
+        maxrad = {k: 0 for k in ["Jobb", "Grannar", "Tjej PojkV", "Nils familj"]}
+
+    with st.form("form_max"):
+        jobb = st.number_input("Max Jobb", value=int(maxrad.get("Jobb", 0)), step=1)
+        grannar = st.number_input("Max Grannar", value=int(maxrad.get("Grannar", 0)), step=1)
+        pojkv = st.number_input("Max Tjej PojkV", value=int(maxrad.get("Tjej PojkV", 0)), step=1)
+        nils = st.number_input("Max Nils familj", value=int(maxrad.get("Nils familj", 0)), step=1)
+        submit = st.form_submit_button("💾 Spara maxvärden")
+
+        if submit:
+            df = df[df["Dag"] != 0]  # Ta bort tidigare maxvärdesrad
+            ny_maxrad = {col: 0 for col in ALL_COLUMNS}
+            ny_maxrad.update({
+                "Dag": 0,
+                "Jobb": jobb,
+                "Grannar": grannar,
+                "Tjej PojkV": pojkv,
+                "Nils familj": nils,
+                "Veckodag": "Max"
+            })
+            df = pd.concat([pd.DataFrame([ny_maxrad]), df], ignore_index=True)
+            save_data(df)
+            st.success("Maxvärden uppdaterade.")
+    return df
+
 def update_calculations(df):
     df = ensure_columns_exist(df)
 
@@ -73,9 +105,15 @@ def update_calculations(df):
     df["Snitt"] = df.apply(lambda row: 0 if row["Män"] == 0 else row["DeepT"] / row["Män"], axis=1)
     df["Tid mun"] = (df["Snitt"] * df["Sekunder"] + df["Vila mun"]) * df["Varv"]
 
-    df["Summa tid"] = df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"] + df["Tid mun"]
+    df["Summa tid"] = (
+        df["Summa singel"] +
+        df["Summa dubbel"] +
+        df["Summa trippel"] +
+        df["Tid mun"] +
+        df["Älskar"] * 1800
+    ) / 3600  # konvertera till timmar
 
-    df["Suger"] = df.apply(lambda row: 0 if row["Män"] == 0 else 0.6 * row["Summa tid"] / row["Män"], axis=1)
+    df["Suger"] = df.apply(lambda row: 0 if row["Män"] == 0 else 0.6 * (row["Summa tid"] * 3600) / row["Män"], axis=1)
 
     df["Tid kille"] = df.apply(lambda row: 0 if row["Män"] == 0 else (
         row["Summa singel"] +
@@ -83,7 +121,7 @@ def update_calculations(df):
         3 * row["Summa trippel"] +
         row["Suger"] / row["Män"] +
         row["Tid mun"]
-    ), axis=1)
+    ) / 60, axis=1)  # i minuter
 
     df["Hårdhet"] = (
         (df["Nya killar"] > 0).astype(int) * 1 +
@@ -146,7 +184,7 @@ def skapa_ny_radform(df):
             "TP": st.number_input("Trippel penet", value=0, step=1),
             "Tid S": st.number_input("Tid singel (sek)", value=0, step=1),
             "Tid D": st.number_input("Tid dubbel (sek)", value=0, step=1),
-            "Tid T": st.number_input("Tid trippel (sek)", value=180, step=1),
+            "Tid T": st.number_input("Tid trippel (sek)", value=0, step=1),  # inte förifyllt!
             "Vila": st.number_input("Vila (sek)", value=0, step=1),
             "Älskar": st.number_input("Älskar", value=0, step=1),
             "Sover med": st.number_input("Sover med", value=0, step=1),
@@ -179,16 +217,29 @@ def skapa_ny_radform(df):
     return df
 
 def visa_data(df):
-    st.subheader("📊 Aktuell data")
+    st.subheader("📊 Aktuell data (sorterad på Dag)")
     df_vy = df.copy()
     df_vy = df_vy.sort_values("Dag", ascending=True)
+
+    # Konvertera tidformat för presentation
+    df_vy["Summa tid"] = df_vy["Summa tid"].round(2)
+    df_vy["Tid kille"] = df_vy["Tid kille"].round(2)
+
     st.dataframe(df_vy, use_container_width=True)
 
 def main():
-    st.title("📅 MalinData – Daglig logg och beräkningar")
+    st.title("📘 MalinData – Daglig inmatning & beräkningar")
     df = load_data()
+
     df = update_calculations(df)
+
+    # Maxvärdesformulär alltid synligt högst upp
+    df = formulär_maxvärden(df)
+
+    # Ny rad
     df = skapa_ny_radform(df)
+
+    # Tabell
     visa_data(df)
 
 if __name__ == "__main__":
