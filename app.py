@@ -26,6 +26,37 @@ worksheet = sheet.worksheet("Blad1")
 data = worksheet.get_all_records()
 df = pd.DataFrame(data)
 
+# Konvertera kolumner
+df["Dag"] = pd.to_numeric(df["Dag"], errors="coerce").fillna(0).astype(int)
+
+# Sektion högst upp: redigera maxvärden (Dag = 0)
+st.header("Inställningar: Maxvärden (Dag = 0)")
+
+jobb_max = st.number_input("Max Jobb", min_value=0, step=1, key="jobb_max")
+grannar_max = st.number_input("Max Grannar", min_value=0, step=1, key="grannar_max")
+pojkv_max = st.number_input("Max Tjej PojkV", min_value=0, step=1, key="pojkv_max")
+nils_max = st.number_input("Max Nils familj", min_value=0, step=1, key="nils_max")
+
+if st.button("Spara maxvärden"):
+    dag0_rad = {
+        "Dag": 0,
+        "Jobb": jobb_max,
+        "Grannar": grannar_max,
+        "Tjej PojkV": pojkv_max,
+        "Nils familj": nils_max
+    }
+
+    # Nollställ övriga kolumner
+    for col in worksheet.row_values(1):
+        if col not in dag0_rad:
+            dag0_rad[col] = 0
+
+    # Ta bort befintlig Dag = 0-rad om den finns
+    df = df[df["Dag"] != 0]
+    df = pd.concat([pd.DataFrame([dag0_rad]), df], ignore_index=True)
+    worksheet.update([df.columns.tolist()] + df.values.tolist())
+    st.success("Maxvärden uppdaterade!")
+
 # Säkerställ att vissa kolumner finns (kompletteras i Del 2)
 
 # Del 2: Kolumnhantering och maxvärdeskontroll
@@ -204,7 +235,7 @@ def main():
     df = ensure_columns_exist(df)
     df = update_calculations(df)
 
-    # Visa senaste raderna (exkludera Dag = 0)
+    # Visa senaste inmatade rader (exkludera Dag = 0)
     st.subheader("Senaste inmatningar")
     st.dataframe(df[df["Dag"] > 0].sort_values("Dag", ascending=False), use_container_width=True)
 
