@@ -50,123 +50,168 @@ def hamta_maxvarden(df):
         "Nils familj": dag0["Nils familj"].max()
     }
 
-def update_calculations(df):
-    df = ensure_columns_exist(df)
+# --------- DEL 2 ---------
 
-    veckodagar = ["Lördag", "Söndag", "Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag"]
-    df["Veckodag"] = df["Dag"].apply(lambda x: veckodagar[(x - 1) % 7] if x > 0 else "")
+def visa_redigeringsformulär(rad, dagnummer):
+    st.subheader("✏️ Redigera värden innan spara")
+    ny_rad = {"Dag": dagnummer}
 
-    df["Känner"] = df["Jobb"] + df["Grannar"] + df["Tjej PojkV"] + df["Nils familj"]
-    df["Män"] = df["Nya killar"] + df["Känner"]
+    with st.form("form_redigera_rad"):
+        for kolumn in ALL_COLUMNS:
+            if kolumn == "Veckodag":
+                continue
+            elif kolumn == "Dag":
+                st.markdown(f"**Dag:** {dagnummer}")
+            elif kolumn in rad:
+                if isinstance(rad[kolumn], int) or isinstance(rad[kolumn], float):
+                    ny_rad[kolumn] = st.number_input(kolumn, value=float(rad[kolumn]), step=1.0 if isinstance(rad[kolumn], float) else 1)
+                else:
+                    ny_rad[kolumn] = st.text_input(kolumn, value=str(rad[kolumn]))
+            else:
+                ny_rad[kolumn] = st.number_input(kolumn, value=0, step=1)
+        submit = st.form_submit_button("✅ Spara redigerad rad")
 
-    df["Summa singel"] = (df["Tid S"] + df["Vila"]) * df["Män"]
-    df["Summa dubbel"] = ((df["Tid D"] + df["Vila"]) + 9) * (df["DM"] + df["DF"] + df["DA"])
-    df["Summa trippel"] = ((df["Tid T"] + df["Vila"]) + 15) * (df["TPP"] + df["TAP"] + df["TP"])
+    return ny_rad if submit else None
 
-    df["Snitt"] = df.apply(lambda row: 0 if row["Män"] == 0 else row["DeepT"] / row["Män"], axis=1)
-    df["Tid mun"] = (df["Snitt"] * df["Sekunder"] + df["Vila mun"]) * df["Varv"]
+def spara_redigerad_rad(df, ny_rad):
+    for key in ALL_COLUMNS:
+        if key not in ny_rad:
+            ny_rad[key] = 0
 
-    # Grundberäkning av summa tid (inkl. älskar och sover med)
-    df["Summa tid"] = (
-        df["Summa singel"] +
-        df["Summa dubbel"] +
-        df["Summa trippel"] +
-        df["Tid mun"] +
-        df["Älskar"] * 1800 +
-        df["Sover med"] * 1800
-    ) / 3600
+    df = pd.concat([df, pd.DataFrame([ny_rad])], ignore_index=True)
+    df = update_calculations(df)
+    save_data(df)
 
-    # 3 timmar för rader med bara "Känner" > 0 men övriga 0
-    mask_bara_kompisar = (
-        (df["Känner"] > 0) &
-        (df["Nya killar"] == 0) &
-        (df["Älskar"] == 0) &
-        (df["Sover med"] == 0) &
-        (df["DM"] + df["DF"] + df["DA"] + df["TPP"] + df["TAP"] + df["TP"] == 0)
-    )
-    df.loc[mask_bara_kompisar, "Summa tid"] = 3
+    timmar = ny_rad.get("Summa tid", 0)
+    tid_kille = ny_rad.get("Tid kille", 0)
 
-    df["Suger"] = df.apply(
-        lambda row: 0 if row["Män"] == 0 else 0.6 * (row["Summa tid"] * 3600) / row["Män"],
-        axis=1
-    )
+    if timmar > 17:
+        st.warning(f"⚠️ Summa tid är {round(timmar, 2)} timmar – över 17h. Redigera kan vara nödvändigt.")
+    if tid_kille < 9 or tid_kille > 15:
+        st.warning(f"⚠️ Tid per kille är {round(tid_kille, 2)} min – ligger utanför 9–15 min. Kontrollera!")
 
-    df["Tid kille"] = df.apply(lambda row: 0 if row["Män"] == 0 else (
-        row["Summa singel"] +
-        2 * row["Summa dubbel"] +
-        3 * row["Summa trippel"] +
-        row["Suger"] / row["Män"] +
-        row["Tid mun"] +
-        row["Sover med"] * 1800  # extra tid per sover med
-    ) / 60, axis=1)
+    st.success(f"✅ Raden för Dag {ny_rad['Dag']} sparades.")
+    return df
 
-    df["Hårdhet"] = (
-        (df["Nya killar"] > 0).astype(int) * 1 +
-        (df["DM"] > 0).astype(int) * 2 +
-        (df["DF"] > 0).astype(int) * 3 +
-        (df["DA"] > 0).astype(int) * 4 +
-        (df["TPP"] > 0).astype(int) * 5 +
-        (df["TAP"] > 0).astype(int) * 7 +
-        (df["TP"] > 0).astype(int) * 6
-    )
+def lägg_till_knappar(df):
+    st.subheader("🎲 Skapa rad via knapp")
 
-    df["Filmer"] = (
-        (df["Män"] +
-         df["Fitta"] +
-         df["Röv"] +
-         df["DM"] * 2 +
-         df["DF"] * 2 +
-         df["DA"] * 3 +
-         df["TPP"] * 4 +
-         df["TAP"] * 6 +
-         df["TP"] * 5) * df["Hårdhet"]
-    ).round().astype(int)
+    maxvarden = hamta_maxvarden(df)
+    dagar = df[df["Dag"] > 0]["Dag"]
+    ny_dag = 1 if dagar.empty else dagar.max() + 1
 
-    df["Pris"] = 39.99
-    df["Intäkter"] = df["Filmer"] * df["Pris"]
-    df["Malin lön"] = df["Intäkter"] * 0.01
-    df["Malin lön"] = df["Malin lön"].apply(lambda x: min(x, 700))
+    def skapa_rad_grund():
+        return {col: 0 for col in ALL_COLUMNS}
 
-    try:
-        dag0 = df[df["Dag"] == 0]
-        kompisar_total = dag0["Jobb"].sum() + dag0["Grannar"].sum() + dag0["Tjej PojkV"].sum() + dag0["Nils familj"].sum()
-        df["Kompisar"] = df.apply(
-            lambda row: 0 if kompisar_total == 0 else (row["Intäkter"] - row["Malin lön"]) / kompisar_total,
-            axis=1
-        )
-    except:
-        df["Kompisar"] = 0.0
+    def redigera_och_spara(rad):
+        ny_rad = visa_redigeringsformulär(rad, ny_dag)
+        if ny_rad:
+            df_updated = spara_redigerad_rad(df, ny_rad)
+            st.experimental_rerun()
 
-    # Aktiekurs (slumpmässig justering baserat på prestation jämfört med snitt)
-    snitt_hardhet = df[df["Dag"] > 0]["Hårdhet"].mean()
-    snitt_män = df[df["Dag"] > 0]["Män"].mean()
-    snitt_tid_mun = df[df["Dag"] > 0]["Tid mun"].mean()
-    snitt_da = df[df["Dag"] > 0]["DA"].mean()
-    snitt_tpp = df[df["Dag"] > 0]["TPP"].mean()
-    snitt_tap = df[df["Dag"] > 0]["TAP"].mean()
-    snitt_tp = df[df["Dag"] > 0]["TP"].mean()
+    col1, col2, col3 = st.columns(3)
 
-    for i, row in df.iterrows():
-        if row["Dag"] == 0:
-            df.at[i, "Aktiekurs"] = 40.00
-            continue
+    with col1:
+        if st.button("🎬 Slumpa Film liten"):
+            import random
+            rad = skapa_rad_grund()
+            rad.update({
+                "Dag": ny_dag,
+                "Nya killar": random.randint(10, 50),
+                "Fitta": random.randint(3, 12),
+                "Röv": random.randint(3, 12),
+                "DM": random.randint(10, 25),
+                "DF": random.randint(10, 25),
+                "DA": 0,
+                "TPP": 0,
+                "TAP": 0,
+                "TP": 0,
+                "Älskar": 12,
+                "Sover med": 1,
+                "Tid S": 60,
+                "Tid D": 70,
+                "Tid T": 80,
+                "Vila": 7,
+                "Jobb": random.randint(3, maxvarden.get("Jobb", 3)),
+                "Grannar": random.randint(3, maxvarden.get("Grannar", 3)),
+                "Tjej PojkV": random.randint(3, maxvarden.get("Tjej PojkV", 3)),
+                "Nils familj": random.randint(3, maxvarden.get("Nils familj", 3)),
+                "Svarta": random.choice([0, random.randint(10, 50)])
+            })
+            redigera_och_spara(rad)
 
-        faktorer = 0
-        if row["Hårdhet"] > snitt_hardhet: faktorer += 1
-        if row["Män"] > snitt_män: faktorer += 1
-        if row["Tid mun"] > snitt_tid_mun: faktorer += 1
-        if row["DA"] > snitt_da: faktorer += 1
-        if row["TPP"] > snitt_tpp: faktorer += 1
-        if row["TAP"] > snitt_tap: faktorer += 1
-        if row["TP"] > snitt_tp: faktorer += 1
+    with col2:
+        if st.button("🎬 Slumpa Film stor"):
+            import random
+            rad = skapa_rad_grund()
+            rad.update({
+                "Dag": ny_dag,
+                "Nya killar": random.randint(60, 200),
+                "Fitta": random.randint(10, 30),
+                "Röv": random.randint(10, 30),
+                "DM": random.randint(50, 100),
+                "DF": random.randint(50, 100),
+                "DA": random.randint(50, 100),
+                "TPP": random.randint(30, 80),
+                "TAP": random.randint(30, 80),
+                "TP": random.randint(30, 80),
+                "Älskar": 12,
+                "Sover med": 1,
+                "Tid S": 60,
+                "Tid D": 70,
+                "Tid T": 80,
+                "Vila": 7,
+                "Jobb": random.randint(3, maxvarden.get("Jobb", 3)),
+                "Grannar": random.randint(3, maxvarden.get("Grannar", 3)),
+                "Tjej PojkV": random.randint(3, maxvarden.get("Tjej PojkV", 3)),
+                "Nils familj": random.randint(3, maxvarden.get("Nils familj", 3)),
+                "Svarta": random.choice([0, random.randint(60, 200)])
+            })
+            redigera_och_spara(rad)
 
-        if faktorer >= 4:
-            förändring = random.uniform(1.03, 1.10)
-        else:
-            förändring = random.uniform(0.90, 0.97)
+    with col3:
+        if st.button("📋 Kopiera största raden (Nya killar)"):
+            if not df.empty:
+                största = df[df["Nya killar"] == df["Nya killar"].max()].iloc[0].to_dict()
+                största["Dag"] = ny_dag
+                redigera_och_spara(största)
 
-        tidigare_kurs = df.at[i - 1, "Aktiekurs"] if i > 0 else 40.00
-        df.at[i, "Aktiekurs"] = round(tidigare_kurs * förändring, 2)
+    st.markdown("---")
+
+    col4, col5, col6 = st.columns(3)
+
+    with col4:
+        if st.button("🛌 Vila jobb"):
+            rad = skapa_rad_grund()
+            rad.update({
+                "Dag": ny_dag,
+                "Älskar": 12,
+                "Sover med": 1,
+                "Jobb": round(maxvarden.get("Jobb", 0) * 0.3),
+                "Grannar": round(maxvarden.get("Grannar", 0) * 0.3),
+                "Tjej PojkV": round(maxvarden.get("Tjej PojkV", 0) * 0.3),
+                "Nils familj": round(maxvarden.get("Nils familj", 0) * 0.3),
+            })
+            redigera_och_spara(rad)
+
+    with col5:
+        if st.button("🏠 Vila hemma"):
+            rad = skapa_rad_grund()
+            rad.update({
+                "Dag": ny_dag,
+                "Älskar": 6,
+                "Jobb": 5,
+                "Grannar": 3,
+                "Tjej PojkV": 3,
+                "Nils familj": 5,
+            })
+            redigera_och_spara(rad)
+
+    with col6:
+        if st.button("🌑 Vila helt"):
+            rad = skapa_rad_grund()
+            rad["Dag"] = ny_dag
+            redigera_och_spara(rad)
 
     return df
 
