@@ -1,47 +1,50 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import toml
 import random
 from datetime import datetime, timedelta
 from gspread_dataframe import get_as_dataframe, set_with_dataframe
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import toml
 
-st.set_page_config(layout="wide")
+# Ladda in secrets
+secrets = toml.load(".streamlit/secrets.toml")
+SHEET_URL = secrets["SHEET_URL"]
+credentials = secrets["GOOGLE_CREDENTIALS"]
+
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials, scope)
+client = gspread.authorize(creds)
+
+spreadsheet = client.open_by_url(SHEET_URL)
+worksheet = spreadsheet.worksheet("Blad1")
 
 ALL_COLUMNS = [
-    "Veckodag", "Dag", "Nya killar", "Fitta", "Röv", "DM", "DF", "DA",
-    "TPP", "TAP", "TP", "Älskar", "Sover med", "Tid S", "Tid D", "Tid T",
-    "Vila", "Jobb", "Grannar", "Tjej PojkV", "Nils fam", "Svarta", "DeepT",
-    "Sekunder", "Vila mun", "Varv", "Känner", "Män", "Summa singel",
-    "Summa dubbel", "Summa trippel", "Snitt", "Tid mun", "Summa tid", "Suger",
-    "Tid kille", "Hårdhet", "Filmer", "Pris", "Intäkter", "Malin lön",
-    "Kompisar"
+    "Dag", "Veckodag", "Nya killar", "Fitta", "Röv", "DM", "DF", "DA",
+    "TPP", "TAP", "TP", "Älskar", "Sover med", "Tid S", "Tid D", "Tid trippel",
+    "Vila", "Jobb", "Grannar", "Tjej PojkV", "Nils fam", "Svarta",
+    "DeepT", "Sekunder", "Vila mun", "Varv",
+    "Känner", "Män", "Summa singel", "Summa dubbel", "Summa trippel",
+    "Snitt", "Tid mun", "Summa tid", "Suger", "Tid kille",
+    "Hårdhet", "Filmer", "Pris", "Intäkter", "Malin lön", "Kompisar",
+    "Aktiekurs", "Kompisar aktievärde"
 ]
 
-def load_secrets():
-    secrets = toml.load(".streamlit/secrets.toml")
-    sheet_url = secrets["SHEET_URL"]
-    creds_dict = secrets["GOOGLE_CREDENTIALS"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(
-        creds_dict, ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    )
-    client = gspread.authorize(creds)
-    sheet = client.open_by_url(sheet_url)
-    return sheet.worksheet("Blad1")
-
-worksheet = load_secrets()
-
-def load_data():
-    df = get_as_dataframe(worksheet, evaluate_formulas=True)
-    df.fillna(0, inplace=True)
+def ensure_columns_exist(df):
     for col in ALL_COLUMNS:
         if col not in df.columns:
             df[col] = 0
-    df = df[ALL_COLUMNS]
-    df["Dag"] = df["Dag"].astype(int)
     return df
+
+def load_data():
+    df = get_as_dataframe(worksheet, evaluate_formulas=True).fillna(0)
+    df = df[ALL_COLUMNS[:len(df.columns)]] if not df.empty else pd.DataFrame(columns=ALL_COLUMNS)
+    df = df.fillna(0)
+    return df
+
+def save_data(df):
+    worksheet.clear()
+    set_with_dataframe(worksheet, df)
 
 def hamta_maxvarden(df):
     maxrad = df[df["Dag"] == 0]
