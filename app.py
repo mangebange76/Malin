@@ -374,17 +374,37 @@ def update_calculations(df):
 def statistikvy(df):
     st.subheader("📊 Statistik")
 
-    if df.empty or "Dag" not in df.columns:
-        st.info("Ingen data att visa.")
+    if df.empty:
+        st.info("Ingen data att analysera.")
         return
 
-    df_data = df[df["Dag"] > 0]  # Hoppa över maxvärdesraden
+    filtrerad = df[df["Dag"] > 0].copy()
 
-    total_malin_lön = df_data["Malin lön"].sum()
-    totala_män = df_data["Nya killar"].sum() + df_data["Känner"].sum()
-    roi = total_malin_lön / totala_män if totala_män else 0
+    tot_malin_lön = filtrerad["Malin lön"].sum()
+    tot_älskar = filtrerad["Älskar"].sum()
+    tot_sover = filtrerad["Sover med"].sum()
+    tot_nyakillar = filtrerad["Nya killar"].sum()
+    tot_vänner = filtrerad["Känner"].sum()
 
-    sista_raden = df_data[df_data["Dag"] == df_data["Dag"].max()]
-    aktiekurs = sista_raden["Aktiekurs"].values[0] if not sista_raden.empty else 0
+    total_män = tot_älskar + tot_sover + tot_nyakillar + tot_vänner
+    roi_per_man = (tot_malin_lön / total_män) if total_män > 0 else 0
+
+    sista_kurs = filtrerad["Aktiekurs"].replace(0, pd.NA).dropna().iloc[-1] if not filtrerad["Aktiekurs"].replace(0, pd.NA).dropna().empty else 0
     kompisar = (
-        df[df["Dag"] == 0][["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]].sum().sum
+        sista_kurs * 5000
+        if sista_kurs
+        else 0
+    )
+
+    dag0 = df[df["Dag"] == 0]
+    dag0_summa = dag0[["Jobb", "Grannar", "Tjej PojkV", "Nils familj"]].sum().sum()
+    per_kompis = (kompisar / dag0_summa) if dag0_summa > 0 else 0
+
+    st.metric("📈 Total Malin lön", f"{tot_malin_lön:.2f} USD")
+    st.metric("🔁 ROI per man", f"{roi_per_man:.2f} USD/person")
+    st.metric("📊 Kompisars aktievärde", f"{kompisar:,.0f} USD")
+    st.metric("👥 Aktievärde per kompis", f"{per_kompis:.2f} USD")
+
+# Avslutande anrop
+if __name__ == "__main__":
+    main()
