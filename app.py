@@ -2,49 +2,53 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import random
+import datetime
 import gspread
-from datetime import datetime
 from oauth2client.service_account import ServiceAccountCredentials
+from gspread_dataframe import get_as_dataframe, set_with_dataframe
 
-st.set_page_config(page_title="Malin", layout="wide")
+# === Google Sheets Setup ===
+import toml
+secrets = toml.load(".streamlit/secrets.toml")
+SHEET_URL = secrets["SHEET_URL"]
+GOOGLE_CREDENTIALS = secrets["GOOGLE_CREDENTIALS"]
 
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+credentials = ServiceAccountCredentials.from_json_keyfile_dict(GOOGLE_CREDENTIALS, scope)
+gc = gspread.authorize(credentials)
+sh = gc.open_by_url(SHEET_URL)
+worksheet = sh.worksheet("Blad1")
+
+# === Kolumnlista ===
 ALL_COLUMNS = [
-    "Dag", "Nya killar", "Fitta", "Röv", "Dm", "Df", "Da", "TPP", "Tap", "TP",
-    "Älskar", "Sover med", "Tid s", "Tid d", "Tid trippel", "Vila",
-    "Jobb", "Grannar", "Tjej PojkV", "Nils fam", "Svarta",
-    "DeepT", "Sekunder", "Vila mun", "Varv",
+    "Dag", "Veckodag", "Nya killar", "Fitta", "Röv", "DM", "DF", "DA", "TPP", "TAP", "TP",
+    "Älskar", "Sover med", "Tid S", "Tid D", "Tid T", "Vila", "Jobb", "Grannar", "Tjej PojkV", "Nils fam",
+    "Svarta", "DeepT", "Sekunder", "Vila mun", "Varv",
+    # Beräknade
     "Känner", "Män", "Summa singel", "Summa dubbel", "Summa trippel",
-    "Snitt", "Tid mun", "Summa tid", "Suger", "Tid kille", "Hårdhet",
-    "Filmer", "Pris", "Intäkter", "Malin lön", "Kompisar"
+    "Snitt", "Tid mun", "Summa tid", "Suger", "Tid kille", "Hårdhet", "Filmer",
+    "Pris", "Intäkter", "Malin lön", "Kompisar", "Aktiekurs"
 ]
 
-BERÄKNADE_KOLUMNER = [
-    "Känner", "Män", "Summa singel", "Summa dubbel", "Summa trippel",
-    "Snitt", "Tid mun", "Summa tid", "Suger", "Tid kille", "Hårdhet",
-    "Filmer", "Pris", "Intäkter", "Malin lön", "Kompisar"
-]
-
-RELEVANTA_FÖR_KURS = ["Hårdhet", "Da", "TPP", "Tap", "TP", "Män", "Tid mun"]
-
-def läs_google_sheet():
-    scope = ["https://spreadsheets.google.com/feeds",
-             "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name("client_secret.json", scope)
-    client = gspread.authorize(creds)
-    sheet = client.open_by_url(st.secrets["SHEET_URL"])
-    worksheet = sheet.worksheet("Blad1")
-    data = worksheet.get_all_records()
-    return pd.DataFrame(data)
+def load_data():
+    df = get_as_dataframe(worksheet, evaluate_formulas=True)
+    df = df[ALL_COLUMNS[:len(df.columns)]] if not df.empty else pd.DataFrame(columns=ALL_COLUMNS)
+    df.fillna(0, inplace=True)
+    for col in ALL_COLUMNS:
+        if col not in df.columns:
+            df[col] = 0
+    df["Dag"] = df["Dag"].astype(int)
+    return df
 
 def update_sheet(df):
-    scope = ["https://spreadsheets.google.com/feeds",
-             "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name("client_secret.json", scope)
-    client = gspread.authorize(creds)
-    sheet = client.open_by_url(st.secrets["SHEET_URL"])
-    worksheet = sheet.worksheet("Blad1")
-    worksheet.clear()
-    worksheet.update([df.columns.values.tolist()] + df.values.tolist())
+    df_to_save = df[ALL_COLUMNS]
+    set_with_dataframe(worksheet, df_to_save, include_index=False)
+
+def ensure_columns_exist(df):
+    for col in ALL_COLUMNS:
+        if col not in df.columns:
+            df[col] = 0
+    return df
 
 def hamta_maxvarden(df):
     rad_0 = df[df["Dag"] == 0]
@@ -205,7 +209,6 @@ def spara_redigerad_rad(df, ny_rad):
     update_sheet(df)
     st.success("✅ Raden har sparats!")
     return df
-
 def visa_varningar(df):
     senaste = df.iloc[-1]
     timmar = senaste["Summa tid"]
