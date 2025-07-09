@@ -406,5 +406,25 @@ def statistikvy(df):
     st.metric("👥 Aktievärde per kompis", f"{per_kompis:.2f} USD")
 
 # Avslutande anrop
+def main():
+    st.set_page_config(page_title="MalinData", layout="wide")
+    st.title("🧾 MalinData")
+
+    df = load_data()
+    df = ensure_columns_exist(df)
+    df = update_calculations(df)
+
+    menyval = st.sidebar.radio("Navigera", ["📅 Huvudvy", "📈 Statistik", "⚙️ Redigera maxvärden"])
+
+    if menyval == "📅 Huvudvy":
+        visa_huvudvy(df)
+        df = knappfunktioner(df)
+    elif menyval == "📈 Statistik":
+        statistikvy(df)
+    elif menyval == "⚙️ Redigera maxvärden":
+        df = formulär_maxvärden(df)
+
+    save_data(df)
+
 if __name__ == "__main__":
     main()
