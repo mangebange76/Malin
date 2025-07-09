@@ -186,61 +186,107 @@ def knappfunktioner(df):
 
     return df
 
-def visa_redigeringsformulär(rad, dag):
-    with st.form(key=f"form_{dag}"):
-        ny_rad = {"Dag": dag}
-        for kolumn in ALL_COLUMNS:
-            if kolumn == "Dag":
-                continue
-            värde = rad.get(kolumn, 0)
-            if isinstance(värde, str):
-                try:
-                    värde = float(värde)
-                except ValueError:
-                    värde = 0
-            step = 1.0 if isinstance(värde, float) else 1
-            ny_rad[kolumn] = st.number_input(kolumn, value=float(värde), step=step)
-        submitted = st.form_submit_button("Spara redigerad rad")
-        if submitted:
-            return ny_rad
-    return None
+def update_calculations(df):
+    for i, rad in df.iterrows():
+        dag = rad["Dag"]
 
-def spara_redigerad_rad(df, ny_rad):
-    df = df.append(ny_rad, ignore_index=True)
-    df = update_calculations(df)
-    update_sheet(df)
-    st.success("✅ Raden har sparats!")
-    return df
+        if dag == 0:
+            continue
 
-def visa_varningar(df):
-    senaste = df.iloc[-1]
-    timmar = senaste["Summa tid"]
-    tid_kille = senaste["Tid kille"]
+        rad["Veckodag"] = ["Lör", "Sön", "Mån", "Tis", "Ons", "Tor", "Fre"][(dag - 1) % 7]
 
-    if timmar > 17:
-        st.warning(f"⚠️ Summa tid är {hinnar:.2f} timmar – det är mycket!")
-    if tid_kille < 9 or tid_kille > 15:
-        st.warning(f"⚠️ Tid kille är {tid_kille:.2f} min – utanför normalintervall (9–15 min).")
-    return df
+        # Maxvärden från Dag 0
+        maxrad = df[df["Dag"] == 0]
+        max_job = int(maxrad["Jobb"].max()) if not maxrad.empty else 0
+        max_grannar = int(maxrad["Grannar"].max()) if not maxrad.empty else 0
+        max_tjej = int(maxrad["Tjej PojkV"].max()) if not maxrad.empty else 0
+        max_nils = int(maxrad["Nils fam"].max()) if not maxrad.empty else 0
+        tot_vänner = max_job + max_grannar + max_tjej + max_nils
 
-def validera_maxvarden(df):
-    maxrad = df[df["Dag"] == 0]
-    if maxrad.empty:
-        return df
-    maxrad = maxrad.iloc[0]
-    for fält in ["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]:
-        maxvärde = maxrad.get(fält, 0)
-        övriga = df[df["Dag"] > 0]
-        if not övriga.empty:
-            över = övriga[övriga[fält] > maxvärde]
-            if not över.empty:
-                st.error(f"❌ Det finns rader där {fält} överskrider maxvärde ({maxvärde}) – uppdatera Dag = 0 först.")
-    return df
+        # Inmatade fält
+        nya = int(rad["Nya killar"])
+        älskar = int(rad["Älskar"])
+        sover = int(rad["Sover med"])
+        tid_s = int(rad["Tid S"])
+        tid_d = int(rad["Tid D"])
+        tid_t = int(rad["Tid T"])
+        vila = int(rad["Vila"])
+        dm, df_, da = int(rad["DM"]), int(rad["DF"]), int(rad["DA"])
+        tpp, tap, tp = int(rad["TPP"]), int(rad["TAP"]), int(rad["TP"])
+        jobb, grannar, tjej, nils = int(rad["Jobb"]), int(rad["Grannar"]), int(rad["Tjej PojkV"]), int(rad["Nils fam"])
+        svarta = int(rad["Svarta"])
 
-def ensure_columns_exist(df):
-    for kolumn in ALL_COLUMNS:
-        if kolumn not in df.columns:
-            df[kolumn] = 0
+        känner = jobb + grannar + tjej + nils
+        män = nya + känner
+        rad["Känner"] = känner
+        rad["Män"] = män
+
+        # Summa singel/dubbel/trippel
+        summa_singel = (tid_s + vila) * män
+        summa_dubbel = ((tid_d + vila) + 9) * (dm + df_ + da)
+        summa_trippel = ((tid_t + vila) + 15) * (tpp + tap + tp)
+
+        rad["Summa singel"] = summa_singel
+        rad["Summa dubbel"] = summa_dubbel
+        rad["Summa trippel"] = summa_trippel
+
+        # Tid mun
+        deept = int(rad["DeepT"])
+        sek = int(rad["Sekunder"])
+        vila_mun = int(rad["Vila mun"])
+        varv = int(rad["Varv"])
+        snitt = deept / män if män else 0
+        tid_mun = (snitt * sek + vila_mun) * varv
+
+        rad["Snitt"] = snitt
+        rad["Tid mun"] = tid_mun
+
+        # Summa tid
+        summa_tid = summa_singel + summa_dubbel + summa_trippel + (älskar * 1800) + tid_mun + (sover * 1800)
+        if nya == 0 and älskar == 0 and sover == 0:
+            if känner > 0:
+                summa_tid = 10800  # 3h
+        rad["Summa tid"] = round(summa_tid / 3600, 2)  # timmar
+
+        # Suger
+        total_män = män if män > 0 else 1
+        suger = 0.6 * (summa_singel + summa_dubbel + summa_trippel) / total_män
+        rad["Suger"] = suger / 60  # minuter
+
+        # Tid kille
+        tid_kille_dt = tid_mun / total_män if total_män else 0
+        runk = (summa_tid * 0.6) / total_män if total_män else 0
+        tid_kille = tid_s + (tid_d * 2) + (tid_t * 3) + (suger / 60) + (tid_kille_dt / 60) + (runk / 60) + (tid_mun / 60)
+        rad["Tid kille"] = round(tid_kille, 2)
+
+        # Hårdhet
+        hårdhet = 0
+        if nya > 0: hårdhet += 1
+        if dm > 0: hårdhet += 2
+        if df_ > 0: hårdhet += 3
+        if da > 0: hårdhet += 4
+        if tpp > 0: hårdhet += 5
+        if tap > 0: hårdhet += 7
+        if tp > 0: hårdhet += 6
+        rad["Hårdhet"] = hårdhet
+
+        # Filmer
+        filmer = (män + rad["Fitta"] + rad["Röv"] + dm * 2 + df_ * 2 + da * 3 + tpp * 4 + tap * 6 + tp * 5) * hårdhet
+        rad["Filmer"] = filmer
+
+        # Intäkter
+        rad["Pris"] = 39.99
+        rad["Intäkter"] = round(filmer * 39.99, 2)
+
+        # Malins lön
+        rad["Malin lön"] = min(700, rad["Intäkter"] * 0.01)
+
+        # Kompisar
+        vänner = tot_vänner if tot_vänner > 0 else 1
+        rad["Kompisar"] = round((rad["Intäkter"] - rad["Malin lön"]) / vänner, 2)
+
+        df.iloc[i] = rad[ALL_COLUMNS].values  # ✅ Säkra kolumnordning och datatyper
+
     return df
 
 def update_calculations(df):
