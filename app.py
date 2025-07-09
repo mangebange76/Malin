@@ -32,11 +32,13 @@ ALL_COLUMNS = [
 
 def load_data():
     df = get_as_dataframe(worksheet, evaluate_formulas=True)
-    df = df[ALL_COLUMNS[:len(df.columns)]] if not df.empty else pd.DataFrame(columns=ALL_COLUMNS)
     df.fillna(0, inplace=True)
+
     for col in ALL_COLUMNS:
         if col not in df.columns:
             df[col] = 0
+
+    df = df[ALL_COLUMNS]  # Säkerställ rätt ordning
     df["Dag"] = df["Dag"].astype(int)
     return df
 
@@ -209,6 +211,7 @@ def spara_redigerad_rad(df, ny_rad):
     update_sheet(df)
     st.success("✅ Raden har sparats!")
     return df
+
 def visa_varningar(df):
     senaste = df.iloc[-1]
     timmar = senaste["Summa tid"]
