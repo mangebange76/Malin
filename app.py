@@ -66,16 +66,15 @@ def visa_redigeringsformulär(rad, dag):
                 värde = ny_rad.get(kolumn, 0)
                 if kolumn == "Dag":
                     st.number_input(kolumn, value=int(värde), disabled=True, key=f"{kolumn}_{dag}")
-                elif isinstance(värde, (int, float)):
-                    step = 1.0 if isinstance(värde, float) else 1
-                    ny_rad[kolumn] = st.number_input(kolumn, value=float(värde), step=step, key=f"{kolumn}_{dag}")
+                elif isinstance(värde, float):
+                    ny_rad[kolumn] = st.number_input(kolumn, value=float(värde), step=1.0, key=f"{kolumn}_{dag}")
+                elif isinstance(värde, int):
+                    ny_rad[kolumn] = st.number_input(kolumn, value=int(värde), step=1, key=f"{kolumn}_{dag}")
                 else:
                     ny_rad[kolumn] = st.text_input(kolumn, value=str(värde), key=f"{kolumn}_{dag}")
             except Exception as e:
                 st.error(f"Fel i kolumn '{kolumn}': {e}")
-
-        submitted = st.form_submit_button("Spara redigerad rad")
-        if submitted:
+        if st.form_submit_button("Spara redigerad rad"):
             return ny_rad
     return None
 
@@ -95,6 +94,20 @@ def visa_varningar(rad):
     if tid_kille < 9 or tid_kille > 15:
         st.warning(f"⚠️ Tid per kille är {tid_kille:.2f} minuter – utanför rekommenderat intervall (9–15 min).")
 
+def ny_rad_manuellt(df):
+    st.subheader("➕ Lägg till ny rad manuellt")
+
+    dag = get_next_day(df)
+    ny_rad = {kolumn: 0 for kolumn in ALL_COLUMNS}
+    ny_rad["Dag"] = dag
+    ny_rad["Veckodag"] = veckodag_from_dag(dag)
+
+    if rad := visa_redigeringsformulär(ny_rad, dag):
+        df = lägg_till_rad(df, rad)
+        visa_varningar(rad)
+        st.success("Ny rad tillagd.")
+    return df
+
 def update_calculations(df):
     df["Känner"] = df[["Jobb", "Grannar", "Tjej PojkV", "Nils familj"]].sum(axis=1)
     df["Män"] = df["Nya killar"] + df["Känner"]
@@ -109,10 +122,27 @@ def update_calculations(df):
     )
     df["Tid mun"] = (df["Snitt"] * df["Sekunder"] + df["Vila mun"]) * df["Varv"]
 
+    # Summa tid – 3h för rader där bara Känner > 0
     df["Summa tid"] = (
         df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"]
-        + df["Tid mun"] + (df["Älskar"] * 30 * 60) + (df["Sover med"] * 30 * 60)
-    ) / 3600  # till timmar
+        + df["Tid mun"] + (df["Älskar"] * 1800) + (df["Sover med"] * 1800)
+    ) / 3600
+
+    df.loc[
+        (df["Nya killar"] == 0) &
+        (df["Älskar"] == 0) &
+        (df["Sover med"] == 0) &
+        (df["Fitta"] == 0) &
+        (df["Röv"] == 0) &
+        (df["DM"] == 0) &
+        (df["DF"] == 0) &
+        (df["DA"] == 0) &
+        (df["TPP"] == 0) &
+        (df["TAP"] == 0) &
+        (df["TP"] == 0) &
+        (df["Känner"] > 0),
+        "Summa tid"
+    ] = 3
 
     df["Suger"] = df.apply(
         lambda row: (row["Summa singel"] + row["Summa dubbel"] + row["Summa trippel"]) * 0.6 / row["Män"]
@@ -126,9 +156,9 @@ def update_calculations(df):
         df["Tid T"] * 3 +
         df["Suger"] +
         df["Tid mun"] +
-        (df["Sover med"] * 30 * 60 / df["Män"]).fillna(0) +
-        (df["Älskar"] * 30 * 60 / df["Män"]).fillna(0)
-    ) / 60  # till minuter
+        (df["Sover med"] * 1800 / df["Män"]).fillna(0) +
+        (df["Älskar"] * 1800 / df["Män"]).fillna(0)
+    ) / 60
 
     df["Hårdhet"] = (
         (df["Nya killar"] > 0).astype(int)
@@ -163,102 +193,79 @@ def update_calculations(df):
 
     return df
 
-def slumpa_film(df, typ):
-    dag = get_next_day(df)
-    maxvärden = hämta_maxvärden(df)
-
-    ny_rad = {kolumn: 0 for kolumn in ALL_COLUMNS}
-    ny_rad["Dag"] = dag
-    ny_rad["Veckodag"] = veckodag_from_dag(dag)
-
-    if typ == "liten":
-        ny_rad["Nya killar"] = random.randint(5, 20)
-        ny_rad["Fitta"] = random.randint(2, 6)
-        ny_rad["Röv"] = random.randint(2, 6)
-        ny_rad["DM"] = random.randint(10, 20)
-        ny_rad["DF"] = random.randint(10, 20)
-        ny_rad["DA"] = random.randint(10, 20)
-        ny_rad["TPP"] = random.randint(5, 10)
-        ny_rad["TAP"] = random.randint(5, 10)
-        ny_rad["TP"] = random.randint(5, 10)
-    elif typ == "stor":
-        ny_rad["Nya killar"] = random.randint(60, 200)
-        ny_rad["Fitta"] = random.randint(10, 30)
-        ny_rad["Röv"] = random.randint(10, 30)
-        ny_rad["DM"] = random.randint(50, 100)
-        ny_rad["DF"] = random.randint(50, 100)
-        ny_rad["DA"] = random.randint(50, 100)
-        ny_rad["TPP"] = random.randint(30, 80)
-        ny_rad["TAP"] = random.randint(30, 80)
-        ny_rad["TP"] = random.randint(30, 80)
-
-    ny_rad["Älskar"] = 12
-    ny_rad["Sover med"] = 1
-    ny_rad["Tid S"] = 60
-    ny_rad["Tid D"] = 70
-    ny_rad["Tid T"] = 80
-    ny_rad["Vila"] = 7
-
-    ny_rad["Jobb"] = random.randint(3, maxvärden.get("Jobb", 3))
-    ny_rad["Grannar"] = random.randint(3, maxvärden.get("Grannar", 3))
-    ny_rad["Tjej PojkV"] = random.randint(3, maxvärden.get("Tjej PojkV", 3))
-    ny_rad["Nils familj"] = random.randint(3, maxvärden.get("Nils familj", 3))
-
-    ny_rad["Svarta"] = random.choice([0, ny_rad["Nya killar"]])
-    ny_rad["DeepT"] = 0
-    ny_rad["Sekunder"] = 0
-    ny_rad["Vila mun"] = 0
-    ny_rad["Varv"] = 0
-
-    rad = visa_redigeringsformulär(ny_rad, dag)
-    if rad:
-        df = lägg_till_rad(df, rad)
-        visa_varningar(rad)
-    return df
-
 def statistikvy(df):
-    st.subheader("📊 Statistik")
+    st.subheader("📊 Statistik – summeringar och nyckeltal")
 
-    if df.empty:
-        st.info("Ingen data tillgänglig.")
+    if df.empty or df[df["Dag"] != 0].empty:
+        st.info("Ingen data att visa.")
         return
 
-    df = df[df["Dag"] != 0]
+    df = df[df["Dag"] != 0]  # Exkludera maxrad
 
-    totalt_malin_lön = df["Malin lön"].sum()
+    totalt_intakt = df["Intäkter"].sum()
+    totalt_lön = df["Malin lön"].sum()
+    totalt_kompisar = df["Kompisar"].sum()
+    totalt_män = df["Män"].sum()
+    totalt_filmer = df["Filmer"].sum()
+    totalt_tid = df["Summa tid"].sum()
+    snitt_tid = df["Tid kille"].mean()
     totalt_alskar = df["Älskar"].sum()
     totalt_sovermed = df["Sover med"].sum()
     totalt_killar = df["Nya killar"].sum()
     totalt_känner = df["Känner"].sum()
-    totalt_män = df["Män"].sum()
 
-    snitt_tid_kille = df["Tid kille"].mean() if totalt_män > 0 else 0
-    malin_roi = totalt_malin_lön / (totalt_alskar + totalt_sovermed + totalt_killar + totalt_känner) if (totalt_alskar + totalt_sovermed + totalt_killar + totalt_känner) > 0 else 0
+    # ROI
+    roi_per_man = totalt_lön / (totalt_alskar + totalt_sovermed + totalt_killar + totalt_känner) if (totalt_alskar + totalt_sovermed + totalt_killar + totalt_känner) > 0 else 0
 
+    # Aktiekurs och kompisars aktievärde
     aktiekurs = df["Aktiekurs"].replace(0, method="ffill").iloc[-1]
     dag0 = df[df["Dag"] == 0]
-    kompisar = dag0[["Jobb", "Grannar", "Tjej PojkV", "Nils familj"]].sum().sum()
+    kompisar_total = dag0[["Jobb", "Grannar", "Tjej PojkV", "Nils familj"]].sum().sum()
+    aktievärde = aktiekurs * 5000
+    aktievärde_per_kompis = aktievärde / kompisar_total if kompisar_total > 0 else 0
 
-    st.metric("👥 Totalt antal män", totalt_män)
-    st.metric("🎥 Totalt antal filmer", df["Filmer"].sum())
-    st.metric("💰 Totala intäkter (USD)", f"{df['Intäkter'].sum():,.2f}")
-    st.metric("🧍‍♀️ Malin total lön (USD)", f"{totalt_malin_lön:,.2f}")
-    st.metric("🕐 Genomsnittlig tid per kille (minuter)", f"{snitt_tid_kille:.2f}")
-    st.metric("📈 Malin ROI per man", f"{malin_roi:.4f}")
-    if kompisar > 0:
-        st.metric("📊 Aktievärde (kompisar)", f"{aktiekurs * 5000:,.2f} USD")
-        st.metric("💵 Aktievärde per kompis", f"{(aktiekurs * 5000 / kompisar):.2f} USD")
+    # Presentation
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("👥 Totalt män", int(totalt_män))
+        st.metric("💞 Älskar", int(totalt_alskar))
+        st.metric("🛌 Sover med", int(totalt_sovermed))
+        st.metric("🎬 Antal filmer", int(totalt_filmer))
+
+    with col2:
+        st.metric("⏱️ Summa tid (h)", f"{totalt_tid:.1f}")
+        st.metric("🕐 Tid per kille (min)", f"{snitt_tid:.2f}")
+        st.metric("📈 ROI per man", f"${roi_per_man:.2f}")
+        st.metric("💰 Intäkter (USD)", f"${totalt_intakt:,.2f}")
+
+    with col3:
+        st.metric("🧍‍♀️ Malin total lön", f"${totalt_lön:,.2f}")
+        st.metric("👫 Kompisars lön", f"${totalt_kompisar:,.2f}")
+        st.metric("💸 Kompisars aktievärde", f"${aktievärde:,.2f}")
+        st.metric("📊 Per kompis", f"${aktievärde_per_kompis:.2f}")
 
 def main():
-    st.title("🎬 Malins Filmapp")
+    st.set_page_config(page_title="Malins app", layout="wide")
+    st.title("🎬 Malins Filmapp – Planering, registrering och analys")
 
     df = load_data()
 
-    st.sidebar.header("Navigering")
-    val = st.sidebar.radio("Välj vy:", ["📊 Statistik", "🎲 Slumpa film liten", "🎞️ Slumpa film stor"])
+    st.sidebar.header("📂 Meny")
+    val = st.sidebar.radio("Välj vy:", [
+        "📊 Statistik",
+        "➕ Ny rad manuellt",
+        "🎲 Slumpa film liten",
+        "🎞️ Slumpa film stor",
+        "📅 Sätt maxvärden",
+        "📋 Kopiera största raden",
+        "✏️ Redigera rad"
+    ])
 
     if val == "📊 Statistik":
         statistikvy(df)
+
+    elif val == "➕ Ny rad manuellt":
+        df = ny_rad_manuellt(df)
 
     elif val == "🎲 Slumpa film liten":
         df = slumpa_film(df, "liten")
@@ -266,5 +273,69 @@ def main():
     elif val == "🎞️ Slumpa film stor":
         df = slumpa_film(df, "stor")
 
+    elif val == "📅 Sätt maxvärden":
+        df = formulär_maxvärden(df)
+
+    elif val == "📋 Kopiera största raden":
+        df = kopiera_största_raden(df)
+
+    elif val == "✏️ Redigera rad":
+        df = redigera_tidigare_rad(df)
+
 if __name__ == "__main__":
     main()
+
+def formulär_maxvärden(df):
+    st.subheader("📅 Sätt maxvärden (Dag = 0) för Jobb, Grannar, Tjej PojkV, Nils familj")
+
+    dag0 = df[df["Dag"] == 0]
+    if dag0.empty:
+        rad = {"Dag": 0, "Veckodag": "Max"}
+    else:
+        rad = dag0.iloc[0].to_dict()
+
+    uppdaterad_rad = visa_redigeringsformulär(rad, 0)
+    if uppdaterad_rad:
+        df = df[df["Dag"] != 0]
+        df = pd.concat([df, pd.DataFrame([uppdaterad_rad])], ignore_index=True)
+        df = update_calculations(df)
+        save_data(df)
+        st.success("Maxvärden uppdaterade.")
+    return df
+
+def kopiera_största_raden(df):
+    if df[df["Dag"] != 0].empty:
+        st.warning("Ingen rad att kopiera.")
+        return df
+
+    största = df[df["Dag"] != 0].sort_values("Män", ascending=False).iloc[0]
+    ny_rad = största.copy()
+    ny_rad["Dag"] = get_next_day(df)
+    ny_rad["Veckodag"] = veckodag_from_dag(ny_rad["Dag"])
+
+    rad = visa_redigeringsformulär(ny_rad, ny_rad["Dag"])
+    if rad:
+        df = lägg_till_rad(df, rad)
+        visa_varningar(rad)
+        st.success("Rad kopierad.")
+    return df
+
+def redigera_tidigare_rad(df):
+    st.subheader("✏️ Redigera tidigare rad")
+    if df[df["Dag"] != 0].empty:
+        st.warning("Inga rader att redigera.")
+        return df
+
+    valbara = df[df["Dag"] != 0]["Dag"].astype(int).tolist()
+    vald_dag = st.selectbox("Välj Dag att redigera", sorted(valbara, reverse=True))
+
+    rad = df[df["Dag"] == vald_dag].iloc[0].to_dict()
+    ny_rad = visa_redigeringsformulär(rad, vald_dag)
+    if ny_rad:
+        df = df[df["Dag"] != vald_dag]
+        df = pd.concat([df, pd.DataFrame([ny_rad])], ignore_index=True)
+        df = update_calculations(df)
+        save_data(df)
+        st.success(f"Dag {vald_dag} uppdaterad.")
+        visa_varningar(ny_rad)
+    return df
