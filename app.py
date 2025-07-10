@@ -1,46 +1,43 @@
 import streamlit as st
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
-from datetime import datetime
+import numpy as np
 import random
+from datetime import datetime, timedelta
+import gspread
+from google.oauth2 import service_account  # ✅ Viktig import
 
-# Definiera alla kolumnnamn som används i appen
+st.set_page_config(layout="wide")
+st.title("MalinApp – Datahantering & Statistik")
+
 ALL_COLUMNS = [
-    "Dag", "Jobb", "Grannar", "Tjej PojkV", "Nils fam", "Nya killar", "Älskar", "Sover med",
-    "DeepT", "Sekunder", "Vila mun", "Varv", "Tid trippel",
-    "DM", "DF", "DA", "TPP", "TAP", "TP",
-    "Fitta", "Röv", "Vila", "Svarta", "Pris",
-    "Omsättning 2025", "Omsättning 2026",
+    "Dag", "Jobb", "Grannar", "Tjej PojkV", "Nils fam", "Nya killar",
+    "Älskar", "Sover med", "Vila", "DeepT", "Sekunder", "Vila mun", "Varv",
+    "Fitta", "Röv", "DM", "DF", "DA", "TPP", "TAP", "TP",
+    "Tid singel", "Tid dubbel", "Tid trippel", "Tid mun",
+    "Summa singel", "Summa dubbel", "Summa trippel", "Summa tid",
+    "Sug", "Tid kille dt", "Tid kille",
+    "Män", "Kompisar", "Filmer", "Intäkter",
+    "Malin lön", "Kompisars lön", "ROI", "Kompisvärde",
+    "Svarta", "Hårdhet"
 ]
 
-# Setup autentisering mot Google Sheets
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
-client = gspread.authorize(credentials)
-
-# Funktion för att läsa in data från Google Sheets
 def las_in_data():
-    try:
-        sheet = client.open_by_url(st.secrets["SHEET_URL"]).worksheet("Blad1")
-        data = sheet.get_all_values()
-        if not data:
-            return pd.DataFrame(columns=ALL_COLUMNS)
-        df = pd.DataFrame(data[1:], columns=data[0])
-        df = df.apply(pd.to_numeric, errors="ignore")
-        return df
-    except Exception as e:
-        st.error(f"❌ Fel vid inläsning: {e}")
-        return pd.DataFrame(columns=ALL_COLUMNS)
+    creds = service_account.Credentials.from_service_account_info(
+        st.secrets["GOOGLE_CREDENTIALS"]
+    )
+    client = gspread.authorize(creds)
+    sheet = client.open_by_url(st.secrets["SHEET_URL"])
+    worksheet = sheet.sheet1
+    data = worksheet.get_all_records()
+    df = pd.DataFrame(data)
 
-# Funktion för att spara DataFrame till Google Sheets
-def spara_data(df):
-    try:
-        sheet = client.open_by_url(st.secrets["SHEET_URL"]).worksheet("Blad1")
-        sheet.clear()
-        sheet.update([df.columns.values.tolist()] + df.values.tolist())
-    except Exception as e:
-        st.error(f"❌ Kunde inte spara till Google Sheet: {e}")
+    # Om tomt, skapa en första rad med Dag=0 och alla kolumner
+    if df.empty:
+        df = pd.DataFrame(columns=ALL_COLUMNS)
+        df.loc[0] = [0] + [0] * (len(ALL_COLUMNS) - 1)
+
+    df = ensure_columns_exist(df, worksheet)
+    return df
 
 def las_in_data():
     client = gspread.service_account_from_dict(st.secrets["GOOGLE_CREDENTIALS"])
