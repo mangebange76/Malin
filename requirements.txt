@@ -1,7 +1,8 @@
 streamlit
 pandas
 numpy
-gspread
+gspread==5.11.3
 oauth2client
 gspread-dataframe
 toml
+google-auth==2.29.0
