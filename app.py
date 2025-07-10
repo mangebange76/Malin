@@ -1,365 +1,429 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import random
-import math
 
-# === AUTENTISERING ===
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1-bpY9Ahk9qKH2QIQzVUSZLX6qDc2UwjCmullMCNvENQ/edit"
-
+# Autentisering via secrets.toml
+SHEET_URL = st.secrets["SHEET_URL"]
 credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"])
 client = gspread.authorize(credentials)
 spreadsheet = client.open_by_url(SHEET_URL)
-sheet = spreadsheet.worksheet("Blad1")
+worksheet = spreadsheet.sheet1
 
-# === KONSTANTER ===
+# Kolumndefinitioner
 ALL_COLUMNS = [
-    "Dag", "Jobb", "Grannar", "Tjej PojkV", "Nils fam", "Älskar", "Sover med", "Nya killar",
-    "DM", "DF", "DA", "TPP", "TAP", "TP", "Fitta", "Röv", "DeepT", "Sekunder", "Vila",
-    "Vila mun", "Varv", "Svarta", "Tid singel", "Tid dubbel", "Tid trippel", "Tid mun",
-    "Summa singel", "Summa dubbel", "Summa trippel", "Suger", "Totalt män", "Tid kille dt",
-    "Tid kille", "Summa tid", "Intäkter", "Malin lön", "Kompisars lön", "Filmer", "Hårdhet"
+    "Dag", "Jobb", "Grannar", "Tjej PojkV", "Nils fam", "Nya killar",
+    "Älskar", "Sover med", "Vila", "Älsk tid", "DeepT", "Sekunder", "Vila mun", "Varv",
+    "DM", "DF", "DA", "TPP", "TAP", "TP", "Fitta", "Röv", "Svarta",
+    "Tid singel", "Tid dubbel", "Tid trippel", "Tid mun", "Tid kille dt",
+    "Summa singel", "Summa dubbel", "Summa trippel", "Suger",
+    "Tid kille", "Summa tid", "Intäkter", "Malin lön", "Kompisar lön",
+    "Filmer", "Hårdhet", "Oms 2027", "Aktuell kurs", "Kompis aktievärde"
 ]
 
-MANUAL_FIELDS = [
-    "Dag", "Jobb", "Grannar", "Tjej PojkV", "Nils fam", "Älskar", "Sover med", "Nya killar",
-    "DM", "DF", "DA", "TPP", "TAP", "TP", "Fitta", "Röv", "DeepT", "Sekunder", "Vila",
-    "Vila mun", "Varv", "Svarta"
-]
-
-# === LADDA IN DATA ===
-@st.cache_data(ttl=60)
-def load_data():
-    data = sheet.get_all_records()
+# Funktion: läs in data
+def read_data():
+    data = worksheet.get_all_records()
     df = pd.DataFrame(data)
-    if df.empty:
-        df = pd.DataFrame(columns=ALL_COLUMNS)
-    df = df.reindex(columns=ALL_COLUMNS, fill_value=0)
-    df[ALL_COLUMNS] = df[ALL_COLUMNS].fillna(0)
-    return df.astype({col: int for col in ALL_COLUMNS if col != "Intäkter" and col != "Malin lön" and col != "Kompisars lön"})
+    df = ensure_columns_exist(df)
+    return df
 
-df = load_data()
+# Funktion: se till att alla kolumner finns
+def ensure_columns_exist(df):
+    for col in ALL_COLUMNS:
+        if col not in df.columns:
+            df[col] = 0
+    return df
 
-# === HÄMTA MAXVÄRDEN FRÅN DAG = 0 ===
+# Funktion: spara DataFrame till Google Sheets
+def save_data(df):
+    worksheet.clear()
+    worksheet.update([df.columns.values.tolist()] + df.astype(str).values.tolist())
+
+# Funktion: hämta maxvärden från rad med Dag = 0
 def hamta_maxvarden(df):
     maxrad = df[df["Dag"] == 0]
     if maxrad.empty:
         return {"Jobb": 0, "Grannar": 0, "Tjej PojkV": 0, "Nils fam": 0}
     return {
-        "Jobb": int(maxrad["Jobb"].iloc[0]),
-        "Grannar": int(maxrad["Grannar"].iloc[0]),
-        "Tjej PojkV": int(maxrad["Tjej PojkV"].iloc[0]),
-        "Nils fam": int(maxrad["Nils fam"].iloc[0])
+        "Jobb": int(maxrad["Jobb"].values[0]),
+        "Grannar": int(maxrad["Grannar"].values[0]),
+        "Tjej PojkV": int(maxrad["Tjej PojkV"].values[0]),
+        "Nils fam": int(maxrad["Nils fam"].values[0])
     }
 
-def formulär_maxvärden(df):
-    st.subheader("Ange maxvärden (Dag = 0)")
-    with st.form("maxvärden_formulär"):
-        jobb = st.number_input("Jobb", min_value=0, value=0)
-        grannar = st.number_input("Grannar", min_value=0, value=0)
-        tjej = st.number_input("Tjej PojkV", min_value=0, value=0)
-        nils = st.number_input("Nils fam", min_value=0, value=0)
-        submitted = st.form_submit_button("Spara maxvärden")
-        if submitted:
-            ny_rad = pd.DataFrame([{
-                "Dag": 0, "Jobb": jobb, "Grannar": grannar,
-                "Tjej PojkV": tjej, "Nils fam": nils
-            }], columns=ALL_COLUMNS).fillna(0)
-            df = df[df["Dag"] != 0]
-            df = pd.concat([ny_rad, df], ignore_index=True)
-            sheet.clear()
-            sheet.update([df.columns.values.tolist()] + df.astype(str).values.tolist())
-            st.success("Maxvärden sparade. Starta om appen.")
-            st.stop()
-    return df
+# Funktion: validera mot maxvärden (gäller ej Dag = 0)
+def validera_maxvarden(rad, maxvarden):
+    if rad["Dag"] == 0:
+        return True
+    if int(rad["Jobb"]) > maxvarden["Jobb"]:
+        return False
+    if int(rad["Grannar"]) > maxvarden["Grannar"]:
+        return False
+    if int(rad["Tjej PojkV"]) > maxvarden["Tjej PojkV"]:
+        return False
+    if int(rad["Nils fam"]) > maxvarden["Nils fam"]:
+        return False
+    return True
 
-# === VALIDERA MOT MAXVÄRDEN ===
-def validera_maxvarden(ny_rad, maxv):
-    for kolumn in ["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]:
-        if ny_rad[kolumn] > maxv[kolumn]:
-            st.error(f"{kolumn} = {ny_rad[kolumn]} överskrider maxvärde ({maxv[kolumn]}). Uppdatera max först.")
-            st.stop()
+# Funktion: skapa tom rad med alla fält
+def skapa_tom_rad():
+    return {col: 0 for col in ALL_COLUMNS}
 
-# === REDIGERA RADER ===
-def visa_redigeringsformulär(rad, index, df):
-    st.subheader(f"Redigera rad {index} (Dag: {rad['Dag']})")
-    with st.form(f"redigera_form_{index}"):
-        nya_värden = {}
-        for kolumn in MANUAL_FIELDS:
-            nya_värden[kolumn] = st.number_input(kolumn, min_value=0, value=int(rad[kolumn]), key=f"{kolumn}_{index}")
-        if st.form_submit_button("Spara redigerad rad"):
-            for kolumn in MANUAL_FIELDS:
-                df.at[index, kolumn] = nya_värden[kolumn]
-            return df
-    return df
-
-# === KOLLA KOLUMNER ===
-def ensure_columns_exist(df):
+# Funktion: skapa ny rad från formulär
+def skapa_rad_från_formulär(maxvarden):
+    st.subheader("Ny rad (manuell)")
+    ny_rad = {}
     for col in ALL_COLUMNS:
-        if col not in df.columns:
-            df[col] = 0
-    return df[ALL_COLUMNS]
+        if col == "Dag":
+            ny_rad[col] = st.number_input(col, step=1, value=1)
+        elif col in ["Jobb", "Grannar", "Tjej PojkV", "Nils fam", "Nya killar", "Älskar", "Sover med", "Vila", "Älsk tid",
+                     "DeepT", "Sekunder", "Vila mun", "Varv", "DM", "DF", "DA", "TPP", "TAP", "TP", "Fitta", "Röv", "Svarta",
+                     "Tid singel", "Tid dubbel", "Tid trippel", "Oms 2027"]:
+            ny_rad[col] = st.number_input(col, step=1, value=0)
+        else:
+            ny_rad[col] = 0
+    return ny_rad
 
-# === BERÄKNINGAR ===
 def update_calculations(df):
-    df = ensure_columns_exist(df)
-    df[NUMERISKA_KOL] = df[NUMERISKA_KOL].fillna(0)
-    
+    # Maxrad (Dag = 0) används för vänner
     maxrad = df[df["Dag"] == 0]
-    vänner = maxrad[["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]].sum().sum()
+    vänner = 0
+    if not maxrad.empty:
+        vänner = maxrad[["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]].sum().sum()
 
     df["Män"] = df["Nya killar"] + vänner
-    df["Snitt"] = df["DeepT"] / df["Män"].replace(0, 1)
-    df["Tid mun"] = ((df["Snitt"] * df["Sekunder"]) + df["Vila mun"]) * df["Varv"]
-    
+
+    df["Snitt"] = df.apply(lambda row: row["DeepT"] / row["Män"] if row["Män"] > 0 else 0, axis=1)
+    df["Tid mun"] = (df["Snitt"] * df["Sekunder"] + df["Vila mun"]) * df["Varv"]
+    df["Tid kille dt"] = df.apply(lambda row: row["Tid mun"] / row["Män"] if row["Män"] > 0 else 0, axis=1)
+
     df["Summa singel"] = (df["Tid singel"] + df["Vila"]) * (df["Män"] + df["Fitta"] + df["Röv"])
-    df["Summa dubbel"] = ((df["Tid dubbel"] + df["Vila"]) + 8) * (df["DM"] + df["DF"] + df["DA"])
-    df["Summa trippel"] = ((df["Tid trippel"] + df["Vila"]) + 15) * (df["TPP"] + df["TAP"] + df["TP"])
+    df["Summa dubbel"] = ((df["Tid dubbel"] + df["Vila"] + 8) * (df["DM"] + df["DF"] + df["DA"]))
+    df["Summa trippel"] = ((df["Tid trippel"] + df["Vila"] + 15) * (df["TPP"] + df["TAP"] + df["TP"]))
 
-    df["Suger"] = (df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"]) * 0.6 / df["Män"].replace(0, 1)
-    df["Tid kille dt"] = (df["Snitt"] * df["Sekunder"] * df["Varv"]) / df["Män"].replace(0, 1)
+    df["Suger"] = df.apply(lambda row: (
+        0.6 * (row["Summa singel"] + row["Summa dubbel"] + row["Summa trippel"]) / row["Män"]
+        if row["Män"] > 0 else 0), axis=1)
 
-    df["Tid kille"] = (
-        df["Tid singel"]
-        + df["Tid dubbel"] * 2
-        + df["Tid trippel"] * 3
-        + df["Suger"]
-        + df["Tid kille dt"]
-        + df["Tid mun"]
-    ) / 60
+    df["Tid kille"] = df["Tid singel"] + df["Tid dubbel"] * 2 + df["Tid trippel"] * 3 + df["Suger"] + df["Tid mun"] + df["Tid kille dt"]
+
+    df["Tidsåtgång"] = (df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"] + df["Tid mun"] +
+                        df["Älskar"] * 1800 + df["Sover med"] * 1800)
+    df["Tidsåtgång"] = df["Tidsåtgång"] / 3600  # till timmar
+    df["Tid kille"] = df["Tid kille"] / 60  # till minuter
 
     df["Filmer"] = (
-        (df["Män"] + df["Fitta"] + df["Röv"] + df["DM"]*2 + df["DF"]*2 + df["DA"]*3 + df["TPP"]*4 + df["TAP"]*6 + df["TP"]*5)
-        * df.apply(lambda r: (
-            (1 if r["Nya killar"] > 0 else 0)
-            + (2 if r["DM"] > 0 else 0)
-            + (3 if r["DF"] > 0 else 0)
-            + (4 if r["DA"] > 0 else 0)
-            + (5 if r["TPP"] > 0 else 0)
-            + (7 if r["TAP"] > 0 else 0)
-            + (6 if r["TP"] > 0 else 0)
-        ), axis=1)
+        df["Män"] + df["Fitta"] + df["Röv"] +
+        df["DM"] * 2 + df["DF"] * 2 + df["DA"] * 3 +
+        df["TPP"] * 4 + df["TAP"] * 6 + df["TP"] * 5
     )
 
-    df["Intäkter"] = df["Filmer"] * 39.99
-    df["Malin lön"] = df["Intäkter"] * 0.01
-    df.loc[df["Malin lön"] > 700, "Malin lön"] = 700
-
-    df["Summa tid (sek)"] = (
-        df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"]
-        + df["Tid mun"] + df["Sover med"] * 1800 + df["Älskar"] * 1800
+    df["Hårdhet"] = (
+        (df["Nya killar"] > 0).astype(int) +
+        (df["DM"] > 0).astype(int) * 2 +
+        (df["DF"] > 0).astype(int) * 3 +
+        (df["DA"] > 0).astype(int) * 4 +
+        (df["TPP"] > 0).astype(int) * 5 +
+        (df["TAP"] > 0).astype(int) * 7 +
+        (df["TP"] > 0).astype(int) * 6
     )
-    df["Summa tid (h)"] = df["Summa tid (sek)"] / 3600
+
+    df["Intäkter"] = df["Filmer"] * df["Hårdhet"] * 39.99
+    df["Malin lön"] = df["Intäkter"].apply(lambda x: min(x * 0.01, 700))
+
+    df["Kompisars lön"] = df.apply(lambda row: (
+        row["Intäkter"] / vänner if vänner > 0 else 0), axis=1)
+
     return df
 
-# === SPARA NY RAD ===
-def spara_ny_rad(df, ny_rad_dict):
-    maxv = hamta_maxvarden(df)
-    validera_maxvarden(ny_rad_dict, maxv)
-    ny_rad = pd.DataFrame([ny_rad_dict], columns=ALL_COLUMNS).fillna(0)
-    df = pd.concat([df, ny_rad], ignore_index=True)
+def spara_rad(ny_rad, df, worksheet):
+    df = pd.concat([df, pd.DataFrame([ny_rad])], ignore_index=True)
     df = update_calculations(df)
-    sheet.clear()
-    sheet.update([df.columns.values.tolist()] + df.astype(str).values.tolist())
+
+    # Spara tillbaka hela df till Google Sheet
+    worksheet.update([df.columns.values.tolist()] + df.values.tolist())
+
+    # Varningar efter sparad rad
+    sista = df.iloc[-1]
+    if sista["Tidsåtgång"] > 17:
+        st.warning("⚠️ Tidsåtgång överstiger 17 timmar.")
+    if sista["Tid kille"] < 9:
+        st.warning("⚠️ Tid kille är under 9 minuter.")
+    elif sista["Tid kille"] > 15:
+        st.warning("⚠️ Tid kille är över 15 minuter.")
+
     return df
 
-# === HÄMTA MAXVÄRDEN ===
-def hamta_maxvarden(df):
-    maxrad = df[df["Dag"] == 0]
-    if maxrad.empty:
-        return {"Jobb": 0, "Grannar": 0, "Tjej PojkV": 0, "Nils fam": 0}
-    return maxrad[["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]].iloc[0].to_dict()
-
-def validera_maxvarden(rad, maxv):
-    for nyckel in ["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]:
-        if rad.get(nyckel, 0) > maxv.get(nyckel, 0):
-            raise ValueError(f"{nyckel} överskrider maxvärdet ({rad[nyckel]} > {maxv[nyckel]}). Uppdatera maxvärden först.")
-
-# === FORMULÄR FÖR MAXVÄRDEN ===
-def formulär_maxvärden():
-    st.subheader("⚙️ Ange maxvärden (Dag = 0)")
-    med = {"Dag": 0}
-    for fält in ["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]:
-        med[fält] = st.number_input(fält, step=1, value=0, key=f"max_{fält}")
-    if st.button("Spara maxvärden"):
-        df = ladda_data()
-        df = df[df["Dag"] != 0]
-        ny = pd.DataFrame([med], columns=ALL_COLUMNS).fillna(0)
-        df = pd.concat([ny, df], ignore_index=True)
-        df = update_calculations(df)
-        sheet.clear()
-        sheet.update([df.columns.values.tolist()] + df.astype(str).values.tolist())
-        st.success("Maxvärden sparade.")
-
-# === NY RAD MANUELLT ===
-def ny_rad_manuellt_form(df):
-    st.subheader("➕ Lägg till ny rad manuellt")
-    maxv = hamta_maxvarden(df)
-    ny = {"Dag": st.number_input("Dag", min_value=1, step=1, key="man_dag")}
-    for kol in ALL_COLUMNS:
-        if kol == "Dag" or kol not in NUMERISKA_KOL:
-            continue
-        ny[kol] = st.number_input(kol, step=1, value=0, key=f"man_{kol}")
-    if st.button("Spara rad"):
-        try:
-            df = spara_ny_rad(df, ny)
-            st.success("Rad sparad.")
-            visa_varningar(df.iloc[-1])
-        except Exception as e:
-            st.error(str(e))
+def redigera_och_spara(index, redigerade_data, df, worksheet):
+    for nyckel, värde in redigerade_data.items():
+        df.at[index, nyckel] = värde
+    df = update_calculations(df)
+    worksheet.update([df.columns.values.tolist()] + df.values.tolist())
     return df
 
-# === KOPIERA STÖRSTA RADEN ===
-def kopiera_storsta_raden(df):
-    if df.empty: return {}
-    rad = df[df["Dag"] != 0].sort_values("Män", ascending=False).iloc[0].to_dict()
-    rad["Dag"] = st.number_input("Dag", min_value=1, step=1, key="copy_dag")
-    for k in NUMERISKA_KOL:
-        rad[k] = st.number_input(k, step=1, value=int(rad.get(k, 0)), key=f"copy_{k}")
-    if st.button("Spara kopierad rad"):
-        try:
-            df = spara_ny_rad(df, rad)
-            st.success("Rad kopierad.")
-            visa_varningar(df.iloc[-1])
-        except Exception as e:
-            st.error(str(e))
-    return df
-
-# === SLUMPA FILM ===
-def slumpa_film(liten=True):
-    rad = {"Dag": st.number_input("Dag", min_value=1, step=1, key="slump_dag")}
-    intervall = INTERVALL_LITEN if liten else INTERVALL_STOR
-    for kol, (botten, toppen) in intervall.items():
-        rad[kol] = random.randint(botten, toppen)
-    rad["Vila"] = 7
-    rad["Sover med"] = 1
-    rad["Älskar"] = 8
-    rad["Älsk tid"] = 30
-    return rad
-
-# === VILA-KNAPPAR ===
-def vilodag_knapp(df, typ):
-    st.subheader(f"🛏️ Vilodag: {typ}")
-    dag = st.number_input("Dag", min_value=1, step=1, key=f"vila_dag_{typ}")
-    rad = {"Dag": dag}
-    maxv = hamta_maxvarden(df)
-    for nyckel in maxv:
-        if typ == "jobb":
-            rad[nyckel] = int(maxv[nyckel] * 0.3)
-        elif typ == "hemma":
-            rad[nyckel] = maxv[nyckel]
-        elif typ == "helt":
-            rad[nyckel] = 0
-    for kol in NUMERISKA_KOL:
-        if kol not in rad:
-            rad[kol] = 0
-    rad["Vila"] = 24
-    if st.button(f"Spara vilodag ({typ})"):
-        try:
-            df = spara_ny_rad(df, rad)
-            st.success("Vilodag sparad.")
-            visa_varningar(df.iloc[-1])
-        except Exception as e:
-            st.error(str(e))
-    return df
-
-# === REDIGERA FORMULÄR (för alla knappar) ===
-def visa_redigeringsformulär(rad):
-    st.subheader("✏️ Redigera före spara")
-    ny = {"Dag": rad.get("Dag", 1)}
-    for kol in ALL_COLUMNS:
-        if kol == "Dag": continue
-        ny[kol] = st.number_input(kol, step=1, value=int(rad.get(kol, 0)), key=f"edit_{kol}")
-    if st.button("Spara redigerad rad"):
-        try:
-            df = ladda_data()
-            df = spara_ny_rad(df, ny)
-            st.success("Redigerad rad sparad.")
-            visa_varningar(df.iloc[-1])
-            return df
-        except Exception as e:
-            st.error(str(e))
-    return None
-
-# === STATISTIKVY ===
 def statistikvy(df):
-    st.subheader("📊 Statistik")
-    df = df.copy()
-    df = df[df["Dag"] != 0]
     df = update_calculations(df)
 
-    totalt_tid = df["Summa tid"].sum()
-    antal_män = df["Män"].sum()
-    antal_filmer = df["Filmer"].sum()
-    totalt_intakt = df["Totala intäkter"].sum()
-    totalt_malin = df["Malin lön"].sum()
-    totalt_alskar = df["Älskar"].sum()
-    totalt_sover = df["Sover med"].sum()
-    totalt_killar = df["Nya killar"].sum()
-    totalt_kompisar = df["Känner"].sum()
-    roi_denominator = totalt_alskar + totalt_sover + totalt_killar + totalt_kompisar
-    roi_per_man = totalt_malin / roi_denominator if roi_denominator > 0 else 0
+    # Statistik endast på rader där Dag ≠ 0
+    df_stats = df[df["Dag"] != 0].copy()
 
-    st.write(f"**⏱️ Total tid:** {round(totalt_tid, 2)} timmar")
-    st.write(f"**👨 Antal män:** {antal_män}")
-    st.write(f"**🎬 Filmer:** {antal_filmer}")
-    st.write(f"**💰 Intäkter totalt:** {round(totalt_intakt, 2)} USD")
-    st.write(f"**💸 Malin lön:** {round(totalt_malin, 2)} USD")
-    st.write(f"**📈 ROI per man:** {round(roi_per_man, 2)} USD")
+    st.header("📊 Statistik")
 
-    maxv = hamta_maxvarden(df)
-    sista_kurs = df["Aktuell kurs"].dropna().iloc[-1] if "Aktuell kurs" in df and not df["Aktuell kurs"].isna().all() else 0
-    antal_kompisar = maxv.sum()
-    totalt_varde = 5000 * sista_kurs
-    varde_per_person = totalt_varde / antal_kompisar if antal_kompisar > 0 else 0
-    st.write(f"**📦 Kompisars aktievärde totalt:** {round(totalt_varde, 2)} USD")
-    st.write(f"**👤 Aktievärde per kompis:** {round(varde_per_person, 2)} USD")
+    sum_malin_lön = df_stats["Malin lön"].sum()
+    antal_män = df_stats["Män"].sum()
+    antal_filmer = df_stats["Filmer"].sum()
+    älskar = df_stats["Älskar"].sum()
+    sover_med = df_stats["Sover med"].sum()
+    nya_killar = df_stats["Nya killar"].sum()
+    känner = df_stats["Jobb"].sum() + df_stats["Grannar"].sum() + df_stats["Tjej PojkV"].sum() + df_stats["Nils fam"].sum()
 
-# === VARNINGAR EFTER SPARAD RAD ===
-def visa_varningar(rad):
-    if rad.get("Summa tid", 0) > 17:
-        st.warning("⚠️ Summa tid överstiger 17 timmar!")
-    if rad.get("Tid kille", 0) < 9 or rad.get("Tid kille", 0) > 15:
-        st.warning("⚠️ Tid kille ligger utanför 9–15 min!")
+    total_tid = df_stats["Tidsåtgång"].sum()
+    total_intakt = df_stats["Intäkter"].sum()
+    kompis_lön_sum = df_stats["Kompisars lön"].sum()
 
-# === MENY OCH MAIN ===
+    st.markdown(f"**Totala män:** {antal_män}")
+    st.markdown(f"**Totalt antal filmer:** {antal_filmer}")
+    st.markdown(f"**Summa Malin lön:** {sum_malin_lön:,.2f} USD")
+    st.markdown(f"**Summa kompisars lön:** {kompis_lön_sum:,.2f} USD")
+    st.markdown(f"**Totala intäkter:** {total_intakt:,.2f} USD")
+    st.markdown(f"**Total tidsåtgång:** {total_tid:.2f} timmar")
+
+    total_personer = älskar + sover_med + nya_killar + känner
+    roi = sum_malin_lön / total_personer if total_personer > 0 else 0
+    st.markdown(f"**Malin ROI per man:** {roi:.2f} USD")
+
+    # Kompisars aktievärde
+    sista_kurs = df_stats["Intäkter"].iloc[-1] / df_stats["Filmer"].iloc[-1] if df_stats["Filmer"].iloc[-1] > 0 else 0
+    kompis_varde_total = 5000 * sista_kurs
+    per_person = kompis_varde_total / känner if känner > 0 else 0
+
+    st.markdown(f"**Kompisars aktievärde totalt:** {kompis_varde_total:,.2f} USD")
+    st.markdown(f"**Kompisars aktievärde per person:** {per_person:,.2f} USD")
+
+def visa_formulär(titel, förifylld_rad, df, worksheet):
+    st.subheader(titel)
+    med_form = st.form(key=titel)
+    ny_rad = {}
+
+    for kolumn in ALL_COLUMNS:
+        if kolumn == "Dag":
+            ny_rad[kolumn] = med_form.number_input(kolumn, value=int(förifylld_rad.get(kolumn, 1)))
+        elif kolumn in NUMERIC_COLUMNS:
+            ny_rad[kolumn] = med_form.number_input(kolumn, value=float(förifylld_rad.get(kolumn, 0)))
+        else:
+            ny_rad[kolumn] = med_form.text_input(kolumn, value=förifylld_rad.get(kolumn, ""))
+
+    submit = med_form.form_submit_button("Spara redigerad rad")
+    if submit:
+        df = spara_rad(ny_rad, df, worksheet)
+        st.success("Rad sparad.")
+    return df
+
+def slumpa_värde(minv, maxv):
+    return random.randint(minv, maxv) if maxv > minv else maxv
+
+def slumpa_rad(df, liten=False):
+    maxrad = df[df["Dag"] == 0].copy()
+    ny = {"Dag": df["Dag"].max() + 1}
+
+    for kolumn in ALL_COLUMNS:
+        if kolumn == "Dag":
+            continue
+        elif kolumn == "Älskar":
+            ny[kolumn] = 8
+        elif kolumn == "Sover med":
+            ny[kolumn] = 1
+        elif kolumn == "Vila":
+            ny[kolumn] = 7
+        elif kolumn == "Älsk tid":
+            ny[kolumn] = 30
+        elif kolumn in maxrad.columns:
+            maxv = maxrad[kolumn].max()
+            if liten:
+                ny[kolumn] = slumpa_värde(0, max(1, maxv // 3))
+            else:
+                ny[kolumn] = slumpa_värde(0, maxv)
+        else:
+            ny[kolumn] = 0
+    return ny
+
+def kopiera_största_rad(df):
+    största = df[df["Dag"] != 0].sort_values("Män", ascending=False).iloc[0]
+    ny = största.to_dict()
+    ny["Dag"] = df["Dag"].max() + 1
+    return ny
+
+def vilodag_typ(df, hemma=True):
+    maxrad = df[df["Dag"] == 0].copy()
+    ny = {"Dag": df["Dag"].max() + 1}
+    grupper = ["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]
+
+    for kolumn in ALL_COLUMNS:
+        if kolumn == "Dag":
+            continue
+        elif kolumn in grupper:
+            maxv = maxrad[kolumn].max()
+            ny[kolumn] = int(round(maxv * (0.3 if not hemma else 1.0)))
+        else:
+            ny[kolumn] = 0
+    return ny
+
 def main():
-    st.title("📒 MalinApp")
-    df = ladda_data()
-    menyval = st.sidebar.selectbox("Meny", ["Ny rad manuellt", "Slumpa film liten", "Slumpa film stor", "Vilodag hemma", "Vilodag jobb", "Vilodag helt", "Kopiera största raden", "Statistik"])
+    st.title("Malin App")
+    creds = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"])
+    gc = gspread.authorize(creds)
+    spreadsheet = gc.open_by_url(SHEET_URL)
+    worksheet = spreadsheet.worksheet(WORKSHEET_NAME)
 
-    if kontrollera_om_maxraden_finns(df):
-        df = formulär_maxvärden(df)
+    df = pd.DataFrame(worksheet.get_all_records())
+    df = ensure_columns_exist(df, worksheet)
+    df = update_calculations(df)
 
-    if menyval == "Ny rad manuellt":
-        df = formulär_ny_rad(df)
-    elif menyval == "Slumpa film liten":
-        rad = slumpa_film(liten=True)
-        df_ny = visa_redigeringsformulär(rad)
-        if df_ny is not None:
-            df = df_ny
-    elif menyval == "Slumpa film stor":
-        rad = slumpa_film(liten=False)
-        df_ny = visa_redigeringsformulär(rad)
-        if df_ny is not None:
-            df = df_ny
-    elif menyval == "Vilodag hemma":
-        df = vilodag_knapp(df, "hemma")
-    elif menyval == "Vilodag jobb":
-        df = vilodag_knapp(df, "jobb")
-    elif menyval == "Vilodag helt":
-        df = vilodag_knapp(df, "helt")
-    elif menyval == "Kopiera största raden":
-        rad = df[df["Män"] == df["Män"].max()].iloc[-1].to_dict()
-        rad["Dag"] = st.number_input("Dag", min_value=1, step=1, key="kopiera_dag")
-        df_ny = visa_redigeringsformulär(rad)
-        if df_ny is not None:
-            df = df_ny
-    elif menyval == "Statistik":
+    menyval = st.sidebar.selectbox("Välj vy", [
+        "Visa statistik", "Ny rad manuellt", "Slumpa film liten", "Slumpa film stor",
+        "Vilodag hemma", "Vilodag jobb", "Kopiera största raden"
+    ])
+
+    if menyval == "Visa statistik":
         statistikvy(df)
+    else:
+        maxrad = df[df["Dag"] == 0]
+        if maxrad.empty:
+            st.warning("Du måste först fylla i maxvärden (Dag = 0)")
+            ny_maxrad = {kol: 0 for kol in ALL_COLUMNS}
+            ny_maxrad["Dag"] = 0
+            ny_maxrad = visa_formulär("Ange maxvärden (Dag=0)", ny_maxrad, df, worksheet)
+        else:
+            if menyval == "Ny rad manuellt":
+                ny_rad = {kol: 0 for kol in ALL_COLUMNS}
+                ny_rad["Dag"] = int(df["Dag"].max() + 1)
+            elif menyval == "Slumpa film liten":
+                ny_rad = slumpa_rad(df, liten=True)
+            elif menyval == "Slumpa film stor":
+                ny_rad = slumpa_rad(df, liten=False)
+            elif menyval == "Vilodag hemma":
+                ny_rad = vilodag_typ(df, hemma=True)
+            elif menyval == "Vilodag jobb":
+                ny_rad = vilodag_typ(df, hemma=False)
+            elif menyval == "Kopiera största raden":
+                ny_rad = kopiera_största_rad(df)
+            else:
+                ny_rad = {kol: 0 for kol in ALL_COLUMNS}
+
+            df = visa_formulär("Redigera ny rad innan spara", ny_rad, df, worksheet)
 
 if __name__ == "__main__":
     main()
+
+def spara_rad(rad, worksheet):
+    values = worksheet.get_all_values()
+    headers = values[0]
+    new_row = [rad.get(col, "") for col in headers]
+    worksheet.append_row(new_row)
+    st.success("Raden har sparats.")
+
+def ensure_columns_exist(df, worksheet):
+    existing_cols = df.columns.tolist()
+    for col in ALL_COLUMNS:
+        if col not in existing_cols:
+            df[col] = 0
+    worksheet.update([df.columns.tolist()] + df.values.tolist())
+    return df
+
+def update_calculations(df):
+    def get_maxrad():
+        return df[df["Dag"] == 0]
+
+    def get_vänner():
+        maxrad = get_maxrad()
+        return maxrad[["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]].sum().sum()
+
+    df = df.copy()
+    df["Män"] = df["Nya killar"] + get_vänner()
+    df["Snitt"] = df["DeepT"] / df["Män"].replace(0, 1)
+    df["Tid mun"] = ((df["Snitt"] * df["Sekunder"]) + df["Vila mun"]) * df["Varv"]
+
+    df["Summa singel"] = (df["Tid singel"] + df["Vila"] * (df["Män"] + df["Fitta"] + df["Röv"]))
+    df["Summa dubbel"] = ((df["Tid dubbel"] + df["Vila"] + 8) * (df["DM"] + df["DF"] + df["DA"]))
+    df["Summa trippel"] = ((df["Tid trippel"] + df["Vila"] + 15) * (df["TPP"] + df["TAP"] + df["TP"]))
+
+    df["Suger"] = 0.6 * (df["Summa singel"] + df["Summa dubbel"] + df["Summa trippel"]) / df["Män"].replace(0, 1)
+    df["Tid kille dt"] = (df["Snitt"] * df["Sekunder"] * df["Varv"]) / df["Män"].replace(0, 1)
+
+    df["Tid kille"] = (
+        df["Tid singel"] +
+        (df["Tid dubbel"] * 2) +
+        (df["Tid trippel"] * 3) +
+        df["Suger"] +
+        df["Tid kille dt"] +
+        df["Tid mun"]
+    )
+
+    df["Summa tid"] = (
+        df["Summa singel"] +
+        df["Summa dubbel"] +
+        df["Summa trippel"] +
+        df["Tid mun"] +
+        (df["Älskar"] * 1800) +
+        (df["Sover med"] * 1800)
+    )
+
+    df["Tidsåtgång (h)"] = df["Summa tid"] / 3600
+    df["Tid kille (min)"] = df["Tid kille"] / 60
+
+    df["Filmer"] = (
+        df["Män"] + df["Fitta"] + df["Röv"] +
+        df["DM"] * 2 + df["DF"] * 2 + df["DA"] * 3 +
+        df["TPP"] * 4 + df["TAP"] * 6 + df["TP"] * 5
+    ) * df.apply(lambda r: (
+        0 + 1*(r["Nya killar"] > 0) + 2*(r["DM"] > 0) +
+        3*(r["DF"] > 0) + 4*(r["DA"] > 0) +
+        5*(r["TPP"] > 0) + 7*(r["TAP"] > 0) + 6*(r["TP"] > 0)
+    ), axis=1)
+
+    df["Intäkter"] = df["Filmer"] * 39.99
+    df["Malin lön"] = df["Intäkter"] * 0.01
+    df["Malin lön"] = df["Malin lön"].apply(lambda x: min(x, 700))
+
+    vänner = get_vänner()
+    df["Kompisars lön"] = df["Intäkter"] / vänner if vänner else 0
+
+    sista_kurs = df["Aktuell kurs"].dropna().iloc[-1] if "Aktuell kurs" in df.columns else 0
+    df["Kompis aktievärde"] = round((5000 * sista_kurs) / vänner, 2) if vänner else 0
+
+    return df
+
+def statistikvy(df):
+    st.header("📊 Statistik")
+
+    summering = {
+        "Totala män": df["Män"].sum(),
+        "Totalt älskat": df["Älskar"].sum(),
+        "Totalt antal filmer": df["Filmer"].sum(),
+        "Totala intäkter (USD)": round(df["Intäkter"].sum(), 2),
+        "Total Malin-lön (USD)": round(df["Malin lön"].sum(), 2),
+        "Total tid (timmar)": round(df["Summa tid"].sum() / 3600, 2)
+    }
+
+    st.subheader("Sammanställning")
+    for k, v in summering.items():
+        st.markdown(f"**{k}**: {v}")
+
+    tot_män = (
+        df["Älskar"].sum() + df["Sover med"].sum() +
+        df["Nya killar"].sum() + df["Känner"].sum()
+    )
+    if tot_män > 0:
+        roi = df["Malin lön"].sum() / tot_män
+        st.subheader("📈 Malin ROI per man")
+        st.markdown(f"**{roi:.2f} USD/man**")
+
+    sista_kurs = df["Aktuell kurs"].dropna().iloc[-1] if "Aktuell kurs" in df.columns else 0
+    vänner = df[df["Dag"] == 0][["Jobb", "Grannar", "Tjej PojkV", "Nils fam"]].sum().sum()
+    if vänner:
+        aktievärde = (5000 * sista_kurs) / vänner
+        st.subheader("📈 Kompisars aktievärde per person")
+        st.markdown(f"**{aktievärde:.2f} USD/person**")
