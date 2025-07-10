@@ -311,3 +311,20 @@ def visa_redigeringsformulär(rad, dag):
         if st.form_submit_button("Spara redigerad rad"):
             return ny_rad
     return None
+def main():
+    st.title("🎬 Malins Filmapp")
+
+    df = load_data()
+
+    st.sidebar.title("Meny")
+    val = st.sidebar.radio("Välj vy:", ["Statistik", "Slumpa film liten", "Slumpa film stor"])
+
+    if val == "Statistik":
+        statistikvy(df)
+    elif val == "Slumpa film liten":
+        df = slumpa_film(df, "liten")
+    elif val == "Slumpa film stor":
+        df = slumpa_film(df, "stor")
+
+if __name__ == "__main__":
+    main()
