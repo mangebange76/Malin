@@ -1,254 +1,265 @@
 import streamlit as st
 import pandas as pd
 import gspread
-from datetime import datetime
 import random
-import math
-from google.oauth2.service_account import Credentials
+from datetime import datetime
+import time
 
-st.set_page_config(page_title="Malin – Filmdata", layout="wide")
+st.set_page_config(page_title="Malin Scenplanering", layout="wide")
 
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1--mqpIEEta9An4kFvHZBJoFlRz1EtozxCy2PnD4PNJ0/edit?usp=drivesdk"
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-creds = Credentials.from_service_account_info(
-    st.secrets["GOOGLE_CREDENTIALS"], scopes=SCOPES
-)
-gc = gspread.authorize(creds)
+
+# Autentisering
+gc = gspread.service_account_from_dict(st.secrets["GOOGLE_CREDENTIALS"])
 sh = gc.open_by_url(SPREADSHEET_URL)
 
-# Initiera blad
-try:
-    inst_sheet = sh.worksheet("Inställningar")
-except:
-    inst_sheet = sh.add_worksheet(title="Inställningar", rows="10", cols="3")
-    inst_sheet.update("A1:B5", [
-        ["Inställning", "Värde"],
-        ["Senast kända kurs", 1.0],
-        ["Senaste prenumeranter", 0],
-        ["Totalt kompisar", 0],
-        ["Totalt pappans vänner", 0],
-        ["Totalt Nils vänner", 0],
-        ["Totalt Nils familj", 0],
-        ["Senast ändrad", str(datetime.now())]
-    ])
+# ░▒▓ Skapa inställningsblad ▓▒░
+def skapa_inställningsblad_om_saknas(gc, sh):
+    try:
+        inst_sheet = sh.worksheet("Inställningar")
+    except:
+        inst_sheet = sh.add_worksheet(title="Inställningar", rows="20", cols="3")
+        inst_sheet.append_row(["Inställning", "Värde"])
 
+    befintliga = {rad["Inställning"]: rad["Värde"] for rad in inst_sheet.get_all_records() if "Inställning" in rad}
+
+    standardinställningar = {
+        "Totalt kompisar": 0,
+        "Totalt pappans vänner": 0,
+        "Totalt Nils vänner": 0,
+        "Totalt Nils familj": 0,
+        "Senast kända kurs": 100.0,
+        "Senaste prenumeranter": 0
+    }
+
+    for nyckel, värde in standardinställningar.items():
+        if nyckel not in befintliga:
+            inst_sheet.append_row([nyckel, värde])
+
+    return sh.worksheet("Inställningar")
+
+inst_sheet = skapa_inställningsblad_om_saknas(gc, sh)
+
+# Läs in inställningar
+inst = {}
+for rad in inst_sheet.get_all_records():
+    if "Inställning" in rad and "Värde" in rad:
+        try:
+            inst[rad["Inställning"]] = float(str(rad["Värde"]).replace(",", "."))
+        except:
+            inst[rad["Inställning"]] = rad["Värde"]
+
+# För grunddata (maxgränser)
+max_kompisar = int(inst.get("Totalt kompisar", 0))
+max_pv = int(inst.get("Totalt pappans vänner", 0))
+max_nv = int(inst.get("Totalt Nils vänner", 0))
+max_nf = int(inst.get("Totalt Nils familj", 0))
+startkurs = float(inst.get("Senast kända kurs", 100.0))
+
+# Scenblad
 try:
     scen_sheet = sh.worksheet("Scener")
 except:
     scen_sheet = sh.add_worksheet(title="Scener", rows="1000", cols="30")
     scen_sheet.append_row([
         "Datum", "Totala män", "DP", "DPP", "DAP", "TPA", "TPP", "TAP",
-        "Enkel vagina", "Enkel anal", "DT_tid", "Tid_min", "Tid_sek", "Total_tid",
-        "Tid_per_man", "Prenumeranter", "Aktiekurs", "Total intäkt",
-        "Kvinnans lön", "Mäns lön", "Kompisars andel", "Kompisar (scen)",
-        "Pappans vänner", "Nils vänner", "Nils familj", "Älskar med", "Sover med", "DT_total"
+        "Enkel vaginal", "Enkel anal", "DT-tid (sek)", "Tid (min)", "Tid (sek)", "Total_tid",
+        "Tid/man (min)", "Prenumeranter", "Aktiekurs", "Intäkt ($)", "Kvinnans lön", "Mäns lön",
+        "Komp lön", "Kompisar (scen)", "Pappans vänner", "Nils vänner", "Nils familj",
+        "Älskar med", "Sover med", "DT total tid (sek)"
     ])
-
-# Läs in inställningar
-inst_data = inst_sheet.get_all_records()
-inst = {rad["Inställning"]: float(rad["Värde"]) if rad["Värde"].replace('.', '', 1).isdigit() else rad["Värde"]
-        for rad in inst_data}
-startkurs = inst.get("Senast kända kurs", 1.0)
-
-st.sidebar.header("⚙️ Inställningar – Grunddata")
-inst["Totalt kompisar"] = st.sidebar.number_input("Totalt antal kompisar", min_value=0, step=1,
-                                                  value=int(inst.get("Totalt kompisar", 0)))
-inst["Totalt pappans vänner"] = st.sidebar.number_input("Totalt antal pappans vänner", min_value=0, step=1,
-                                                        value=int(inst.get("Totalt pappans vänner", 0)))
-inst["Totalt Nils vänner"] = st.sidebar.number_input("Totalt antal Nils vänner", min_value=0, step=1,
-                                                     value=int(inst.get("Totalt Nils vänner", 0)))
-inst["Totalt Nils familj"] = st.sidebar.number_input("Totalt antal Nils familj", min_value=0, step=1,
-                                                     value=int(inst.get("Totalt Nils familj", 0)))
-startkurs = st.sidebar.number_input("Startkurs", value=startkurs, step=0.1)
-
-if st.sidebar.button("💾 Spara inställningar"):
-    inst_sheet.update("A2:B7", [
-        ["Senast kända kurs", startkurs],
-        ["Senaste prenumeranter", inst.get("Senaste prenumeranter", 0)],
-        ["Totalt kompisar", inst["Totalt kompisar"]],
-        ["Totalt pappans vänner", inst["Totalt pappans vänner"]],
-        ["Totalt Nils vänner", inst["Totalt Nils vänner"]],
-        ["Totalt Nils familj", inst["Totalt Nils familj"]],
-        ["Senast ändrad", str(datetime.now())]
-    ])
-    st.sidebar.success("Inställningar sparade.")
 
 st.header("🎬 Lägg till ny scen")
 
-with st.form("ny_scen"):
-    col1, col2 = st.columns(2)
-    with col1:
-        datum = st.date_input("Datum för scen")
-        tot_man = st.number_input("Totalt antal män", min_value=1, step=1)
-        dp = st.number_input("DP (en i vardera hål)", min_value=0)
-        dpp = st.number_input("DPP (2 i vagina)", min_value=0)
-        dap = st.number_input("DAP (2 i anus)", min_value=0)
-        tpa = st.number_input("TPA (2 i fittan + 1 i rumpan eller tvärtom)", min_value=0)
-        tpp = st.number_input("TPP (3 i vagina)", min_value=0)
-        tap = st.number_input("TAP (3 i anus)", min_value=0)
+with st.form("scen_form"):
+    datum = st.date_input("Datum för scen", value=datetime.today())
 
-    with col2:
-        enkel_vag = st.number_input("Enkel vaginal (1 man)", min_value=0)
-        enkel_anal = st.number_input("Enkel anal (1 man)", min_value=0)
-        dt_tid = st.number_input("Deep throat tid per man (sekunder)", min_value=0, max_value=300)
-        tid_min = st.number_input("Tid per man (minuter)", min_value=0, max_value=60)
-        tid_sek = st.number_input("Tid per man (sekunder)", min_value=0, max_value=59)
+    tot_man = st.number_input("Totalt antal män", min_value=1, value=100)
+    dp = st.number_input("DP (2 män)", min_value=0)
+    dpp = st.number_input("DPP", min_value=0)
+    dap = st.number_input("DAP", min_value=0)
+    tpa = st.number_input("TPA", min_value=0)
+    tpp = st.number_input("TPP", min_value=0)
+    tap = st.number_input("TAP", min_value=0)
+    enkel_vag = st.number_input("Enkel vaginal", min_value=0)
+    enkel_anal = st.number_input("Enkel anal", min_value=0)
 
-        komp_scen = st.number_input(
-            "Kompisar (scen)", 
-            min_value=0,
-            max_value=int(inst.get("Totalt kompisar", 0))
-        )
-        pv_scen = st.number_input(
-            "Pappans vänner (scen)", 
-            min_value=0,
-            max_value=int(inst.get("Totalt pappans vänner", 0))
-        )
-        nv_scen = st.number_input(
-            "Nils vänner (scen)", 
-            min_value=0,
-            max_value=int(inst.get("Totalt Nils vänner", 0))
-        )
-        nf_scen = st.number_input(
-            "Nils familj (scen)", 
-            min_value=0,
-            max_value=int(inst.get("Totalt Nils familj", 0))
-        )
+    kompisar = st.number_input("Kompisar (scen)", min_value=0, max_value=max_kompisar)
+    pv = st.number_input("Pappans vänner", min_value=0, max_value=max_pv)
+    nv = st.number_input("Nils vänner", min_value=0, max_value=max_nv)
+    nf = st.number_input("Nils familj", min_value=0, max_value=max_nf)
 
-    st.markdown("#### ❤️ Extra intimitet")
-    extra_alskar = st.number_input("Antal som 'älskar med'", min_value=0, value=0)
-    extra_sover = st.number_input("Antal som 'sover med'", min_value=0, value=0)
+    alskar = st.number_input("Antal 'älskar med'", min_value=0, value=12)
+    sover = st.number_input("Antal 'sover med'", min_value=0, value=1)
 
-    submit = st.form_submit_button("Beräkna & spara scen")
+    tid_per_man_min = st.number_input("Tid per man (min)", min_value=0, value=8)
+    tid_per_man_sek = st.number_input("Tid per man (sekunder)", min_value=0, value=0)
+    dt_tid_per_man = st.number_input("Deep throat tid per man (sek)", min_value=0, value=10)
+    filmpris = st.number_input("Pris per prenumeration ($)", min_value=0.0, value=15.0)
+
+    submit = st.form_submit_button("Spara scen")
 
 if submit:
-    total_tid = 0
-    antal_grupper = dp + dpp + dap + tpa + tpp + tap
-    tid_per_3m = 120  # 2 minuter
-    vila_per_byte = 15  # sekunder
-    vila_per_60min = 120  # 2 minuters vila per 60 min
+    total_tid_min = (tid_per_man_min * tot_man) + (tid_per_man_sek * tot_man / 60)
+    dt_total_tid = dt_tid_per_man * tot_man / 60
+    total_tid = total_tid_min + dt_total_tid + (alskar + sover) * 15
 
-    tid_grupper = antal_grupper * (tid_per_3m + vila_per_byte)
-    tid_enkel = (enkel_vag + enkel_anal) * 120 + max(0, (enkel_vag + enkel_anal - 1)) * vila_per_byte
-    tid_enkel_total = tid_enkel / max(1, tot_man)
-
-    dt_total_tid = dt_tid * tot_man + (tot_man - 1) * 2 + (tot_man // 10) * 30
-
-    extra_tid = (extra_alskar + extra_sover) * 15 * 60  # konverterat till sekunder
-
-    total_tid = tid_grupper + tid_enkel + dt_total_tid + extra_tid
-
-    tid_per_man = total_tid / tot_man if tot_man > 0 else 0
-    tid_per_man_min = round(tid_per_man / 60, 2)
-    total_tid_min = round(total_tid / 60, 2)
-
-    # Prenumeranter – viktat
-    pren_score = (
-        dp * 3 + dpp * 4 + dap * 4 +
-        tpa * 6 + tpp * 6 + tap * 7 +
-        enkel_vag * 1.2 + enkel_anal * 1.5
+    # Enkel modell för prenumeranter
+    pren = (
+        enkel_vag * 0.5 + enkel_anal * 0.5 +
+        dp * 1.0 + dpp * 1.2 + dap * 1.2 +
+        tpa * 1.6 + tpp * 1.6 + tap * 2.0
     )
-    prenumeranter = int(pren_score * 1.5)
+    pren = round(pren)
 
-    # Ekonomi
-    intakt = prenumeranter * 15
-    kvinnan_lon = 800
-    man_lon = (tot_man - komp_scen) * 200
-    komp_andel = max(0, intakt - kvinnan_lon - man_lon)
-    aktiekurs = round(startkurs * (1 + (prenumeranter - inst.get("Senaste prenumeranter", 0)) / 1000), 2)
+    intakt = pren * filmpris
+    kvinnan = 800
+    man_loner = (tot_man - kompisar) * 200
+    kvar = max(intakt - kvinnan - man_loner, 0)
+    komp_lon = kvar / max_kompisar if max_kompisar else 0
+    aktiekurs = startkurs + (pren - inst.get("Senaste prenumeranter", 0)) * 0.01
 
     # Spara till ark
     scen_sheet.append_row([
         str(datum), tot_man, dp, dpp, dap, tpa, tpp, tap,
-        enkel_vag, enkel_anal, dt_tid, tid_min, tid_sek, total_tid_min,
-        tid_per_man_min, prenumeranter, aktiekurs, intakt,
-        kvinnan_lon, man_lon, komp_andel, komp_scen,
-        pv_scen, nv_scen, nf_scen, extra_alskar, extra_sover, dt_total_tid
+        enkel_vag, enkel_anal, dt_tid_per_man, tid_per_man_min, tid_per_man_sek, total_tid,
+        round(total_tid / tot_man, 2), pren, round(aktiekurs, 2), round(intakt, 2),
+        kvinnan, man_loner, round(komp_lon, 2),
+        kompisar, pv, nv, nf, alskar, sover, round(dt_tid_per_man * tot_man, 2)
     ])
 
-    inst["Senast kända kurs"] = aktiekurs
-    inst["Senaste prenumeranter"] = prenumeranter
-    inst_sheet.update("A2:B3", [
-        ["Senast kända kurs", aktiekurs],
-        ["Senaste prenumeranter", prenumeranter]
-    ])
+    # Uppdatera senaste prenumeranter och kurs
+    for i, rad in enumerate(inst_sheet.get_all_records(), start=2):
+        if rad["Inställning"] == "Senaste prenumeranter":
+            inst_sheet.update_cell(i, 2, pren)
+        if rad["Inställning"] == "Senast kända kurs":
+            inst_sheet.update_cell(i, 2, round(aktiekurs, 2))
 
-    st.success(f"Scen sparad. Ny aktiekurs: ${aktiekurs} – Prenumeranter: {prenumeranter}")
+    st.success("Scen sparad!")
 
-st.header("🛌 Vilodagar & slump")
+def beräkna_total_tid(tot_man, tid_per_man_min, tid_per_man_sek, dt_tid_per_man, alskar, sover):
+    # Grundläggande penetrationstid
+    tid_man_tot = (tid_per_man_min * 60 + tid_per_man_sek) * tot_man
 
-with st.form("vilodag_form"):
-    insp_vilodagar = st.number_input("Antal vilodagar på inspelningsplats", min_value=0, max_value=21, value=2)
-    hem_vilodagar = 7  # alltid 7
-    generera = st.form_submit_button("Generera vilodagstillfällen")
+    # Deep throat total tid
+    dt_total_tid = dt_tid_per_man * tot_man
+    dt_vila = (tot_man - 1) * 2 + (tot_man // 10) * 30
+    dt_tid_sum = dt_total_tid + dt_vila
 
-if generera:
-    # Slumpa under inspelningsplats (max 60 % av grupperna)
-    insp_resultat = {
-        "kompisar": random.randint(0, round(inst["Totalt kompisar"] * 0.6)),
-        "pv": random.randint(0, round(inst["Totalt pappans vänner"] * 0.6)),
-        "nv": random.randint(0, round(inst["Totalt Nils vänner"] * 0.6)),
-        "nf": random.randint(0, round(inst["Totalt Nils familj"] * 0.6)),
-        "alskar": 12,
-        "sover": 1,
+    # Tid för älskar med / sover med (15 min = 900 sek per tillfälle)
+    extra_tid = (alskar + sover) * 900
+
+    total_tid_sek = tid_man_tot + dt_tid_sum + extra_tid
+    return round(total_tid_sek / 60, 2), dt_total_tid  # i minuter + dt i sekunder
+
+def beräkna_prenumeranter(enkel_vag, enkel_anal, dp, dpp, dap, tpa, tpp, tap):
+    return round(
+        enkel_vag * 0.5 + enkel_anal * 0.5 +
+        dp * 1.0 + dpp * 1.2 + dap * 1.2 +
+        tpa * 1.6 + tpp * 1.6 + tap * 2.0
+    )
+
+def beräkna_intakter(pren, filmpris, tot_man, kompisar, kvinnan, max_kompisar):
+    intakt = pren * filmpris
+    man_loner = (tot_man - kompisar) * 200
+    kvar = max(intakt - kvinnan - man_loner, 0)
+    komp_lon = kvar / max_kompisar if max_kompisar > 0 else 0
+    return round(intakt, 2), man_loner, round(komp_lon, 2)
+
+def beräkna_kurs(fg_pren, nya_pren, fg_kurs):
+    diff = nya_pren - fg_pren
+    ny_kurs = fg_kurs + diff * 0.01
+    return round(ny_kurs, 2)
+
+st.header("😴 Vilodagar och slumpmässiga tillfällen")
+
+if "vilodata" not in st.session_state:
+    st.session_state.vilodata = []
+
+# Antal vilodagar på inspelningsplats
+vilo_dagar = st.number_input("Antal vilodagar under inspelningsplats (max 21)", min_value=0, max_value=21, value=2)
+
+if st.button("Generera slumpdata för vilodagar på inspelningsplats"):
+    insp_data = {
+        "Kompisar": random.randint(0, int(max_kompisar * 0.6)),
+        "Pappans vänner": random.randint(0, int(max_pv * 0.6)),
+        "Nils vänner": random.randint(0, int(max_nv * 0.6)),
+        "Nils familj": random.randint(0, int(max_nf * 0.6)),
+        "Älskar med": 12,
+        "Sover med": 1,
+        "Typ": "Inspelningsplats",
+        "Vilodagar": vilo_dagar
     }
+    st.session_state.vilodata.append(insp_data)
+    st.success("Slumpad vilodata genererad för inspelningsplats")
 
-    # Slumpa under hemvila (kompisar 10 %, övriga 0)
-    hem_resultat = {
-        "kompisar": random.randint(0, round(inst["Totalt kompisar"] * 0.1)),
-        "pv": 0, "nv": 0, "nf": 0,
-        "alskar": 8,
-        "sover": 0,
+if st.button("Generera vilodagar hemma (alltid 7 dagar)"):
+    hemma_data = {
+        "Kompisar": random.randint(0, int(max_kompisar * 0.1)),
+        "Pappans vänner": random.randint(0, int(max_pv * 0.1)),
+        "Nils vänner": random.randint(0, int(max_nv * 0.1)),
+        "Nils familj": random.randint(0, int(max_nf * 0.1)),
+        "Älskar med": 8,
+        "Sover med": 0,
+        "Typ": "Hemma",
+        "Vilodagar": 7,
+        "Nils fick sex": random.choice([0, 1, 2])
     }
+    st.session_state.vilodata.append(hemma_data)
+    st.success("Slumpad vilodata genererad för hemmavistelse")
 
-    # Slumpa om Nils får sex med sin fru under 7 dagars vila
-    nils_sex_med_fru = random.randint(0, 2)
+if st.session_state.vilodata:
+    st.subheader("⏱️ Summering av genererad vilodata")
+    df_vilo = pd.DataFrame(st.session_state.vilodata)
+    st.dataframe(df_vilo)
 
-    # Lägg in 1 rad per block
-    scen_sheet.append_row([
-        str(datetime.now().date()), "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "vilodag_insp",
-        "-", "-", "-", "-", "-", "-", "-", insp_resultat["kompisar"],
-        insp_resultat["pv"], insp_resultat["nv"], insp_resultat["nf"],
-        insp_resultat["alskar"], insp_resultat["sover"], "-"
-    ])
-    scen_sheet.append_row([
-        str(datetime.now().date()), "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "vilodag_hem",
-        "-", "-", "-", "-", "-", "-", "-", hem_resultat["kompisar"],
-        hem_resultat["pv"], hem_resultat["nv"], hem_resultat["nf"],
-        hem_resultat["alskar"], hem_resultat["sover"], "-"
-    ])
-    scen_sheet.append_row([
-        str(datetime.now().date()), "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "-", "nils_fru",
-        "-", "-", "-", "-", "-", "-", "-", 0, 0, 0, 0, nils_sex_med_fru, 0, "-"
-    ])
+    # Här kan du spara df_vilo till nytt blad om du vill
 
-    st.success("Vilodagar och tillfällen genererade och sparade.")
+st.header("📊 Statistik & summering")
 
-st.header("📊 Statistik")
+try:
+    df = pd.DataFrame(scen_sheet.get_all_records())
 
-df = pd.DataFrame(scen_sheet.get_all_records())
+    if not df.empty:
+        df["Totala män"] = pd.to_numeric(df["Totala män"], errors="coerce").fillna(0)
+        df["Kompisar (scen)"] = pd.to_numeric(df["Kompisar (scen)"], errors="coerce").fillna(0)
+        df["Pappans vänner"] = pd.to_numeric(df["Pappans vänner"], errors="coerce").fillna(0)
+        df["Nils vänner"] = pd.to_numeric(df["Nils vänner"], errors="coerce").fillna(0)
+        df["Nils familj"] = pd.to_numeric(df["Nils familj"], errors="coerce").fillna(0)
+        df["Älskar med"] = pd.to_numeric(df["Älskar med"], errors="coerce").fillna(0)
+        df["Sover med"] = pd.to_numeric(df["Sover med"], errors="coerce").fillna(0)
+        df["Total_tid"] = pd.to_numeric(df["Total_tid"], errors="coerce").fillna(0)
+        df["DT total tid (sek)"] = pd.to_numeric(df["DT total tid (sek)"], errors="coerce").fillna(0)
 
-def safe_sum(col):
-    return df[col].apply(lambda x: pd.to_numeric(x, errors='coerce')).sum()
+        total_man = int(df["Totala män"].sum())
+        total_komp = int(df["Kompisar (scen)"].sum())
+        total_pv = int(df["Pappans vänner"].sum())
+        total_nv = int(df["Nils vänner"].sum())
+        total_nf = int(df["Nils familj"].sum())
 
-tot_man = safe_sum("Totala män")
-tot_kompisar = safe_sum("Kompisar (scen)")
-tot_pv = safe_sum("Pappans vänner")
-tot_nv = safe_sum("Nils vänner")
-tot_nf = safe_sum("Nils familj")
-alskar = safe_sum("Älskar med")
-sover = safe_sum("Sover med")
-nilsfru = df[df["Total_tid"] == "nils_fru"]["Sover med"].astype(float).sum()
+        total_alskar = int(df["Älskar med"].sum())
+        total_sover = int(df["Sover med"].sum())
 
-col1, col2 = st.columns(2)
-with col1:
-    st.metric("Totalt antal män", int(tot_man))
-    st.metric("Totalt 'älskar med'", int(alskar))
-    st.metric("Totalt 'sover med'", int(sover))
-with col2:
-    st.metric("Kompisar i gangbang", int(tot_kompisar))
-    st.metric("Pappans vänner i gangbang", int(tot_pv))
-    st.metric("Nils vänner i gangbang", int(tot_nv))
-    st.metric("Nils familj i gangbang", int(tot_nf))
+        total_tid = round(df["Total_tid"].sum(), 2)
+        total_dt_tid_min = round(df["DT total tid (sek)"].sum() / 60, 2)
 
-st.info(f"Nils har haft sex med sin fru totalt **{int(nilsfru)}** gång(er).")
+        st.subheader("👥 Deltagare")
+        st.write(f"Totalt antal män: **{total_man}**")
+        st.write(f"Kompisar: **{total_komp}**")
+        st.write(f"Pappans vänner: **{total_pv}**")
+        st.write(f"Nils vänner: **{total_nv}**")
+        st.write(f"Nils familj: **{total_nf}**")
+
+        st.subheader("💞 Närhet")
+        st.write(f"Älskat med: **{total_alskar}** gånger")
+        st.write(f"Sovit med: **{total_sover}** gånger (endast Nils familj)")
+
+        st.subheader("⏱️ Total tidsåtgång")
+        st.write(f"Total scen-tid: **{total_tid} minuter**")
+        st.write(f"Deep throat-tid: **{total_dt_tid_min} minuter**")
+
+    else:
+        st.info("Ingen scendata tillgänglig ännu.")
+
+except Exception as e:
+    st.error(f"Fel vid hämtning av statistik: {e}")
