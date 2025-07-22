@@ -1,66 +1,55 @@
 import streamlit as st
 import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
+import numpy as np
 from datetime import datetime, timedelta
 import random
+import gspread
+from google.oauth2.service_account import Credentials
 
-# Autentisering
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
-gc = gspread.authorize(credentials)
-
-# URL till Google Sheets
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1--mqpIEEta9An4kFvHZBJoFlRz1EtozxCy2PnD4PNJ0/edit?usp=drivesdk"
+KOLUMNER = [
+    "Datum", "DP", "DPP", "DAP", "TPA", "TPP", "TAP",
+    "Enkel vaginal", "Enkel anal",
+    "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj",
+    "Antal älskar med", "Antal sover med",
+    "DT tid per man (sek)", "DT total tid (sek)", "Summa tid (sek)", "Tid per man (min)",
+    "Pris per scen (USD)", "Nils sex"
+]
+
+scope = ["https://www.googleapis.com/auth/spreadsheets"]
+credentials = Credentials.from_service_account_info(
+    st.secrets["GOOGLE_CREDENTIALS"], scopes=scope
+)
+gc = gspread.authorize(credentials)
 sh = gc.open_by_url(SPREADSHEET_URL)
 
-# Funktion för att initiera blad med kolumner
 def init_sheet(name, cols):
     try:
-        worksheet = sh.worksheet(name)
+        ws = sh.worksheet(name)
     except gspread.exceptions.WorksheetNotFound:
-        worksheet = sh.add_worksheet(title=name, rows="1000", cols="50")
-        worksheet.update("A1", [cols])
+        ws = sh.add_worksheet(title=name, rows="1000", cols=str(len(cols)))
+        ws.update("A1", [cols])
     else:
-        data = worksheet.get_all_records()
-        if not data:
-            worksheet.update("A1", [cols])
-        else:
-            current_cols = worksheet.row_values(1)
-            if current_cols != cols:
-                all_data = worksheet.get_all_values()
-                updated_data = [cols] + all_data[1:] if len(all_data) > 1 else [cols]
-                worksheet.update("A1", updated_data)
+        ex_cols = ws.row_values(1)
+        if ex_cols != cols:
+            all_data = ws.get_all_values()[1:]
+            ws.clear()
+            ws.update("A1", [cols])
+            if all_data:
+                padded_data = [row + [""] * (len(cols) - len(row)) for row in all_data]
+                ws.update(f"A2", padded_data)
 
-# Funktion för att läsa inställningar
-def läs_inställningar():
-    try:
-        inst_blad = sh.worksheet("Inställningar")
-    except gspread.exceptions.WorksheetNotFound:
-        inst_blad = sh.add_worksheet(title="Inställningar", rows="100", cols="5")
-        inst_blad.update("A1", [["Inställning", "Värde", "Senast ändrad"]])
-    data = inst_blad.get_all_records()
-    inst = {
-        rad["Inställning"]: float(str(rad["Värde"]).replace(",", "."))
-        if str(rad["Värde"]).replace(",", "").replace(".", "", 1).isdigit()
-        else str(rad["Värde"])
-        for rad in data
-    }
-    return inst
+def ladda_data():
+    init_sheet("Data", KOLUMNER)
+    df = pd.DataFrame(sh.worksheet("Data").get_all_records())
+    if df.empty:
+        return pd.DataFrame(columns=KOLUMNER)
+    return df
 
-# Funktion för att spara inställning
-def spara_inställning(namn, värde):
-    inst_blad = sh.worksheet("Inställningar")
-    data = inst_blad.get_all_values()
-    inst_dict = {rad[0]: i for i, rad in enumerate(data)}
-    idag = datetime.now().strftime("%Y-%m-%d")
-    str_värde = str(värde).replace(".", ",") if isinstance(värde, float) else str(värde)
-    if namn in inst_dict:
-        rad = inst_dict[namn] + 1
-        inst_blad.update(f"B{rad}", str_värde)
-        inst_blad.update(f"C{rad}", idag)
-    else:
-        inst_blad.append_row([namn, str_värde, idag])
+def spara_data(df):
+    ws = sh.worksheet("Data")
+    df_str = df.fillna("").astype(str)
+    ws.update("A1", [KOLUMNER] + df_str.values.tolist())
 
 # Funktion för att initiera databladet
 def initiera_datablad():
