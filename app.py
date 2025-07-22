@@ -100,87 +100,44 @@ def beräkna_ålder(födelsedatum, referensdatum):
     ref = datetime.strptime(referensdatum, "%Y-%m-%d")
     return ref.year - född.year - ((ref.month, ref.day) < (född.month, född.day))
 
+DATA_COLUMNS = [
+    "Datum", "Typ", "DP", "DPP", "DAP", "TPA", "TPP", "TAP",
+    "Enkel vaginal", "Enkel anal",
+    "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj", "Övriga män",
+    "DT tid per man (sek)", "DT total tid (sek)",
+    "Älskar med", "Sover med", "Total tid (sek)", "Total tid (h)",
+    "Prenumeranter", "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
+    "Nils sex"
+]
+
+def säkerställ_kolumner(df):
+    for kolumn in DATA_COLUMNS:
+        if kolumn not in df.columns:
+            df[kolumn] = ""
+    return df[DATA_COLUMNS]
+
 def spara_data(df):
-    worksheet = sh.worksheet("Data")
     df = df.fillna("").astype(str)
-    existerande_kolumner = worksheet.row_values(1)
-    nödvändiga_kolumner = [
-        "Datum", "Typ", "DP", "DPP", "DAP", "TPA", "TPP", "TAP",
-        "Enkel vaginal", "Enkel anal", "Kompisar", "Pappans vänner",
-        "Nils vänner", "Nils familj", "Övriga män", "DT tid (sek)", "Älskar med",
-        "Sover med", "Nils sex", "Total tid (sek)", "DT total tid (sek)",
-        "Total tid (h)", "Prenumeranter", "Intäkt (USD)", "Kvinnans lön (USD)",
-        "Mäns lön (USD)", "Kompisar lön (USD)"
-    ]
+    worksheet = sh.worksheet("Data")
+    worksheet.clear()
+    worksheet.update([df.columns.values.tolist()] + df.values.tolist())
 
-    if existerande_kolumner != nödvändiga_kolumner:
-        worksheet.update("A1", [nödvändiga_kolumner])
+def ladda_data():
+    try:
+        worksheet = sh.worksheet("Data")
+        data = worksheet.get_all_records()
+        if not data:
+            return pd.DataFrame(columns=DATA_COLUMNS)
+        df = pd.DataFrame(data)
+        return säkerställ_kolumner(df)
+    except:
+        return pd.DataFrame(columns=DATA_COLUMNS)
 
-    rows = df[nödvändiga_kolumner].values.tolist()
-    worksheet.update("A2", rows)
-
-def skapa_slumprad_vilodag(datum, inst, hemma=False, nils_sex=False):
-    from random import randint, sample
-    rad = {"Datum": datum, "Typ": "Vila hemma" if hemma else "Vila inspelning"}
-    tot_kompisar = int(inst.get("Kompisar", 0))
-    max_proc = 0.10 if hemma else 0.60
-    max_antal = int(tot_kompisar * max_proc)
-    rad["Kompisar"] = randint(0, max_antal) if max_antal > 0 else 0
-    rad["Pappans vänner"] = randint(0, int(inst.get("Pappans vänner", 0) * max_proc)) if not hemma else 0
-    rad["Nils vänner"] = randint(0, int(inst.get("Nils vänner", 0) * max_proc)) if not hemma else 0
-    rad["Nils familj"] = randint(0, int(inst.get("Nils familj", 0) * max_proc)) if not hemma else 0
-    rad["Övriga män"] = 0
-    rad["DP"] = rad["DPP"] = rad["DAP"] = rad["TPA"] = rad["TPP"] = rad["TAP"] = 0
-    rad["Enkel vaginal"] = rad["Enkel anal"] = 0
-    rad["DT tid (sek)"] = 0
-    rad["Älskar med"] = 8 if hemma else 12
-    rad["Sover med"] = 0 if hemma else 1
-    rad["Nils sex"] = 1 if nils_sex else 0
-    return rad
-
-def beräkna_tider(df, inst):
-    rader = []
-    for _, rad in df.iterrows():
-        totalt_tid = 0
-        paustid = 15  # sekunder
-        dt_tid = int(rad["DT tid (sek)"])
-        dt_vila = 2  # sek vila mellan varje
-        dt_extra = 30 * ((int(rad["Kompisar"]) + int(rad["Pappans vänner"]) +
-                          int(rad["Nils vänner"]) + int(rad["Nils familj"]) +
-                          int(rad["Övriga män"])) // 10)
-        dt_total = dt_tid * (int(rad["Kompisar"]) + int(rad["Pappans vänner"]) +
-                             int(rad["Nils vänner"]) + int(rad["Nils familj"]) +
-                             int(rad["Övriga män"])) + dt_vila * (
-                             int(rad["Kompisar"]) + int(rad["Pappans vänner"]) +
-                             int(rad["Nils vänner"]) + int(rad["Nils familj"]) +
-                             int(rad["Övriga män"])) + dt_extra
-
-        for kategori in ["DP", "DPP", "DAP"]:
-            totalt_tid += (int(rad[kategori]) * 2 * 60) + (15 if int(rad[kategori]) > 0 else 0)
-
-        for kategori in ["TPA", "TPP", "TAP"]:
-            totalt_tid += (int(rad[kategori]) * 2 * 60) + (15 if int(rad[kategori]) > 0 else 0)
-
-        for kategori in ["Enkel vaginal", "Enkel anal"]:
-            totalt_tid += (int(rad[kategori]) * 2 * 60) + (15 if int(rad[kategori]) > 0 else 0)
-
-        tid_per_man = float(inst.get("Tid per man (minuter)", 0))
-        antal_män = sum([
-            int(rad["Kompisar"]), int(rad["Pappans vänner"]),
-            int(rad["Nils vänner"]), int(rad["Nils familj"]), int(rad["Övriga män"])
-        ])
-        totalt_tid += int(tid_per_man * antal_män * 60)
-
-        älsk_tid = int(rad["Älskar med"]) * 15 * 60
-        sov_tid = int(rad["Sover med"]) * 15 * 60
-        totalt_tid += älsk_tid + sov_tid
-
-        rad["Total tid (sek)"] = totalt_tid
-        rad["DT total tid (sek)"] = dt_total
-        rad["Total tid (h)"] = round((totalt_tid + dt_total) / 3600, 2)
-
-        rader.append(rad)
-    return pd.DataFrame(rader)
+def nästa_datum(df, startdatum):
+    if df.empty:
+        return datetime.strptime(startdatum, "%Y-%m-%d").date()
+    senaste = max(pd.to_datetime(df["Datum"], errors="coerce").dropna(), default=startdatum)
+    return senaste.date() + timedelta(days=1)
 
 def beräkna_prenumeranter(df):
     resultat = []
