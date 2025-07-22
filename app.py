@@ -1,76 +1,104 @@
 import streamlit as st
 import pandas as pd
-import random
 from datetime import datetime, timedelta
+import random
 import gspread
 from google.oauth2.service_account import Credentials
 
-st.set_page_config(page_title="Malin App", layout="wide")
-
-# Autentisering och Sheets-anslutning
-scope = ["https://www.googleapis.com/auth/spreadsheets"]
-credentials = Credentials.from_service_account_info(
-    st.secrets["GOOGLE_CREDENTIALS"], scopes=scope
-)
+# Autentisering
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
 gc = gspread.authorize(credentials)
 
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1--mqpIEEta9An4kFvHZBJoFlRz1EtozxCy2PnD4PNJ0/edit?usp=drivesdk"
 sh = gc.open_by_url(SPREADSHEET_URL)
 
-# Initiera blad
+# Kolumner för databasen
+DATA_COLUMNS = [
+    "Datum", "Typ", "DP", "DPP", "DAP", "TPA", "TPP", "TAP",
+    "Enkel vaginal", "Enkel anal", "Kompisar", "Pappans vänner",
+    "Nils vänner", "Nils familj", "Övriga män", "DT tid per man (sek)",
+    "Älskar med", "Sover med", "Nils sex", "Tid total (sek)", 
+    "DT total tid (sek)", "Summa tid (sek)", "Summa tid (h)",
+    "Prenumeranter", "Intäkt total", "Intäkt kvinna", 
+    "Intäkt män", "Intäkt kompisar"
+]
+
 def init_sheet(name, cols):
     try:
-        sh.worksheet(name)
-    except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=name, rows="1000", cols="50")
-        ws.update("A1", [cols])
+        worksheet = sh.worksheet(name)
+    except:
+        worksheet = sh.add_worksheet(title=name, rows="1000", cols="30")
+        worksheet.update("A1", [cols])
+    else:
+        existing_cols = worksheet.row_values(1)
+        if existing_cols != cols:
+            worksheet.resize(rows=1)
+            worksheet.update("A1", [cols])
 
-init_sheet("Data", [
-    "Datum", "Scen/Vila", "DP", "DPP", "DAP", "TPA", "TPP", "TAP",
-    "Enkel vaginal", "Enkel anal",
-    "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj", "Övriga män",
-    "DT tid (sek)", "Älskar med", "Sover med",
-    "Prenumeranter", "Prenumerationsintäkt (USD)",
-    "Kvinnans lön", "Mäns lön", "Kompisars andel", "DT total tid (sek)",
-    "Total tid (sek)", "Total tid (h)"
-])
-init_sheet("Inställningar", [["Inställning", "Värde", "Senast ändrad"]])
-data_ws = sh.worksheet("Data")
-inst_ws = sh.worksheet("Inställningar")
+def ladda_data():
+    try:
+        worksheet = sh.worksheet("Data")
+        data = worksheet.get_all_records()
+        df = pd.DataFrame(data)
+    except:
+        df = pd.DataFrame(columns=DATA_COLUMNS)
+    return df
 
-# Spara inställning i bladet
-def spara_inställning(nyckel, värde):
-    idag = datetime.now().strftime("%Y-%m-%d")
-    celler = inst_ws.get_all_records()
-    for ix, rad in enumerate(celler):
-        if rad["Inställning"] == nyckel:
-            inst_ws.update_cell(ix + 2, 2, str(värde))
-            inst_ws.update_cell(ix + 2, 3, idag)
-            return
-    inst_ws.append_row([nyckel, str(värde), idag])
+def spara_data(df):
+    worksheet = sh.worksheet("Data")
+    worksheet.clear()
+    worksheet.update("A1", [df.columns.tolist()] + df.fillna("").astype(str).values.tolist())
 
-# Läs in inställningar som dict
+INST_COLUMNS = ["Inställning", "Värde", "Senast ändrad"]
+
+def init_inställningar():
+    try:
+        worksheet = sh.worksheet("Inställningar")
+    except:
+        worksheet = sh.add_worksheet(title="Inställningar", rows="100", cols="3")
+        worksheet.update("A1", [INST_COLUMNS])
+        standard = [
+            ["Val per man (minuter)", "2", datetime.now().strftime("%Y-%m-%d")],
+            ["DT tid per man (sek)", "15", datetime.now().strftime("%Y-%m-%d")],
+            ["Kvinnans namn", "Malin", datetime.now().strftime("%Y-%m-%d")],
+            ["Kvinnans födelsedatum", "1984-03-26", datetime.now().strftime("%Y-%m-%d")],
+            ["Startdatum", "2014-03-26", datetime.now().strftime("%Y-%m-%d")],
+            ["Kompisar", "100", datetime.now().strftime("%Y-%m-%d")],
+            ["Pappans vänner", "40", datetime.now().strftime("%Y-%m-%d")],
+            ["Nils vänner", "30", datetime.now().strftime("%Y-%m-%d")],
+            ["Nils familj", "20", datetime.now().strftime("%Y-%m-%d")],
+        ]
+        worksheet.update(f"A2:C{len(standard)+1}", standard)
+
 def läs_inställningar():
-    celler = inst_ws.get_all_records()
+    worksheet = sh.worksheet("Inställningar")
+    data = worksheet.get_all_records()
     inst = {}
-    for rad in celler:
-        key = rad["Inställning"]
-        val = str(rad["Värde"]).replace(",", ".")
+    for rad in data:
+        val = str(rad["Värde"])
         try:
-            inst[key] = float(val) if val.replace(".", "", 1).isdigit() else val
+            inst[rad["Inställning"]] = float(val.replace(",", "."))
         except:
-            inst[key] = val
+            inst[rad["Inställning"]] = val
     return inst
 
-# Konvertera datum till datetime-objekt
-def str_to_date(datumstr):
-    return datetime.strptime(datumstr, "%Y-%m-%d")
+def spara_inställning(nyckel, värde):
+    worksheet = sh.worksheet("Inställningar")
+    data = worksheet.get_all_records()
+    df = pd.DataFrame(data)
+    idag = datetime.now().strftime("%Y-%m-%d")
+    if nyckel in df["Inställning"].values:
+        idx = df[df["Inställning"] == nyckel].index[0]
+        worksheet.update_cell(idx + 2, 2, str(värde))
+        worksheet.update_cell(idx + 2, 3, idag)
+    else:
+        worksheet.append_row([nyckel, str(värde), idag])
 
-# Hämta datum för senaste raden
-def senaste_datum(df):
-    if df.empty:
-        return datetime.strptime(inst.get("Startdatum", "2014-03-26"), "%Y-%m-%d")
-    return str_to_date(df["Datum"].iloc[-1])
+def beräkna_ålder(födelsedatum, referensdatum):
+    född = datetime.strptime(födelsedatum, "%Y-%m-%d")
+    ref = datetime.strptime(referensdatum, "%Y-%m-%d")
+    return ref.year - född.year - ((ref.month, ref.day) < (född.month, född.day))
 
 def spara_data(df):
     worksheet = sh.worksheet("Data")
