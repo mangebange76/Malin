@@ -51,70 +51,54 @@ def spara_data(df):
     df_str = df.fillna("").astype(str)
     ws.update("A1", [KOLUMNER] + df_str.values.tolist())
 
-# Funktion för att initiera databladet
-def initiera_datablad():
-    kolumner = [
-        "Datum", "DP", "DPP", "DAP", "TPA", "TPP", "TAP",
-        "Enkel vaginal", "Enkel anal",
-        "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj",
-        "DT tid per man (sek)", "DT total tid (sek)",
-        "Antal älskar med", "Antal sover med",
-        "Pris per prenumeration (USD)", "Prenumeranter denna scen",
-        "Totala prenumeranter", "Intäkt bolag", "Lön kvinna", "Lön män",
-        "Lön kompisar", "Aktiekurs", "Typ", "Nils sex", "Summa tid (sek)", "Tid per man (min)"
-    ]
-    init_sheet("Data", kolumner)
+INST_KOLUMNER = ["Inställning", "Värde", "Senast ändrad"]
 
-# Funktion för att hämta DataFrame från Google Sheets
-def hämta_df():
+def init_inställningar():
     try:
-        df = pd.DataFrame(sh.worksheet("Data").get_all_records())
-        return df
-    except:
-        return pd.DataFrame()
+        ws = sh.worksheet("Inställningar")
+    except gspread.exceptions.WorksheetNotFound:
+        ws = sh.add_worksheet(title="Inställningar", rows="100", cols="3")
+        ws.update("A1", [INST_KOLUMNER])
+        standard = [
+            ["Valutakurs", "10,00", ""],
+            ["Max andel högriskbolag (%)", "20,00", ""],
+            ["Max portföljandel (%)", "15,00", ""],
+            ["Startdatum", "2014-03-26", ""],
+            ["Kvinnans namn", "Malin", ""],
+            ["Födelsedatum", "1984-03-26", ""],
+            ["Kompisar", "0", ""],
+            ["Pappans vänner", "0", ""],
+            ["Nils vänner", "0", ""],
+            ["Nils familj", "0", ""],
+        ]
+        ws.update("A2", standard)
 
-# Funktion för att uppdatera DataFrame i Google Sheets
-def spara_df(df):
-    worksheet = sh.worksheet("Data")
-    worksheet.clear()
-    worksheet.update([df.columns.tolist()] + df.fillna("").astype(str).values.tolist())
-
-# Funktion för att räkna ut prenumeranter för en scen
-def beräkna_prenumeranter(rad, inst):
-    viktning = {
-        "DP": inst.get("Vikt DP", 1),
-        "DPP": inst.get("Vikt DPP", 2),
-        "DAP": inst.get("Vikt DAP", 2),
-        "TPA": inst.get("Vikt TPA", 3),
-        "TPP": inst.get("Vikt TPP", 3),
-        "TAP": inst.get("Vikt TAP", 4),
-        "Enkel vaginal": inst.get("Vikt enkel vaginal", 0.5),
-        "Enkel anal": inst.get("Vikt enkel anal", 0.5)
+def läs_inställningar():
+    init_inställningar()
+    data = sh.worksheet("Inställningar").get_all_records()
+    inst = {
+        rad["Inställning"]: (
+            float(str(rad["Värde"]).replace(",", "."))
+            if str(rad["Värde"]).replace(",", "").replace(".", "", 1).isdigit()
+            else str(rad["Värde"])
+        )
+        for rad in data if "Inställning" in rad and "Värde" in rad
     }
-    poäng = sum(rad.get(k, 0) * viktning.get(k, 1) for k in viktning)
-    return int(poäng * inst.get("Prenumeranter per poäng", 1))
+    return inst
 
-# Funktion för att uppdatera aktiekurs baserat på prenumeranter
-def uppdatera_aktiekurs(df, inst):
-    startkurs = float(inst.get("Startkurs", 1.0))
-    aktier = float(inst.get("Antal aktier", 100000))
-    df = df.copy()
-    df["Totala prenumeranter"] = df["Prenumeranter denna scen"].rolling(30, min_periods=1).sum()
-    df["Aktiekurs"] = df["Totala prenumeranter"] * 15 / aktier
-    df["Aktiekurs"] = df["Aktiekurs"].round(2)
-    return df
-
-# Funktion för att beräkna intäkter och löner
-def beräkna_ekonomi(rad, inst, antal_kompisar):
-    pren = rad.get("Prenumeranter denna scen", 0)
-    pris = float(inst.get("Pris per prenumeration (USD)", 15))
-    intäkt = pren * pris
-    lön_kvinna = float(inst.get("Lön kvinna", 800))
-    män = rad.get("Pappans vänner", 0) + rad.get("Nils vänner", 0) + rad.get("Nils familj", 0)
-    lön_män = män * float(inst.get("Lön man", 200))
-    kvar = intäkt - lön_kvinna - lön_män
-    lön_kompisar = kvar / antal_kompisar if antal_kompisar > 0 else 0
-    return round(intäkt, 2), round(lön_kvinna, 2), round(lön_män, 2), round(lön_kompisar, 2)
+def spara_inställning(nyckel, värde):
+    ws = sh.worksheet("Inställningar")
+    data = ws.get_all_records()
+    idag = datetime.now().strftime("%Y-%m-%d")
+    hittad = False
+    for i, rad in enumerate(data):
+        if rad["Inställning"] == nyckel:
+            ws.update_cell(i + 2, 2, str(värde).replace(".", ","))
+            ws.update_cell(i + 2, 3, idag)
+            hittad = True
+            break
+    if not hittad:
+        ws.append_row([nyckel, str(värde).replace(".", ","), idag])
 
 # Funktion för att beräkna total tid
 def beräkna_tid(rad):
