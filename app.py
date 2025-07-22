@@ -1,289 +1,214 @@
 import streamlit as st
 import pandas as pd
-import gspread
+import datetime
 from google.oauth2.service_account import Credentials
-from datetime import datetime, timedelta
+import gspread
+import time
 
 # Autentisering
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
 gc = gspread.authorize(credentials)
 
-# Fil och blad
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1--mqpIEEta9An4kFvHZBJoFlRz1EtozxCy2PnD4PNJ0/edit?usp=drivesdk"
-SPREADSHEET_NAME = "MalinData2"
 sh = gc.open_by_url(SPREADSHEET_URL)
 
-# Initiera blad
+# Hjälpfunktion: initiera blad med kolumner
 def init_sheet(name, cols):
     try:
-        sh.worksheet(name)
-    except:
-        sh.add_worksheet(title=name, rows="1000", cols="30")
-        sh.values_update(name, {"range": "A1", "majorDimension": "ROWS", "values": [cols]})
+        worksheet = sh.worksheet(name)
+    except gspread.exceptions.WorksheetNotFound:
+        worksheet = sh.add_worksheet(title=name, rows="1000", cols="50")
+    existing = worksheet.get_all_values()
+    if not existing:
+        worksheet.update("A1", [cols])
 
-init_sheet("Data", [
-    "Datum", "Typ", "Män", "DP", "DPP", "DAP", "TPA", "TPP", "TAP", "Vaginal", "Anal",
-    "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj",
-    "Tid per man (min)", "DT tid (sek)", "DT män", "DT total tid (sek)",
-    "Älskar med", "Sover med", "Total tid (sek)", "Intäkt (USD)",
-    "Kvinna lön", "Män lön", "Kompis lön", "Prenumeranter", "Kurs"
-])
+# Kolumner till databladet
+SCENE_COLS = [
+    "Datum", "DP", "DPP", "DAP", "TPA", "TPP", "TAP",
+    "Vaginal (enkel)", "Anal (enkel)", "DT tid per man (sek)",
+    "Pappans vänner", "Kompisar", "Nils vänner", "Nils familj",
+    "Älskar med", "Sover med", "Vilodagar", "Kommentar"
+]
 
-init_sheet("Inställningar", [
-    "Inställning", "Värde", "Senast ändrad"
-])
+# Initiera blad
+init_sheet("Scener", SCENE_COLS)
+init_sheet("Inställningar", ["Inställning", "Värde", "Senast ändrad"])
+init_sheet("Data", ["Datum", "Typ", "Pappans vänner", "Kompisar", "Nils vänner", "Nils familj"])
 
-# Funktion: Läs inställningar från bladet
+# Läs inställningar från Google Sheets
 def läs_inställningar():
-    inst_df = pd.DataFrame(sh.worksheet("Inställningar").get_all_records())
+    sheet = sh.worksheet("Inställningar")
+    data = sheet.get_all_records()
     inst = {
-        rad["Inställning"]: float(str(rad["Värde"]).replace(",", "."))
+        rad["Inställning"]: float(str(rad["Värde"]).replace(",", "").replace(".", "", 1))
         if str(rad["Värde"]).replace(",", "").replace(".", "", 1).isdigit()
-        else rad["Värde"]
-        for _, rad in inst_df.iterrows()
+        else str(rad["Värde"])
+        for rad in data
     }
     return inst
 
-# Funktion: Spara inställning
-def spara_inställning(namn, värde):
-    inst_df = pd.DataFrame(sh.worksheet("Inställningar").get_all_records())
-    if namn in inst_df["Inställning"].values:
-        idx = inst_df[inst_df["Inställning"] == namn].index[0]
-        inst_df.at[idx, "Värde"] = värde
-        inst_df.at[idx, "Senast ändrad"] = datetime.now().strftime("%Y-%m-%d")
+# Skriv inställning till Google Sheets
+def spara_inställning(inställning, värde):
+    sheet = sh.worksheet("Inställningar")
+    data = sheet.get_all_records()
+    idag = datetime.datetime.today().strftime("%Y-%m-%d")
+    uppdaterad = False
+    for ix, rad in enumerate(data):
+        if rad["Inställning"] == inställning:
+            sheet.update_cell(ix + 2, 2, värde)
+            sheet.update_cell(ix + 2, 3, idag)
+            uppdaterad = True
+            break
+    if not uppdaterad:
+        sheet.append_row([inställning, värde, idag])
+
+# Räkna ut ålder från födelsedatum till ett visst datum
+def beräkna_ålder(födelsedatum: str, till_datum: str) -> int:
+    födelsedatum = datetime.datetime.strptime(födelsedatum, "%Y-%m-%d").date()
+    till_datum = datetime.datetime.strptime(till_datum, "%Y-%m-%d").date()
+    år = till_datum.year - födelsedatum.year
+    if (till_datum.month, till_datum.day) < (födelsedatum.month, födelsedatum.day):
+        år -= 1
+    return år
+
+# Hämta datumet på senaste raden
+def hämta_senaste_datum():
+    df = pd.DataFrame(sh.worksheet("Scener").get_all_records())
+    if not df.empty and "Datum" in df.columns:
+        return pd.to_datetime(df["Datum"]).max().date()
     else:
-        inst_df = inst_df.append({
-            "Inställning": namn,
-            "Värde": värde,
-            "Senast ändrad": datetime.now().strftime("%Y-%m-%d")
-        }, ignore_index=True)
-    sh.worksheet("Inställningar").update([inst_df.columns.values.tolist()] + inst_df.values.tolist())
+        return datetime.datetime.strptime(inställningar.get("Startdatum", "2014-03-26"), "%Y-%m-%d").date()
 
-# Läser inställningar in i appen
-inst = läs_inställningar()
+# Säkerställ att ett blad har rätt kolumner
+def init_sheet(name, cols):
+    try:
+        worksheet = sh.worksheet(name)
+        befintliga = worksheet.row_values(1)
+        if befintliga != cols:
+            worksheet.clear()
+            worksheet.append_row(cols)
+    except gspread.exceptions.WorksheetNotFound:
+        worksheet = sh.add_worksheet(title=name, rows="1000", cols=str(len(cols)))
+        worksheet.append_row(cols)
 
-# Sidopanel: Grundinställningar
-st.sidebar.header("⚙️ Inställningar")
+# Ladda data från Google Sheets till DataFrame
+def ladda_data(namn):
+    try:
+        data = sh.worksheet(namn).get_all_records()
+        return pd.DataFrame(data)
+    except:
+        return pd.DataFrame()
 
-startdatum = st.sidebar.text_input("Startdatum (t.ex. 2014-03-26)", value=inst.get("Startdatum", "2014-03-26"))
-spara_inställning("Startdatum", startdatum)
-
-namn = st.sidebar.text_input("Namn", value=inst.get("Namn", "Malin"))
-spara_inställning("Namn", namn)
-
-födelsedatum = st.sidebar.text_input("Födelsedatum (t.ex. 1984-03-26)", value=inst.get("Födelsedatum", "1984-03-26"))
-spara_inställning("Födelsedatum", födelsedatum)
-
-for kategori in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
-    antal = int(st.sidebar.number_input(f"Antal {kategori}", min_value=0, value=int(inst.get(kategori, 0))))
-    spara_inställning(kategori, antal)
-
-# Prenumerationsvikter
-st.sidebar.subheader("📈 Prenumerationsvikter")
-for typ in ["Vaginal", "Anal", "DP", "DPP", "DAP", "TPA", "TPP", "TAP"]:
-    vikt = float(st.sidebar.number_input(f"Vikt {typ}", value=float(inst.get(f"Vikt_{typ}", 1.0)), step=0.1))
-    spara_inställning(f"Vikt_{typ}", vikt)
-
-# Startkurs
-startkurs = float(st.sidebar.number_input("Startkurs", value=float(inst.get("Startkurs", 1.0)), step=0.01))
-spara_inställning("Startkurs", startkurs)
-
-# Funktion: Hämta DataFrame från databladet
-def hämta_data():
-    data = sh.worksheet("Data").get_all_records()
-    return pd.DataFrame(data)
-
-df = hämta_data()
-
-def sista_datum(df):
-    if not df.empty:
-        return pd.to_datetime(df["Datum"].iloc[-1])
-    else:
-        return pd.to_datetime(inst["Startdatum"])
-
-def beräkna_tid(man_tid_min, dt_tid_sek, antal_män):
-    dt_total = dt_tid_sek * antal_män + (antal_män * 2) + (antal_män // 10 * 30)
-    total = (man_tid_min * 60 * antal_män) + dt_total
-    return total, dt_total
-
-def beräkna_prenumeranter(rad, inst):
-    pren = 0
-    for typ in ["Vaginal", "Anal", "DP", "DPP", "DAP", "TPA", "TPP", "TAP"]:
-        pren += rad[typ] * inst.get(f"Vikt_{typ}", 1.0)
-    return round(pren)
-
-st.header("➕ Lägg till scen")
-
-med_sc = st.checkbox("Ny scen")
-med_vila = st.checkbox("Lägg till vilodagar")
-
-if med_sc:
-    st.subheader("Ny scen")
-
-    datum = (sista_datum(df) + timedelta(days=1)).strftime("%Y-%m-%d")
-    män = st.number_input("Totalt antal män", min_value=0)
-    dp = st.number_input("DP", min_value=0)
-    dpp = st.number_input("DPP", min_value=0)
-    dap = st.number_input("DAP", min_value=0)
-    tpa = st.number_input("TPA", min_value=0)
-    tpp = st.number_input("TPP", min_value=0)
-    tap = st.number_input("TAP", min_value=0)
-    vaginal = st.number_input("Enkel vaginal", min_value=0)
-    anal = st.number_input("Enkel anal", min_value=0)
-
-    kompisar = st.number_input("Kompisar (scennivå)", min_value=0, max_value=int(inst["Kompisar"]))
-    pappans = st.number_input("Pappans vänner (scennivå)", min_value=0, max_value=int(inst["Pappans vänner"]))
-    nils_vänner = st.number_input("Nils vänner", min_value=0, max_value=int(inst["Nils vänner"]))
-    nils_familj = st.number_input("Nils familj", min_value=0, max_value=int(inst["Nils familj"]))
-
-    tid_per_man = st.number_input("Tid per man (minuter)", min_value=0.0)
-    dt_tid = st.number_input("Deep throat-tid per man (sek)", min_value=0.0)
-
-    älskar_med = st.number_input("Antal 'älskar med'", min_value=0)
-    sover_med = st.number_input("Antal 'sover med'", min_value=0)
-
-    # Summering
-    totalt_antal_män = män + kompisar + pappans + nils_vänner + nils_familj
-    total_tid, dt_total_tid = beräkna_tid(tid_per_man, dt_tid, totalt_antal_män)
-    totalt_tid_m_älskar = total_tid + ((älskar_med + sover_med) * 15 * 60)
-
-    intakt = beräkna_prenumeranter({
-        "Vaginal": vaginal, "Anal": anal,
-        "DP": dp, "DPP": dpp, "DAP": dap,
-        "TPA": tpa, "TPP": tpp, "TAP": tap
-    }, inst) * 15
-
-    kvinnolön = 800
-    mänlön = män * 200
-    kompislön = max(0, intakt - kvinnolön - mänlön) / max(1, int(inst["Kompisar"]))
-
-    ny_rad = {
-        "Datum": datum, "Typ": "Scen", "Män": män, "DP": dp, "DPP": dpp, "DAP": dap,
-        "TPA": tpa, "TPP": tpp, "TAP": tap, "Vaginal": vaginal, "Anal": anal,
-        "Kompisar": kompisar, "Pappans vänner": pappans, "Nils vänner": nils_vänner, "Nils familj": nils_familj,
-        "Tid per man (min)": tid_per_man, "DT tid (sek)": dt_tid, "DT män": totalt_antal_män,
-        "DT total tid (sek)": dt_total_tid, "Älskar med": älskar_med, "Sover med": sover_med,
-        "Total tid (sek)": totalt_tid_m_älskar,
-        "Intäkt (USD)": intakt, "Kvinna lön": kvinnolön, "Män lön": mänlön,
-        "Kompis lön": kompislön, "Prenumeranter": beräkna_prenumeranter({
-            "Vaginal": vaginal, "Anal": anal, "DP": dp, "DPP": dpp, "DAP": dap,
-            "TPA": tpa, "TPP": tpp, "TAP": tap
-        }, inst),
-        "Kurs": 0
-    }
-
-    if st.button("Spara scen"):
-        df = df.append(ny_rad, ignore_index=True)
-        sh.worksheet("Data").update([df.columns.tolist()] + df.values.tolist())
-        st.rerun()
-
-if med_vila:
-    st.subheader("Vilodagar")
-
-    dagar = st.number_input("Antal vilodagar", min_value=1)
-    plats = st.radio("Plats", ["Inspelningsplats (21 dagar)", "Hem (7 dagar)"])
-
-    datum = (sista_datum(df) + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    if plats == "Inspelningsplats (21 dagar)":
-        max_procent = 0.6
-        älskar_med = 12
-        sover_med = 1
-    else:
-        max_procent = 0.1
-        älskar_med = 8
-        sover_med = 0
-
-    totaler = {
-        "Kompisar": inst["Kompisar"],
-        "Pappans vänner": inst["Pappans vänner"],
-        "Nils vänner": inst["Nils vänner"],
-        "Nils familj": inst["Nils familj"]
-    }
-
-    import random
-    nils_sex = 0
-    if plats == "Hem (7 dagar)":
-        nils_sex = random.randint(0, 2)
-
-    if st.button("Generera vilodata"):
-        for i in range(dagar):
-            rand_rad = {
-                "Datum": (pd.to_datetime(datum) + timedelta(days=i)).strftime("%Y-%m-%d"),
-                "Typ": "Vila",
-                "Män": 0, "DP": 0, "DPP": 0, "DAP": 0, "TPA": 0, "TPP": 0, "TAP": 0,
-                "Vaginal": 0, "Anal": 0,
-                "Kompisar": random.randint(0, int(totaler["Kompisar"] * max_procent)),
-                "Pappans vänner": random.randint(0, int(totaler["Pappans vänner"] * max_procent)),
-                "Nils vänner": random.randint(0, int(totaler["Nils vänner"] * max_procent)),
-                "Nils familj": random.randint(0, int(totaler["Nils familj"] * max_procent)),
-                "Tid per man (min)": 0, "DT tid (sek)": 0, "DT män": 0, "DT total tid (sek)": 0,
-                "Älskar med": älskar_med,
-                "Sover med": sover_med,
-                "Total tid (sek)": 0,
-                "Intäkt (USD)": 0, "Kvinna lön": 0, "Män lön": 0, "Kompis lön": 0,
-                "Prenumeranter": 0, "Kurs": 0,
-                "Nils sex hemma": nils_sex if i == 0 else 0
-            }
-            df = df.append(rand_rad, ignore_index=True)
-
-        sh.worksheet("Data").update([df.columns.tolist()] + df.values.tolist())
-        st.rerun()
-
-# 🔍 Statistik
-st.header("📊 Statistik")
-
-antal_män = df["Män"].sum()
-antal_älskar = df["Älskar med"].sum()
-antal_sover = df["Sover med"].sum()
-
-vänner = {
-    "Kompisar": df["Kompisar"].sum(),
-    "Pappans vänner": df["Pappans vänner"].sum(),
-    "Nils vänner": df["Nils vänner"].sum(),
-    "Nils familj": df["Nils familj"].sum(),
-}
-
-st.markdown(f"""
-- 👩 Namn: **{inst['Namn']}**
-- 🎂 Nuvarande ålder: **{(pd.to_datetime(df['Datum'].iloc[-1]) - pd.to_datetime(inst['Födelsedatum'])).days // 365} år**
-- 📅 Senaste datum: **{df['Datum'].iloc[-1]}**
-- 🔢 Totalt antal män: **{antal_män}**
-- ❤️ Älskat med: **{antal_älskar}**
-- 💤 Sovit med: **{antal_sover}**
-""")
-
-for kategori, värde in vänner.items():
-    st.markdown(f"- 👥 {kategori}: **{värde} gånger**")
-
-# 🧮 Funktion för kursuppdatering
-def uppdatera_kurs(df, inst):
+# Spara DataFrame till Google Sheets
+def spara_data(namn, df):
     df = df.copy()
-    df["Kurs"] = 0.0
-    kurs = inst.get("Startkurs", 1.0)
-    total_aktier = 100000
+    df = df.fillna("")
+    df = df.astype(str)
+    worksheet = sh.worksheet(namn)
+    worksheet.clear()
+    worksheet.update([df.columns.values.tolist()] + df.values.tolist())
 
+# Initiera alla blad
+init_sheet("Inställningar", ["Inställning", "Värde", "Senast ändrad"])
+init_sheet("Scener", [
+    "Datum", "Typ", "DP", "DPP", "DAP", "TPA", "TPP", "TAP",
+    "Enkel vaginal", "Enkel anal", "Pappans vänner", "Kompisar", "Nils vänner", "Nils familj",
+    "Älskar med", "Sover med", "DT tid per man (sek)", "DT total tid (sek)",
+    "Total aktiv tid (sek)", "Vilotid (sek)", "Summa tid (sek)", "Tid per man (min)",
+    "Prenumeranter", "Intäkt (USD)", "Till kvinna (USD)", "Till män (USD)", "Till kompisar (USD)",
+    "Aktiekurs (USD)", "Vilodagar"
+])
+
+# Läs inställningar och konvertera värden
+def läs_inställningar():
+    df = ladda_data("Inställningar")
+    inst = {}
+    for rad in df.to_dict("records"):
+        värde = str(rad["Värde"]).replace(",", ".")
+        try:
+            värde = float(värde)
+        except:
+            pass
+        inst[rad["Inställning"]] = värde
+    return inst
+
+# Spara uppdaterade inställningar
+def spara_inställning(namn, värde):
+    df = ladda_data("Inställningar")
+    idag = datetime.now().strftime("%Y-%m-%d")
+    hittad = False
     for i, rad in df.iterrows():
-        if i == 0:
-            df.at[i, "Kurs"] = kurs
-            continue
-        pren_idag = rad["Prenumeranter"]
-        pren_igår = df.at[i - 1, "Prenumeranter"]
-        if pren_igår == 0:
-            df.at[i, "Kurs"] = kurs
-        else:
-            kurs *= (pren_idag / pren_igår)
-            df.at[i, "Kurs"] = kurs
-    return df
+        if rad["Inställning"] == namn:
+            df.at[i, "Värde"] = värde
+            df.at[i, "Senast ändrad"] = idag
+            hittad = True
+    if not hittad:
+        df = pd.concat([df, pd.DataFrame([{"Inställning": namn, "Värde": värde, "Senast ändrad": idag}])], ignore_index=True)
+    spara_data("Inställningar", df)
 
-# 💾 Spara kursuppdatering
-if st.button("🔄 Uppdatera aktiekurs & prenumeranter"):
-    df = uppdatera_kurs(df, inst)
-    sh.worksheet("Data").update([df.columns.tolist()] + df.values.tolist())
-    st.success("Kurs och prenumeranter uppdaterade.")
-    st.rerun()
+# Funktion för att beräkna ålder
+def beräkna_ålder(födelsedatum, referensdatum):
+    född = datetime.strptime(födelsedatum, "%Y-%m-%d")
+    nu = datetime.strptime(referensdatum, "%Y-%m-%d")
+    return nu.year - född.year - ((nu.month, nu.day) < (född.month, född.day))
 
-# 🗃️ Export eller inspektion av data
-st.subheader("📄 Rådata")
-st.dataframe(df)
+# Slumpa antal från en grupp baserat på procent
+def slumpa_antal(max_antal, procent):
+    return random.randint(0, int(max_antal * procent))
+
+# Räkna prenumeranter utifrån scenens data
+def räkna_prenumeranter(rad, vikter):
+    total = (
+        rad["DP"] * vikter["DP"] +
+        rad["DPP"] * vikter["DPP"] +
+        rad["DAP"] * vikter["DAP"] +
+        rad["TPA"] * vikter["TPA"] +
+        rad["TPP"] * vikter["TPP"] +
+        rad["TAP"] * vikter["TAP"] +
+        rad["Enkel vaginal"] * vikter["Enkel vaginal"] +
+        rad["Enkel anal"] * vikter["Enkel anal"]
+    )
+    return int(total)
+
+def main():
+    st.title("🎬 Malin – Inspelningsplan och statistik")
+
+    inst = läs_inställningar()
+    blad = "Data"
+    df = ladda_data(blad)
+
+    # Sidopanel – inställningar
+    with st.sidebar:
+        st.header("⚙️ Inställningar")
+        namn = st.text_input("Kvinnans namn", inst.get("Kvinnans namn", "Malin"))
+        född = st.text_input("Födelsedatum (ÅÅÅÅ-MM-DD)", inst.get("Födelsedatum", "1984-03-26"))
+        startdatum = st.text_input("Startdatum första scen (ÅÅÅÅ-MM-DD)", inst.get("Startdatum", "2014-03-26"))
+
+        spara_inställning("Kvinnans namn", namn)
+        spara_inställning("Födelsedatum", född)
+        spara_inställning("Startdatum", startdatum)
+
+        st.divider()
+        for kategori in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
+            värde = st.number_input(f"Totalt antal: {kategori}", min_value=0, value=int(inst.get(kategori, 0)), step=1)
+            spara_inställning(kategori, värde)
+
+        st.divider()
+        st.subheader("📈 Prenumerant-vikter")
+        for fält in ["DP", "DPP", "DAP", "TPA", "TPP", "TAP", "Enkel vaginal", "Enkel anal"]:
+            v = st.number_input(f"{fält}", min_value=0.0, value=float(inst.get(fält, 1.0)))
+            spara_inställning(fält, v)
+
+    # Huvudvy – statistik
+    if not df.empty:
+        senaste_datum = df["Datum"].max()
+        ålder = beräkna_ålder(född, senaste_datum)
+        st.subheader(f"{namn}, {ålder} år (senaste inspelning: {senaste_datum})")
+
+        st.write("📊 Statistik och sammanställning kommer i nästa version.")
+
+    # Funktioner som lägg till scen, vilodagar, statistik etc. integreras i nästa steg.
+
+if __name__ == "__main__":
+    main()
