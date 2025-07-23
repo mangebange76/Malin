@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
 from random import sample
-from berakningar import process_lägg_till_rader
+import math
 
 # Autentisering
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -18,7 +18,8 @@ sh = gc.open_by_url(SPREADSHEET_URL)
 # Kolumner
 DATA_COLUMNS = [
     "Datum", "Typ", "DP", "DPP", "DAP", "TPA", "TPP", "TAP",
-    "Enkel vaginal", "Enkel anal", "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj", "Övriga män",
+    "Enkel vaginal", "Enkel anal",
+    "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj", "Övriga män",
     "Älskar med", "Sover med", "Nils sex",
     "DT tid per man (sek)", "DT total tid (sek)", "Total tid (sek)", "Total tid (h)",
     "Prenumeranter", "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
@@ -27,7 +28,7 @@ DATA_COLUMNS = [
 
 INST_COLUMNS = ["Inställning", "Värde", "Senast ändrad"]
 
-# Initiera kalkylblad
+# Initiera blad
 def init_sheet(name, cols):
     try:
         worksheet = sh.worksheet(name)
@@ -106,195 +107,132 @@ def ladda_data():
 def scenformulär(df, inst):
     st.subheader("Lägg till scen eller vila")
 
-    with st.form("lägg_till"):
-        typ = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"], key="form_typ")
-        dagar = st.number_input("Antal vilodagar (gäller bara vid vila)", min_value=1, step=1, key="form_dagar")
-        scen_tid = st.number_input("Scenens längd (h)", min_value=0.0, step=0.25, key="form_scen_tid")
-        ov = st.number_input("Övriga män", min_value=0, step=1, key="form_ov")
-        enkel_vag = st.number_input("Enkel vaginal", min_value=0, step=1, key="form_enkel_vag")
-        enkel_anal = st.number_input("Enkel anal", min_value=0, step=1, key="form_enkel_anal")
-        dp = st.number_input("DP", min_value=0, step=1, key="form_dp")
-        dpp = st.number_input("DPP", min_value=0, step=1, key="form_dpp")
-        dap = st.number_input("DAP", min_value=0, step=1, key="form_dap")
-        tpp = st.number_input("TPP", min_value=0, step=1, key="form_tpp")
-        tap = st.number_input("TAP", min_value=0, step=1, key="form_tap")
-        tpa = st.number_input("TPA", min_value=0, step=1, key="form_tpa")
-        komp = st.number_input("Kompisar", min_value=0, step=1, max_value=int(inst.get("Kompisar", 999)), key="form_komp")
-        pappans = st.number_input("Pappans vänner", min_value=0, step=1, max_value=int(inst.get("Pappans vänner", 999)), key="form_pappans")
-        nils_v = st.number_input("Nils vänner", min_value=0, step=1, max_value=int(inst.get("Nils vänner", 999)), key="form_nils_v")
-        nils_f = st.number_input("Nils familj", min_value=0, step=1, max_value=int(inst.get("Nils familj", 999)), key="form_nils_f")
-        dt_tid_per_man = st.number_input("DT tid per man (sek)", min_value=0, step=1, key="form_dt_tid_per_man")
-        älskar = st.number_input("Antal älskar med", min_value=0, step=1, key="form_älskar")
-        sover = st.number_input("Antal sover med", min_value=0, step=1, key="form_sover")
+    if "form_data" not in st.session_state:
+        st.session_state.form_data = {
+            "Typ": "Scen",
+            "DP": 0, "DPP": 0, "DAP": 0,
+            "TPA": 0, "TPP": 0, "TAP": 0,
+            "Enkel vaginal": 0, "Enkel anal": 0,
+            "Kompisar": 0, "Pappans vänner": 0, "Nils vänner": 0, "Nils familj": 0,
+            "Övriga män": 0,
+            "Älskar med": 0, "Sover med": 0,
+            "DT tid per man (sek)": 0,
+            "Scenens längd (h)": 0,
+            "Antal vilodagar": 1
+        }
 
-        # Beräkna och visa info direkt
-        total_män = ov + komp + pappans + nils_v + nils_f
-        total_deepthroat_tid = dt_tid_per_man * total_män
-        scen_tid_i_sek = scen_tid * 3600
-        total_tid = scen_tid_i_sek + total_deepthroat_tid
-        total_tid_h = round(total_tid / 3600, 2)
-        min_per_kille = round((total_tid / 60) / total_män, 2) if total_män > 0 else 0
+    with st.form("lägg_till_formulär"):
+        f = st.session_state.form_data
+        f["Typ"] = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"], index=["Scen", "Vila inspelningsplats", "Vilovecka hemma"].index(f["Typ"]))
+        f["Antal vilodagar"] = st.number_input("Antal vilodagar", min_value=1, step=1, value=f["Antal vilodagar"])
+        f["Scenens längd (h)"] = st.number_input("Scenens längd", min_value=0.0, step=0.25, value=f["Scenens längd (h)"])
+        f["Övriga män"] = st.number_input("Övriga män", min_value=0, step=1, value=f["Övriga män"])
+        f["Enkel vaginal"] = st.number_input("Enkel vaginal", min_value=0, step=1, value=f["Enkel vaginal"])
+        f["Enkel anal"] = st.number_input("Enkel anal", min_value=0, step=1, value=f["Enkel anal"])
+        f["DP"] = st.number_input("DP", min_value=0, step=1, value=f["DP"])
+        f["DPP"] = st.number_input("DPP", min_value=0, step=1, value=f["DPP"])
+        f["DAP"] = st.number_input("DAP", min_value=0, step=1, value=f["DAP"])
+        f["TPP"] = st.number_input("TPP", min_value=0, step=1, value=f["TPP"])
+        f["TAP"] = st.number_input("TAP", min_value=0, step=1, value=f["TAP"])
+        f["TPA"] = st.number_input("TPA", min_value=0, step=1, value=f["TPA"])
+        f["Kompisar"] = st.number_input("Kompisar", min_value=0, max_value=int(inst.get("Kompisar", 999)), step=1, value=f["Kompisar"])
+        f["Pappans vänner"] = st.number_input("Pappans vänner", min_value=0, max_value=int(inst.get("Pappans vänner", 999)), step=1, value=f["Pappans vänner"])
+        f["Nils vänner"] = st.number_input("Nils vänner", min_value=0, max_value=int(inst.get("Nils vänner", 999)), step=1, value=f["Nils vänner"])
+        f["Nils familj"] = st.number_input("Nils familj", min_value=0, max_value=int(inst.get("Nils familj", 999)), step=1, value=f["Nils familj"])
+        f["DT tid per man (sek)"] = st.number_input("DT tid per man", min_value=0, step=1, value=f["DT tid per man (sek)"])
+        f["Älskar med"] = st.number_input("Antal älskar med", min_value=0, step=1, value=f["Älskar med"])
+        f["Sover med"] = st.number_input("Antal sover med", min_value=0, step=1, value=f["Sover med"])
 
-        st.info(f"Total tid (h): {total_tid_h} timmar\n\nMinuter per kille (inkl. deep throat): {min_per_kille} min")
-        if total_tid_h > 18:
-            st.warning("⚠️ Scenens totala tid överskrider 18 timmar!")
+        # Visa beräknad tid
+        from berakningar import beräkna_tid_per_kille
+        tid_min, total_h = beräkna_tid_per_kille(f)
+        st.info(f"🕒 Varje kille får {tid_min:.2f} minuter inkl. deep throat")
+        if total_h > 18:
+            st.warning(f"⚠️ Total tid ({total_h:.2f} timmar) överskrider 18 timmar!")
 
         submit = st.form_submit_button("Lägg till")
 
     if submit:
         from berakningar import process_lägg_till_rader
-        df = process_lägg_till_rader(df, inst, typ, dagar, scen_tid, ov, enkel_vag, enkel_anal,
-                                     dp, dpp, dap, tpp, tap, tpa,
-                                     komp, pappans, nils_v, nils_f,
-                                     dt_tid_per_man, älskar, sover)
+        df = process_lägg_till_rader(df, inst, f)
         spara_data(df)
-        st.success("Rad(er) tillagda!")
 
-        # Rensa formulärvärden
-        for key in st.session_state.keys():
-            if key.startswith("form_"):
-                st.session_state[key] = 0 if "typ" not in key else "Scen"
+        # Nollställ fälten
+        del st.session_state.form_data
         st.rerun()
 
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-from berakningar import process_lägg_till_rader
 from google.oauth2.service_account import Credentials
 import gspread
 
-# === Google Sheets Setup ===
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1-5JSJpqBB0j7sm3cgEGZmnFoBL_oJDPMpLdleggL0HQ/edit?usp=drivesdk"
+# Autentisering och initiering
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1U7P_f57LqDvm_gBtzBjRWyTuTj-nQlSwgDnN36Yj4cU/edit#gid=0"
+credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"])
+gc = gspread.authorize(credentials)
+sh = gc.open_by_url(SHEET_URL)
+blad = sh.worksheet("Data")
 
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
-gc = gspread.authorize(creds)
-sh = gc.open_by_url(SPREADSHEET_URL)
-
-def init_sheet():
-    try:
-        sheet = sh.worksheet("Data")
-    except gspread.exceptions.WorksheetNotFound:
-        sheet = sh.add_worksheet(title="Data", rows="1000", cols="30")
-        sheet.append_row([
-            "Datum", "Typ", "DP", "DPP", "DAP", "TPA", "TPP", "TAP",
-            "Enkel vaginal", "Enkel anal", "Kompisar", "Pappans vänner",
-            "Nils vänner", "Nils familj", "Övriga män",
-            "Älskar med", "Sover med", "Nils sex",
-            "DT tid per man (sek)", "DT total tid (sek)",
-            "Total tid (sek)", "Total tid (h)",
-            "Prenumeranter", "Intäkt ($)",
-            "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
-            "Minuter per kille", "Scenens längd (h)"
-        ])
-    return sheet
+# Standardinställningar
+STANDARDINSTÄLLNINGAR = {
+    "Startdatum": "2014-03-26",
+    "Kvinnans namn": "Malin",
+    "Födelsedatum": "1984-03-26",
+    "Kompisar": 40,
+    "Pappans vänner": 20,
+    "Nils vänner": 20,
+    "Nils familj": 10
+}
 
 def load_data():
-    sheet = init_sheet()
-    records = sheet.get_all_records()
-    return pd.DataFrame(records)
+    try:
+        data = blad.get_all_records()
+        return pd.DataFrame(data)
+    except:
+        blad.update([list(STANDARDINSTÄLLNINGAR.keys())])
+        return pd.DataFrame(columns=list(STANDARDINSTÄLLNINGAR.keys()))
 
-def save_data(df):
-    sheet = init_sheet()
-    sheet.clear()
-    sheet.append_row(list(df.columns))
-    rows = df.fillna("").astype(str).values.tolist()
-    sheet.append_rows(rows)
+def spara_data(df):
+    df_str = df.fillna("").astype(str)
+    blad.update([df_str.columns.values.tolist()] + df_str.values.tolist())
 
 def visa_inställningar(inst):
-    st.sidebar.header("Inställningar")
-    with st.sidebar.form("inst_form"):
-        namn = st.text_input("Kvinnans namn", value=inst.get("Kvinnans namn", "Malin"))
-        född = st.text_input("Födelsedatum (YYYY-MM-DD)", value=inst.get("Födelsedatum", "1984-03-26"))
-        start = st.text_input("Startdatum", value=inst.get("Startdatum", "2014-03-26"))
-
-        komp = st.number_input("Kompisar", min_value=0, value=int(inst.get("Kompisar", 40)))
-        papp = st.number_input("Pappans vänner", min_value=0, value=int(inst.get("Pappans vänner", 20)))
-        nv = st.number_input("Nils vänner", min_value=0, value=int(inst.get("Nils vänner", 20)))
-        nf = st.number_input("Nils familj", min_value=0, value=int(inst.get("Nils familj", 20)))
-
-        submit = st.form_submit_button("Spara inställningar")
-
-    if submit:
-        blad = sh.worksheet("Inställningar")
-        blad.update("A1:B8", [
-            ["Kvinnans namn", namn],
-            ["Födelsedatum", född],
-            ["Startdatum", start],
-            ["Kompisar", komp],
-            ["Pappans vänner", papp],
-            ["Nils vänner", nv],
-            ["Nils familj", nf],
-            ["Senast ändrad", datetime.today().strftime("%Y-%m-%d")]
-        ])
-        st.success("Inställningar uppdaterade!")
+    with st.sidebar:
+        st.header("Inställningar")
+        for nyckel in ["Startdatum", "Kvinnans namn", "Födelsedatum", "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
+            ny_värde = st.text_input(nyckel, str(inst.get(nyckel, "")), key=f"inst_{nyckel}")
+            inst[nyckel] = ny_värde if nyckel in ["Startdatum", "Kvinnans namn", "Födelsedatum"] else int(ny_värde)
+        if st.button("Spara inställningar"):
+            instblad = sh.worksheet("Inställningar")
+            instblad.update("A1", [[k, inst[k]] for k in inst])
 
 def läs_inställningar():
     try:
-        blad = sh.worksheet("Inställningar")
-    except gspread.exceptions.WorksheetNotFound:
-        blad = sh.add_worksheet(title="Inställningar", rows="10", cols="2")
-        blad.update("A1:B8", [
-            ["Kvinnans namn", "Malin"],
-            ["Födelsedatum", "1984-03-26"],
-            ["Startdatum", "2014-03-26"],
-            ["Kompisar", "40"],
-            ["Pappans vänner", "20"],
-            ["Nils vänner", "20"],
-            ["Nils familj", "20"],
-            ["Senast ändrad", datetime.today().strftime("%Y-%m-%d")]
-        ])
-    data = blad.get_all_values()
-    return {rad[0]: rad[1] for rad in data if len(rad) >= 2}
+        instblad = sh.worksheet("Inställningar")
+        data = instblad.get_all_records()
+        return {rad["Inställning"]: rad["Värde"] for rad in data}
+    except:
+        instblad = sh.add_worksheet(title="Inställningar", rows="100", cols="2")
+        instblad.update("A1", [["Inställning", "Värde"]])
+        for k, v in STANDARDINSTÄLLNINGAR.items():
+            instblad.append_row([k, v])
+        return STANDARDINSTÄLLNINGAR.copy()
 
-# === UI för formulär ===
-def scenformulär(df, inst):
-    st.header("Lägg till scen eller vila")
-
-    with st.form("formulär"):
-        typ = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"])
-        dagar = st.number_input("Antal vilodagar", min_value=0, value=1, step=1)
-        scen_tid = st.number_input("Scenens längd (h)", min_value=0.0, value=14.0)
-
-        ov = st.number_input("Övriga män", min_value=0, value=0)
-        enkel_vag = st.number_input("Enkel vaginal", min_value=0, value=0)
-        enkel_anal = st.number_input("Enkel anal", min_value=0, value=0)
-        dp = st.number_input("DP", min_value=0, value=0)
-        dpp = st.number_input("DPP", min_value=0, value=0)
-        dap = st.number_input("DAP", min_value=0, value=0)
-        tpp = st.number_input("TPP", min_value=0, value=0)
-        tap = st.number_input("TAP", min_value=0, value=0)
-        tpa = st.number_input("TPA", min_value=0, value=0)
-
-        komp = st.number_input("Kompisar", min_value=0, value=0)
-        pappans = st.number_input("Pappans vänner", min_value=0, value=0)
-        nils_v = st.number_input("Nils vänner", min_value=0, value=0)
-        nils_f = st.number_input("Nils familj", min_value=0, value=0)
-
-        dt_tid = st.number_input("DT tid per man (sek)", min_value=0, value=0)
-        älskar = st.number_input("Antal älskar med", min_value=0, value=0)
-        sover = st.number_input("Antal sover med", min_value=0, value=0)
-
-        submit = st.form_submit_button("Lägg till")
-
-    if submit:
-        df = process_lägg_till_rader(df, inst, typ, dagar, scen_tid, ov, enkel_vag, enkel_anal,
-                                     dp, dpp, dap, tpp, tap, tpa,
-                                     komp, pappans, nils_v, nils_f,
-                                     dt_tid, älskar, sover)
-        save_data(df)
-        st.success("Rad tillagd!")
-
-    st.subheader("Databas")
-    st.dataframe(df)
-
-# === MAIN ===
 def main():
-    st.set_page_config(page_title="Malin App", layout="wide")
+    st.title("🎬 Scenplanering – Malin")
+
     inst = läs_inställningar()
     visa_inställningar(inst)
+
     df = load_data()
+    from berakningar import process_lägg_till_rader
+    from berakningar import beräkna_tid_per_kille
     scenformulär(df, inst)
+
+    st.subheader("Alla scener och vilodagar")
+    if not df.empty:
+        st.dataframe(df, use_container_width=True)
 
 if __name__ == "__main__":
     main()
