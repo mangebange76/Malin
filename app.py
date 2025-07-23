@@ -19,7 +19,6 @@ def init_sheet(sh):
     except gspread.WorksheetNotFound:
         sheet = sh.add_worksheet(title="Data", rows="1000", cols="40")
         sheet.update("A1", [COLUMNS])
-
     df = pd.DataFrame(sheet.get_all_records())
     df = df.reindex(columns=COLUMNS, fill_value=0)
     return df
@@ -51,7 +50,6 @@ def läs_inställningar(sh):
             ["Nils familj", "10"]
         ]
         sheet.update("A2:C8", [[namn, värde, datetime.today().strftime("%Y-%m-%d")] for namn, värde in standard])
-
     df = pd.DataFrame(sheet.get_all_records())
     return {row["Namn"]: tolka_värde(row["Värde"]) for _, row in df.iterrows()}
 
@@ -75,14 +73,7 @@ def spara_inställningar(sh, nya_inst):
     sheet.update("A2:C" + str(len(df) + 1), df.values.tolist())
 
 def ensure_columns_exist(df):
-    kolumner = [
-        "Datum", "Typ", "Scenens längd (h)", "Antal vilodagar", "Övriga män",
-        "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP", "TPP", "TPA", "TAP",
-        "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj",
-        "DT tid per man (sek)", "Älskar med", "Sover med", "Nils sex",
-        "Prenumeranter", "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
-        "DT total tid (sek)", "Total tid (sek)", "Total tid (h)", "Minuter per kille"
-    ]
+    kolumner = COLUMNS
     for kolumn in kolumner:
         if kolumn not in df.columns:
             df[kolumn] = 0
@@ -99,14 +90,7 @@ def konvertera_typer(df):
 def rensa_data(sh):
     sheet = sh.worksheet("Data")
     sheet.resize(rows=1)
-    sheet.update("A1:AD1", [list(pd.DataFrame(columns=[
-        "Datum", "Typ", "Scenens längd (h)", "Antal vilodagar", "Övriga män",
-        "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP", "TPP", "TPA", "TAP",
-        "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj",
-        "DT tid per man (sek)", "Älskar med", "Sover med", "Nils sex",
-        "Prenumeranter", "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
-        "DT total tid (sek)", "Total tid (sek)", "Total tid (h)", "Minuter per kille"
-    ).columns)])
+    sheet.update("A1:AD1", [COLUMNS])
 
 def save_data(sh, df):
     df = ensure_columns_exist(df)
@@ -167,6 +151,23 @@ def visa_data(df):
         max_tid = df["Total tid (h)"].max()
         if max_tid > 18:
             st.warning("⚠️ Minst en rad har total tid över 18 timmar!")
+
+def visa_inställningar(inst, sh):
+    st.sidebar.header("Inställningar")
+    nya = {}
+    for nyckel in ["Startdatum", "Kvinnans namn", "Födelsedatum", "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
+        nya[nyckel] = st.sidebar.text_input(nyckel, str(inst.get(nyckel, "")))
+    if st.sidebar.button("Spara inställningar"):
+        spara_inställningar(sh, nya)
+        st.sidebar.success("Inställningar sparade")
+        st.experimental_rerun()
+    if st.sidebar.button("Rensa databas"):
+        rensa_data(sh)
+        st.sidebar.success("Databas rensad")
+        st.experimental_rerun()
+
+def autentisera():
+    return gc
 
 def main():
     st.title("Malin-produktionsapp")
