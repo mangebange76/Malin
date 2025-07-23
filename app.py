@@ -106,26 +106,26 @@ def ladda_data():
 def scenformulär(df, inst):
     st.subheader("Lägg till scen eller vila")
 
-    with st.form("lägg_till"):
+    with st.form("lägg_till", clear_on_submit=True):
         typ = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"])
+        dagar = st.number_input("Antal vilodagar (gäller bara vid vila)", min_value=1, step=1)
+        scen_tid = st.number_input("Scenens längd (h)", min_value=0.0, step=0.25)
+        ov = st.number_input("Övriga män", min_value=0, step=1)
+        enkel_vag = st.number_input("Enkel vaginal", min_value=0, step=1)
+        enkel_anal = st.number_input("Enkel anal", min_value=0, step=1)
         dp = st.number_input("DP", min_value=0, step=1)
         dpp = st.number_input("DPP", min_value=0, step=1)
         dap = st.number_input("DAP", min_value=0, step=1)
-        tpa = st.number_input("TPA", min_value=0, step=1)
         tpp = st.number_input("TPP", min_value=0, step=1)
         tap = st.number_input("TAP", min_value=0, step=1)
-        enkel_vag = st.number_input("Enkel vaginal", min_value=0, step=1)
-        enkel_anal = st.number_input("Enkel anal", min_value=0, step=1)
+        tpa = st.number_input("TPA", min_value=0, step=1)
         komp = st.number_input("Kompisar", min_value=0, step=1, max_value=int(inst.get("Kompisar", 999)))
         pappans = st.number_input("Pappans vänner", min_value=0, step=1, max_value=int(inst.get("Pappans vänner", 999)))
         nils_v = st.number_input("Nils vänner", min_value=0, step=1, max_value=int(inst.get("Nils vänner", 999)))
         nils_f = st.number_input("Nils familj", min_value=0, step=1, max_value=int(inst.get("Nils familj", 999)))
-        ov = st.number_input("Övriga män", min_value=0, step=1)
         dt_tid_per_man = st.number_input("DT tid per man (sek)", min_value=0, step=1)
-        scen_tid = st.number_input("Scenens längd (h)", min_value=0.0, step=0.25)
         älskar = st.number_input("Antal älskar med", min_value=0, step=1)
         sover = st.number_input("Antal sover med", min_value=0, step=1)
-        dagar = st.number_input("Antal vilodagar (gäller bara vid vila)", min_value=1, step=1)
         submit = st.form_submit_button("Lägg till")
 
     if submit:
