@@ -79,6 +79,7 @@ def spara_inställning(nyckel, värde):
     else:
         worksheet.append_row([nyckel, str(värde), idag])
 
+# MAIN
 def main():
     init_sheet("Data", DATA_COLUMNS)
     init_inställningar()
