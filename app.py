@@ -34,8 +34,7 @@ def init_sheet(name, cols):
         worksheet = sh.add_worksheet(title=name, rows="1000", cols="30")
         worksheet.update("A1", [cols])
     else:
-        values = worksheet.get_all_values()
-        existing_cols = values[0] if values else []
+        existing_cols = worksheet.row_values(1)
         if existing_cols != cols:
             worksheet.resize(rows=1)
             worksheet.update("A1", [cols])
@@ -94,15 +93,22 @@ def main():
         född = st.date_input("Födelsedatum", value=pd.to_datetime(inst.get("Födelsedatum", "1984-03-26")))
         startdatum = st.date_input("Startdatum (första scen)", value=pd.to_datetime(inst.get("Startdatum", "2014-03-26")))
 
-        spara_inställning("Kvinnans namn", namn)
-        spara_inställning("Födelsedatum", född.strftime("%Y-%m-%d"))
-        spara_inställning("Startdatum", startdatum.strftime("%Y-%m-%d"))
-
         st.divider()
 
-        for fält in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
-            val = st.number_input(fält, value=float(inst.get(fält, 0)), min_value=0.0, step=1.0)
-            spara_inställning(fält, val)
+        kompisar = st.number_input("Kompisar", value=float(inst.get("Kompisar", 0)), min_value=0.0, step=1.0)
+        pappans_vänner = st.number_input("Pappans vänner", value=float(inst.get("Pappans vänner", 0)), min_value=0.0, step=1.0)
+        nils_vänner = st.number_input("Nils vänner", value=float(inst.get("Nils vänner", 0)), min_value=0.0, step=1.0)
+        nils_familj = st.number_input("Nils familj", value=float(inst.get("Nils familj", 0)), min_value=0.0, step=1.0)
+
+        if st.button("💾 Spara inställningar"):
+            spara_inställning("Kvinnans namn", namn)
+            spara_inställning("Födelsedatum", född.strftime("%Y-%m-%d"))
+            spara_inställning("Startdatum", startdatum.strftime("%Y-%m-%d"))
+            spara_inställning("Kompisar", kompisar)
+            spara_inställning("Pappans vänner", pappans_vänner)
+            spara_inställning("Nils vänner", nils_vänner)
+            spara_inställning("Nils familj", nils_familj)
+            st.success("Inställningar sparade!")
 
 if __name__ == "__main__":
     main()
