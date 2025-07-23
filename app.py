@@ -102,98 +102,334 @@ def ladda_data():
     except:
         return pd.DataFrame(columns=DATA_COLUMNS)
 
-def rensa_data():
-    worksheet = sh.worksheet("Data")
-    worksheet.resize(rows=1)
-    worksheet.update("A1", [DATA_COLUMNS])
+def reset_form_fields():
+    keys = [
+        "typ", "dp", "dpp", "dap", "tpa", "tpp", "tap",
+        "enkel_vag", "enkel_anal", "komp", "pappans", "nils_v", "nils_f",
+        "ov", "dt_tid_per_man", "scen_tid", "älskar", "sover", "dagar"
+    ]
+    for key in keys:
+        st.session_state[key] = 0 if "typ" not in key else "Scen"
 
 def scenformulär(df, inst):
     st.subheader("Lägg till scen eller vila")
 
-    if "form_state" not in st.session_state:
-        st.session_state.form_state = {
-            "typ": "Scen", "dagar": 1, "scen_tid": 0.0, "ov": 0, "enkel_vag": 0, "enkel_anal": 0,
-            "dp": 0, "dpp": 0, "dap": 0, "tpp": 0, "tap": 0, "tpa": 0,
-            "komp": 0, "pappans": 0, "nils_v": 0, "nils_f": 0,
-            "dt_tid_per_man": 0, "älskar": 0, "sover": 0
-        }
-
     with st.form("lägg_till"):
-        typ = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"], key="typ")
-        dagar = st.number_input("Antal vilodagar (gäller bara vid vila)", min_value=1, step=1, key="dagar")
-        scen_tid = st.number_input("Scenens längd (h)", min_value=0.0, step=0.25, key="scen_tid")
-        ov = st.number_input("Övriga män", min_value=0, step=1, key="ov")
-        enkel_vag = st.number_input("Enkel vaginal", min_value=0, step=1, key="enkel_vag")
-        enkel_anal = st.number_input("Enkel anal", min_value=0, step=1, key="enkel_anal")
-        dp = st.number_input("DP", min_value=0, step=1, key="dp")
-        dpp = st.number_input("DPP", min_value=0, step=1, key="dpp")
-        dap = st.number_input("DAP", min_value=0, step=1, key="dap")
-        tpp = st.number_input("TPP", min_value=0, step=1, key="tpp")
-        tap = st.number_input("TAP", min_value=0, step=1, key="tap")
-        tpa = st.number_input("TPA", min_value=0, step=1, key="tpa")
-        komp = st.number_input("Kompisar", min_value=0, step=1, max_value=int(inst.get("Kompisar", 999)), key="komp")
-        pappans = st.number_input("Pappans vänner", min_value=0, step=1, max_value=int(inst.get("Pappans vänner", 999)), key="pappans")
-        nils_v = st.number_input("Nils vänner", min_value=0, step=1, max_value=int(inst.get("Nils vänner", 999)), key="nils_v")
-        nils_f = st.number_input("Nils familj", min_value=0, step=1, max_value=int(inst.get("Nils familj", 999)), key="nils_f")
-        dt_tid_per_man = st.number_input("DT tid per man (sek)", min_value=0, step=1, key="dt_tid_per_man")
-        älskar = st.number_input("Antal älskar med", min_value=0, step=1, key="älskar")
-        sover = st.number_input("Antal sover med", min_value=0, step=1, key="sover")
+        st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"], key="typ")
+        st.number_input("Antal vilodagar (gäller bara vid vila)", min_value=1, step=1, key="dagar")
+        st.number_input("Scenens längd (h)", min_value=0.0, step=0.25, key="scen_tid")
+        st.number_input("Övriga män", min_value=0, step=1, key="ov")
+        st.number_input("Enkel vaginal", min_value=0, step=1, key="enkel_vag")
+        st.number_input("Enkel anal", min_value=0, step=1, key="enkel_anal")
+        st.number_input("DP", min_value=0, step=1, key="dp")
+        st.number_input("DPP", min_value=0, step=1, key="dpp")
+        st.number_input("DAP", min_value=0, step=1, key="dap")
+        st.number_input("TPP", min_value=0, step=1, key="tpp")
+        st.number_input("TAP", min_value=0, step=1, key="tap")
+        st.number_input("TPA", min_value=0, step=1, key="tpa")
+        st.number_input("Kompisar", min_value=0, step=1, max_value=int(inst.get("Kompisar", 999)), key="komp")
+        st.number_input("Pappans vänner", min_value=0, step=1, max_value=int(inst.get("Pappans vänner", 999)), key="pappans")
+        st.number_input("Nils vänner", min_value=0, step=1, max_value=int(inst.get("Nils vänner", 999)), key="nils_v")
+        st.number_input("Nils familj", min_value=0, step=1, max_value=int(inst.get("Nils familj", 999)), key="nils_f")
+        st.number_input("DT tid per man (sek)", min_value=0, step=1, key="dt_tid_per_man")
+        st.number_input("Antal älskar med", min_value=0, step=1, key="älskar")
+        st.number_input("Antal sover med", min_value=0, step=1, key="sover")
         submit = st.form_submit_button("Lägg till")
 
     if submit:
-        senaste_datum = pd.to_datetime(df["Datum"].max()) if not df.empty else pd.to_datetime(inst.get("Startdatum"))
-        nils_sextillfällen = [0] * 7
+        from .del3 import process_lägg_till_rader  # (kommer i del 3)
+        df = process_lägg_till_rader(df, inst, st.session_state)
+        spara_data(df)
+        reset_form_fields()
+        st.rerun()
+
+from datetime import timedelta
+from random import randint, sample
+import pandas as pd
+
+def process_lägg_till_rader(df, inst, form_data):
+    typ = form_data["typ"]
+    dagar = form_data["dagar"]
+    scen_tid = form_data["scen_tid"]
+    ov = form_data["ov"]
+    enkel_vag = form_data["enkel_vag"]
+    enkel_anal = form_data["enkel_anal"]
+    dp = form_data["dp"]
+    dpp = form_data["dpp"]
+    dap = form_data["dap"]
+    tpp = form_data["tpp"]
+    tap = form_data["tap"]
+    tpa = form_data["tpa"]
+    komp = form_data["komp"]
+    pappans = form_data["pappans"]
+    nils_v = form_data["nils_v"]
+    nils_f = form_data["nils_f"]
+    dt_tid_per_man = form_data["dt_tid_per_man"]
+    älskar = form_data["älskar"]
+    sover = form_data["sover"]
+
+    senaste_datum = pd.to_datetime(df["Datum"].max()) if not df.empty else pd.to_datetime(inst.get("Startdatum"))
+    nils_sextillfällen = [0] * 7
+
+    if typ == "Vilovecka hemma":
+        tillfällen = sorted(sample(range(7), k=min(2, 7)))
+        for i in tillfällen:
+            nils_sextillfällen[i] = 1
+
+    antal = 7 if typ == "Vilovecka hemma" else int(dagar)
+    nya_rader = []
+
+    # För Vilovecka: fördela 1.5x av inst totalt på 7 dagar
+    def fördela_värde(gruppnamn):
+        totalt = int(inst.get(gruppnamn, 0))
+        mål = int(totalt * 1.5)
+        per_dag = [mål // 7] * 7
+        for i in range(mål % 7):
+            per_dag[i] += 1
+        return per_dag
+
+    komp_distr = fördela_värde("Kompisar") if typ == "Vilovecka hemma" else []
+    pappans_distr = fördela_värde("Pappans vänner") if typ == "Vilovecka hemma" else []
+    nils_v_distr = fördela_värde("Nils vänner") if typ == "Vilovecka hemma" else []
+    nils_f_distr = fördela_värde("Nils familj") if typ == "Vilovecka hemma" else []
+
+    for i in range(antal):
+        datum = senaste_datum + timedelta(days=1)
+        senaste_datum = datum
 
         if typ == "Vilovecka hemma":
-            tillfällen = sorted(sample(range(6), k=min(2, 6)))
-            for i in tillfällen:
-                nils_sextillfällen[i] = 1
+            rad_komp = komp_distr[i]
+            rad_pappans = pappans_distr[i]
+            rad_nils_v = nils_v_distr[i]
+            rad_nils_f = nils_f_distr[i]
+            sover_med = 0
+            älskar_med = 8
+            nils_sex = nils_sextillfällen[i]
+        elif typ == "Vila inspelningsplats":
+            rad_komp = randint(inst.get("Kompisar", 0) * 25 // 100, inst.get("Kompisar", 0) * 50 // 100)
+            rad_pappans = randint(inst.get("Pappans vänner", 0) * 25 // 100, inst.get("Pappans vänner", 0) * 50 // 100)
+            rad_nils_v = randint(inst.get("Nils vänner", 0) * 25 // 100
 
-            # fördela 1,5× totalt antal
-            def fördela(total):
-                mål = int(round(total * 1.5))
-                bas = mål // 7
-                rest = mål % 7
-                return [bas + 1 if i < rest else bas for i in range(7)]
+Här är **Del 3** igen – uppdaterad funktion `process_lägg_till_rader(...)` som:
 
-            komp_lista = fördela(inst.get("Kompisar", 0))
-            pappans_lista = fördela(inst.get("Pappans vänner", 0))
-            nilsv_lista = fördela(inst.get("Nils vänner", 0))
-            nilsf_lista = fördela(inst.get("Nils familj", 0))
+- Skapar nya rader baserat på formulärdata
+- Genererar rätt datum
+- Slumpar antal från grupper vid vila
+- Fördelar 1,5× gruppstorlek vid vilovecka
+- Gör alla beräkningar: deep throat-tid, total tid, prenumeranter, intäkter, löner
+- Returnerar uppdaterad DataFrame
 
-        antal = 7 if typ == "Vilovecka hemma" else int(dagar)
+---
+
+### 📄 Del 3 – `process_lägg_till_rader(df, inst, form_data)`
+
+```python
+from datetime import timedelta
+from random import randint, sample
+import pandas as pd
+
+def process_lägg_till_rader(df, inst, form_data):
+    typ = form_data["typ"]
+    dagar = form_data["dagar"]
+    scen_tid = form_data["scen_tid"]
+    ov = form_data["ov"]
+    enkel_vag = form_data["enkel_vag"]
+    enkel_anal = form_data["enkel_anal"]
+    dp = form_data["dp"]
+    dpp = form_data["dpp"]
+    dap = form_data["dap"]
+    tpp = form_data["tpp"]
+    tap = form_data["tap"]
+    tpa = form_data["tpa"]
+    komp = form_data["komp"]
+    pappans = form_data["pappans"]
+    nils_v = form_data["nils_v"]
+    nils_f = form_data["nils_f"]
+    dt_tid_per_man = form_data["dt_tid_per_man"]
+    älskar = form_data["älskar"]
+    sover = form_data["sover"]
+
+    senaste_datum = pd.to_datetime(df["Datum"].max()) if not df.empty else pd.to_datetime(inst.get("Startdatum"))
+    nils_sextillfällen = [0] * 7
+
+    if typ == "Vilovecka hemma":
+        tillfällen = sorted(sample(range(7), k=min(2, 7)))
+        for i in tillfällen:
+            nils_sextillfällen[i] = 1
+
+    antal = 7 if typ == "Vilovecka hemma" else int(dagar)
+    nya_rader = []
+
+    def fördela_värde(gruppnamn):
+        totalt = int(inst.get(gruppnamn, 0))
+        mål = int(totalt * 1.5)
+        per_dag = [mål // 7] * 7
+        for i in range(mål % 7):
+            per_dag[i] += 1
+        return per_dag
+
+    komp_distr = fördela_värde("Kompisar") if typ == "Vilovecka hemma" else []
+    pappans_distr = fördela_värde("Pappans vänner") if typ == "Vilovecka hemma" else []
+    nils_v_distr = fördela_värde("Nils vänner") if typ == "Vilovecka hemma" else []
+    nils_f_distr = fördela_värde("Nils familj") if typ == "Vilovecka hemma" else []
+
+    for i in range(antal):
+        datum = senaste_datum + timedelta(days=1)
+        senaste_datum = datum
+
+        if typ == "Vilovecka hemma":
+            rad_komp = komp_distr[i]
+            rad_pappans = pappans_distr[i]
+            rad_nils_v = nils_v_distr[i]
+            rad_nils_f = nils_f_distr[i]
+            sover_med = 0
+            älskar_med = 8
+            nils_sex = nils_sextillfällen[i]
+        elif typ == "Vila inspelningsplats":
+            rad_komp = randint(int(inst.get("Kompisar", 0) * 0.25), int(inst.get("Kompisar
+
+import streamlit as st
+
+def main():
+    st.set_page_config(page_title="Malin App", layout="wide")
+
+    st.title("📊 Malins statistik- och scenplaneringsapp")
+
+    # Ladda in data
+    df = ladda_data()
+    inst = läs_inställningar()
+
+    # Sidopanel: inställningar
+    st.sidebar.header("Inställningar")
+    with st.sidebar.form("inställningar_form"):
+        startdatum = st.date_input("Startdatum", value=pd.to_datetime(inst.get("Startdatum", "2020-01-01")))
+        namn = st.text_input("Kvinnans namn", value=inst.get("Namn", "Malin"))
+        födelse = st.date_input("Födelsedatum", value=pd.to_datetime(inst.get("Födelsedatum", "1984-01-01")))
+        kompisar = st.number_input("Kompisar", value=int(inst.get("Kompisar", 0)), step=1)
+        pappans = st.number_input("Pappans vänner", value=int(inst.get("Pappans vänner", 0)), step=1)
+        nils_v = st.number_input("Nils vänner", value=int(inst.get("Nils vänner", 0)), step=1)
+        nils_f = st.number_input("Nils familj", value=int(inst.get("Nils familj", 0)), step=1)
+        sparaknapp = st.form_submit_button("Spara inställningar")
+
+    if sparaknapp:
+        inst.update({
+            "Startdatum": str(startdatum),
+            "Namn": namn,
+            "Födelsedatum": str(födelse),
+            "Kompisar": kompisar,
+            "Pappans vänner": pappans,
+            "Nils vänner": nils_v,
+            "Nils familj": nils_f
+        })
+        spara_inställningar(inst)
+        st.success("Inställningar uppdaterade.")
+
+    # Visa formulär
+    st.header("➕ Lägg till scen eller vilodag")
+    df = scenformulär(df, inst)
+
+    # Visa data
+    st.header("📋 Samtliga rader")
+    st.dataframe(df, use_container_width=True)
+
+    # Spara tillbaka till Google Sheets
+    spara_data(df)
+
+def scenformulär(df, inst):
+    with st.form("lägg_till_formulär", clear_on_submit=True):
+        kol1, kol2, kol3 = st.columns(3)
+        with kol1:
+            typ = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"])
+            dagar = st.number_input("Antal vilodagar", min_value=1, step=1)
+            scen_tid = st.number_input("Scenens längd (h)", min_value=0.0, step=0.25)
+            ov = st.number_input("Övriga män", min_value=0, step=1)
+            enkel_vag = st.number_input("Enkel vaginal", min_value=0, step=1)
+            enkel_anal = st.number_input("Enkel anal", min_value=0, step=1)
+        with kol2:
+            dp = st.number_input("DP", min_value=0, step=1)
+            dpp = st.number_input("DPP", min_value=0, step=1)
+            dap = st.number_input("DAP", min_value=0, step=1)
+            tpp = st.number_input("TPP", min_value=0, step=1)
+            tap = st.number_input("TAP", min_value=0, step=1)
+            tpa = st.number_input("TPA", min_value=0, step=1)
+        with kol3:
+            komp = st.number_input("Kompisar", min_value=0, step=1, max_value=int(inst["Kompisar"]))
+            pappans = st.number_input("Pappans vänner", min_value=0, step=1, max_value=int(inst["Pappans vänner"]))
+            nils_v = st.number_input("Nils vänner", min_value=0, step=1, max_value=int(inst["Nils vänner"]))
+            nils_f = st.number_input("Nils familj", min_value=0, step=1, max_value=int(inst["Nils familj"]))
+            dt_tid_per_man = st.number_input("DT tid per man (sek)", min_value=0, step=1)
+            älskar = st.number_input("Antal älskar med", min_value=0, step=1)
+            sover = st.number_input("Antal sover med", min_value=0, step=1)
+
+        submit = st.form_submit_button("Lägg till")
+
+    if submit:
+        senaste_datum = pd.to_datetime(df["Datum"].max()) if not df.empty else pd.to_datetime(inst["Startdatum"])
+        nils_sexveckan = [0]*7
+        antal_rader = 7 if typ == "Vilovecka hemma" else int(dagar)
         nya_rader = []
 
-        for i in range(antal):
+        if typ == "Vilovecka hemma":
+            # Slumpa två tillfällen för sex
+            tillfällen = sample(range(6), min(2, 6))
+            for i in tillfällen:
+                nils_sexveckan[i] = 1
+            # Fördela 1.5x grupper på 7 dagar
+            def fördela_grupp(värde):
+                total = round(1.5 * värde)
+                bas = total // 7
+                extra = total % 7
+                return [bas + 1 if i < extra else bas for i in range(7)]
+
+            komp_vecka = fördela_grupp(inst["Kompisar"])
+            pappans_vecka = fördela_grupp(inst["Pappans vänner"])
+            nils_v_vecka = fördela_grupp(inst["Nils vänner"])
+            nils_f_vecka = fördela_grupp(inst["Nils familj"])
+
+        for i in range(antal_rader):
             datum = senaste_datum + timedelta(days=1)
             senaste_datum = datum
 
-            if typ == "Vilovecka hemma":
-                sover_med = 1 if i == 6 else 0
-                älskar_med = 8 if i < 6 else 0
-                nils_sex = nils_sextillfällen[i]
-                rad_komp = komp_lista[i]
-                rad_pappans = pappans_lista[i]
-                rad_nils_v = nilsv_lista[i]
-                rad_nils_f = nilsf_lista[i]
-
-            elif typ == "Vila inspelningsplats":
+            if typ == "Vila inspelningsplats":
                 älskar_med = 12
                 sover_med = 1
                 nils_sex = 0
-                rad_komp = int(inst.get("Kompisar", 0) * (0.25 + 0.25 * sample([0, 1], 1)[0]))
-                rad_pappans = int(inst.get("Pappans vänner", 0) * (0.25 + 0.25 * sample([0, 1], 1)[0]))
-                rad_nils_v = int(inst.get("Nils vänner", 0) * (0.25 + 0.25 * sample([0, 1], 1)[0]))
-                rad_nils_f = int(inst.get("Nils familj", 0) * (0.25 + 0.25 * sample([0, 1], 1)[0]))
-
+                # Slumpa grupper 25–50%
+                def slumpa(x): return int(round(x * (0.25 + random() * 0.25)))
+                komp_i = slumpa(inst["Kompisar"])
+                pappans_i = slumpa(inst["Pappans vänner"])
+                nils_v_i = slumpa(inst["Nils vänner"])
+                nils_f_i = slumpa(inst["Nils familj"])
+            elif typ == "Vilovecka hemma":
+                älskar_med = 8 if i < 6 else 0
+                sover_med = 1 if i == 6 else 0
+                nils_sex = nils_sexveckan[i]
+                komp_i = komp_vecka[i]
+                pappans_i = pappans_vecka[i]
+                nils_v_i = nils_v_vecka[i]
+                nils_f_i = nils_f_vecka[i]
             else:
                 älskar_med = älskar
                 sover_med = sover
                 nils_sex = 0
-                rad_komp = komp
-                rad_pappans = pappans
-                rad_nils_v = nils_v
-                rad_nils_f = nils_f
+                komp_i = komp
+                pappans_i = pappans
+                nils_v_i = nils_v
+                nils_f_i = nils_f
+
+            # Endast Scen ger beräkningar
+            if typ == "Scen":
+                pren = (enkel_vag + enkel_anal) * 1 + (dp + dpp + dap) * 5 + (tpa + tpp + tap) * 8
+                intäkt = pren * 15
+                kvinna_lön = 100
+                man_lön = (komp_i + pappans_i + nils_v_i + nils_f_i + ov) * 200
+                kvar = intäkt - kvinna_lön - man_lön
+                komp_lön = max(0, kvar / inst["Kompisar"]) if inst["Kompisar"] else 0
+                dt_total = dt_tid_per_man * (komp_i + pappans_i + nils_v_i + nils_f_i + ov)
+                total_tid = scen_tid * 3600 + dt_total
+                tid_per_man = total_tid / max(1, komp_i + pappans_i + nils_v_i + nils_f_i + ov)
+            else:
+                pren = intäkt = kvinna_lön = man_lön = komp_lön = dt_total = total_tid = tid_per_man = 0
 
             rad = {
                 "Datum": datum.strftime("%Y-%m-%d"),
@@ -201,147 +437,16 @@ def scenformulär(df, inst):
                 "DP": dp, "DPP": dpp, "DAP": dap,
                 "TPA": tpa, "TPP": tpp, "TAP": tap,
                 "Enkel vaginal": enkel_vag, "Enkel anal": enkel_anal,
-                "Kompisar": rad_komp, "Pappans vänner": rad_pappans, "Nils vänner": rad_nils_v, "Nils familj": rad_nils_f,
-                "Övriga män": ov,
-                "Älskar med": älskar_med,
-                "Sover med": sover_med,
-                "Nils sex": nils_sex,
-                "DT tid per man (sek)": dt_tid_per_man,
-                "Scenens längd (h)": scen_tid
+                "Kompisar": komp_i, "Pappans vänner": pappans_i, "Nils vänner": nils_v_i, "Nils familj": nils_f_i,
+                "Övriga män": ov, "Älskar med": älskar_med, "Sover med": sover_med, "Nils sex": nils_sex,
+                "DT tid per man (sek)": dt_tid_per_man, "DT total tid (sek)": round(dt_total),
+                "Total tid (sek)": round(total_tid), "Total tid (h)": round(total_tid / 3600, 2),
+                "Prenumeranter": int(pren), "Intäkt ($)": round(intäkt, 2),
+                "Kvinnans lön ($)": kvinna_lön, "Mäns lön ($)": man_lön, "Kompisars lön ($)": round(komp_lön, 2),
+                "Minuter per kille": round(tid_per_man / 60, 2), "Scenens längd (h)": scen_tid
             }
             nya_rader.append(rad)
 
         df = pd.concat([df, pd.DataFrame(nya_rader)], ignore_index=True)
-        spara_data(df)
-
-        # återställ fält
-        for key in st.session_state.form_state:
-            st.session_state[key] = st.session_state.form_state[key]
-
-        st.rerun()
-
-def beräkna_och_uppdatera(df):
-    df["Prenumeranter"] = 0
-    df["DT total tid (sek)"] = 0
-    df["Total tid (sek)"] = 0
-    df["Total tid (h)"] = 0
-    df["Kvinnans lön ($)"] = 0
-    df["Intäkt ($)"] = 0
-    df["Mäns lön ($)"] = 0
-    df["Kompisars lön ($)"] = 0
-    df["Minuter per kille"] = 0
-
-    for i, row in df.iterrows():
-        if row["Typ"] != "Scen":
-            continue
-
-        enkel = int(row["Enkel vaginal"]) + int(row["Enkel anal"])
-        dubbel = int(row["DP"]) + int(row["DPP"]) + int(row["DAP"])
-        trippel = int(row["TPA"]) + int(row["TPP"]) + int(row["TAP"])
-
-        pren = enkel * 1 + dubbel * 5 + trippel * 8
-        kvinna = 100
-        total = pren * 15
-
-        övriga_män = (
-            int(row["Kompisar"])
-            + int(row["Pappans vänner"])
-            + int(row["Nils vänner"])
-            + int(row["Nils familj"])
-            + int(row["Övriga män"])
-        )
-        man_lön = (övriga_män - int(row["Kompisar"])) * 200
-        kvar = total - kvinna - man_lön
-        komp_lön = kvar / inst.get("Kompisar", 1)
-
-        dt_total = int(row["DT tid per man (sek)"]) * övriga_män
-        tid_total = row["Scenens längd (h)"] * 3600 + dt_total
-
-        df.at[i, "Prenumeranter"] = pren
-        df.at[i, "Intäkt ($)"] = round(total, 2)
-        df.at[i, "Kvinnans lön ($)"] = kvinna
-        df.at[i, "Mäns lön ($)"] = round(man_lön, 2)
-        df.at[i, "Kompisars lön ($)"] = round(komp_lön, 2)
-        df.at[i, "DT total tid (sek)"] = dt_total
-        df.at[i, "Total tid (sek)"] = tid_total
-        df.at[i, "Total tid (h)"] = round(tid_total / 3600, 2)
-        df.at[i, "Minuter per kille"] = round(tid_total / övriga_män / 60, 1) if övriga_män else 0
-
+        st.success(f"{antal_rader} rader tillagda.")
     return df
-
-
-def statistikruta(df, inst):
-    st.subheader("Statistik")
-
-    df["Datum"] = pd.to_datetime(df["Datum"])
-    df = df.sort_values("Datum")
-    df_scener = df[df["Typ"] == "Scen"]
-
-    total_tid = df_scener["Total tid (h)"].sum()
-    total_pren = df_scener["Prenumeranter"].sum()
-    intäkter = df_scener["Intäkt ($)"].sum()
-    dt_tid = df_scener["DT total tid (sek)"].sum()
-
-    älskat = df["Älskar med"].sum()
-    sovit = df["Sover med"].sum()
-
-    snitt_älskat = älskat / (
-        inst.get("Kompisar", 1) + inst.get("Pappans vänner", 1) + inst.get("Nils vänner", 1) + inst.get("Nils familj", 1)
-    )
-    snitt_sovit = sovit / inst.get("Nils familj", 1)
-
-    st.write(f"👩 **{inst.get('Kvinnans namn', '')}** – ålder: {round((df['Datum'].max() - pd.to_datetime(inst['Födelsedatum'])).days / 365.25)} år")
-    st.write(f"🎬 Totalt antal scener: {len(df_scener)}")
-    st.write(f"🕒 Total filmtid: {round(total_tid, 1)} h")
-    st.write(f"💰 Totala intäkter: ${round(intäkter):,}")
-    st.write(f"📈 Totalt antal prenumeranter: {int(total_pren)}")
-    st.write(f"🤿 Deep throat-tid totalt: {int(dt_tid)} sek")
-    st.write(f"❤️ Snitt 'älskat': {snitt_älskat:.2f} gånger")
-    st.write(f"🛏️ Snitt 'sovit med': {snitt_sovit:.2f} gånger")
-
-
-def main():
-    init_sheet("Data", DATA_COLUMNS)
-    init_inställningar()
-
-    global inst
-    inst = läs_inställningar()
-    df = ladda_data()
-
-    st.title("🎬 Malin Filmproduktion")
-
-    with st.sidebar:
-        st.header("Inställningar")
-        with st.form("spara_inställningar"):
-            namn = st.text_input("Kvinnans namn", value=str(inst.get("Kvinnans namn", "")))
-            född = st.date_input("Födelsedatum", value=pd.to_datetime(inst.get("Födelsedatum", "1984-03-26")))
-            startdatum = st.date_input("Startdatum (första scen)", value=pd.to_datetime(inst.get("Startdatum", "2014-03-26")))
-
-            inst_inputs = {}
-            for fält in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
-                inst_inputs[fält] = st.number_input(fält, value=float(inst.get(fält, 0)), min_value=0.0, step=1.0)
-
-            rensa = st.form_submit_button("Rensa databas")
-            spara = st.form_submit_button("Spara inställningar")
-
-        if rensa:
-            rensa_data()
-            st.success("Databasen rensad!")
-
-        if spara:
-            spara_inställning("Kvinnans namn", namn)
-            spara_inställning("Födelsedatum", född.strftime("%Y-%m-%d"))
-            spara_inställning("Startdatum", startdatum.strftime("%Y-%m-%d"))
-            for nyckel, värde in inst_inputs.items():
-                spara_inställning(nyckel, värde)
-            st.success("Inställningar sparade!")
-
-    scenformulär(df, inst)
-    df = beräkna_och_uppdatera(df)
-    statistikruta(df, inst)
-
-    st.subheader("Databas")
-    st.dataframe(df)
-
-if __name__ == "__main__":
-    main()
