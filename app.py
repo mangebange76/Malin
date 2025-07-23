@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -9,7 +9,7 @@ scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
 gc = gspread.authorize(credentials)
 
-# Spreadsheet-URL
+# Spreadsheet
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1--mqpIEEta9An4kFvHZBJoFlRz1EtozxCy2PnD4PNJ0/edit?usp=drivesdk"
 sh = gc.open_by_url(SPREADSHEET_URL)
 
@@ -26,6 +26,7 @@ DATA_COLUMNS = [
 
 INST_COLUMNS = ["Inställning", "Värde", "Senast ändrad"]
 
+# Initiera blad
 def init_sheet(name, cols):
     try:
         worksheet = sh.worksheet(name)
@@ -45,26 +46,21 @@ def init_inställningar():
         worksheet = sh.add_worksheet(title="Inställningar", rows="100", cols="3")
         worksheet.update("A1", [INST_COLUMNS])
         standard = [
-            ["Tid per man (minuter)", "", datetime.now().strftime("%Y-%m-%d")],
-            ["DT tid per man (sek)", "", datetime.now().strftime("%Y-%m-%d")],
-            ["Kvinnans namn", "", datetime.now().strftime("%Y-%m-%d")],
-            ["Födelsedatum", "", datetime.now().strftime("%Y-%m-%d")],
-            ["Startdatum", "", datetime.now().strftime("%Y-%m-%d")],
-            ["Kompisar", "", datetime.now().strftime("%Y-%m-%d")],
-            ["Pappans vänner", "", datetime.now().strftime("%Y-%m-%d")],
-            ["Nils vänner", "", datetime.now().strftime("%Y-%m-%d")],
-            ["Nils familj", "", datetime.now().strftime("%Y-%m-%d")]
+            ["Kvinnans namn", "Malin", datetime.now().strftime("%Y-%m-%d")],
+            ["Födelsedatum", "1984-03-26", datetime.now().strftime("%Y-%m-%d")],
+            ["Startdatum", "2014-03-26", datetime.now().strftime("%Y-%m-%d")],
+            ["Kompisar", "100", datetime.now().strftime("%Y-%m-%d")],
+            ["Pappans vänner", "40", datetime.now().strftime("%Y-%m-%d")],
+            ["Nils vänner", "30", datetime.now().strftime("%Y-%m-%d")],
+            ["Nils familj", "20", datetime.now().strftime("%Y-%m-%d")]
         ]
         worksheet.update(f"A2:C{len(standard)+1}", standard)
 
-def läs_inställningar():
-    worksheet = sh.worksheet("Inställningar")
-    data = worksheet.get_all_records()
-    inst = {}
-    for rad in data:
-        val = str(rad["Värde"])
-        try:
-            inst[rad["Inställning"]] = float(val.replace(",", "."))
-        except:
-            inst[rad["Inställning"]] = val
-    return inst
+# Main
+def main():
+    init_sheet("Data", DATA_COLUMNS)
+    init_inställningar()
+    st.title("✅ Appen laddad korrekt")
+
+if __name__ == "__main__":
+    main()
