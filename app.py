@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-from random import sample
 import gspread
 from google.oauth2.service_account import Credentials
+from random import sample
 
 # Autentisering
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -27,7 +27,7 @@ DATA_COLUMNS = [
 
 INST_COLUMNS = ["Inställning", "Värde", "Senast ändrad"]
 
-# --- Initieringar ---
+# Initiera blad
 def init_sheet(name, cols):
     try:
         worksheet = sh.worksheet(name)
@@ -57,7 +57,6 @@ def init_inställningar():
         ]
         worksheet.update(f"A2:C{len(standard)+1}", standard)
 
-# --- Hjälpfunktioner ---
 def läs_inställningar():
     worksheet = sh.worksheet("Inställningar")
     data = worksheet.get_all_records()
@@ -81,17 +80,17 @@ def spara_inställning(nyckel, värde):
     else:
         worksheet.append_row([nyckel, str(värde), idag])
 
-def spara_data(df):
-    df = df.fillna("").astype(str)
-    worksheet = sh.worksheet("Data")
-    worksheet.clear()
-    worksheet.update("A1", [df.columns.tolist()] + df.values.tolist())
-
 def säkerställ_kolumner(df):
     for kolumn in DATA_COLUMNS:
         if kolumn not in df.columns:
             df[kolumn] = ""
     return df[DATA_COLUMNS]
+
+def spara_data(df):
+    df = df.fillna("").astype(str)
+    worksheet = sh.worksheet("Data")
+    worksheet.clear()
+    worksheet.update("A1", [df.columns.tolist()] + df.values.tolist())
 
 def ladda_data():
     try:
@@ -104,9 +103,8 @@ def ladda_data():
     except:
         return pd.DataFrame(columns=DATA_COLUMNS)
 
-# --- Formulär för att lägga till scen eller vila ---
 def scenformulär(df, inst):
-    st.subheader("🎬 Lägg till scen eller vila")
+    st.subheader("Lägg till scen eller vila")
 
     with st.form("lägg_till"):
         typ = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"])
@@ -118,21 +116,17 @@ def scenformulär(df, inst):
         tap = st.number_input("TAP", min_value=0, step=1)
         enkel_vag = st.number_input("Enkel vaginal", min_value=0, step=1)
         enkel_anal = st.number_input("Enkel anal", min_value=0, step=1)
-
         komp = st.number_input("Kompisar", min_value=0, step=1, max_value=int(inst.get("Kompisar", 999)))
         pappans = st.number_input("Pappans vänner", min_value=0, step=1, max_value=int(inst.get("Pappans vänner", 999)))
         nils_v = st.number_input("Nils vänner", min_value=0, step=1, max_value=int(inst.get("Nils vänner", 999)))
         nils_f = st.number_input("Nils familj", min_value=0, step=1, max_value=int(inst.get("Nils familj", 999)))
         ov = st.number_input("Övriga män", min_value=0, step=1)
-
         dt_tid_per_man = st.number_input("DT tid per man (sek)", min_value=0, step=1)
         scen_tid = st.number_input("Scenens längd (h)", min_value=0.0, step=0.25)
-
         älskar = st.number_input("Antal älskar med", min_value=0, step=1)
         sover = st.number_input("Antal sover med", min_value=0, step=1)
         dagar = st.number_input("Antal vilodagar (gäller bara vid vila)", min_value=1, step=1)
-
-        submit = st.form_submit_button("Spara rad")
+        submit = st.form_submit_button("Lägg till")
 
     if submit:
         senaste_datum = pd.to_datetime(df["Datum"].max()) if not df.empty else pd.to_datetime(inst.get("Startdatum"))
@@ -181,9 +175,8 @@ def scenformulär(df, inst):
 
         df = pd.concat([df, pd.DataFrame(nya_rader)], ignore_index=True)
         spara_data(df)
-        st.success("Rader sparade!")
+        st.rerun()
 
-# --- Main ---
 def main():
     init_sheet("Data", DATA_COLUMNS)
     init_inställningar()
@@ -194,17 +187,23 @@ def main():
 
     with st.sidebar:
         st.header("Inställningar")
-        namn = st.text_input("Kvinnans namn", value=str(inst.get("Kvinnans namn", "")))
-        född = st.date_input("Födelsedatum", value=pd.to_datetime(inst.get("Födelsedatum", "1984-03-26")))
-        startdatum = st.date_input("Startdatum (första scen)", value=pd.to_datetime(inst.get("Startdatum", "2014-03-26")))
+        with st.form("spara_inställningar"):
+            namn = st.text_input("Kvinnans namn", value=str(inst.get("Kvinnans namn", "")))
+            född = st.date_input("Födelsedatum", value=pd.to_datetime(inst.get("Födelsedatum", "1984-03-26")))
+            startdatum = st.date_input("Startdatum (första scen)", value=pd.to_datetime(inst.get("Startdatum", "2014-03-26")))
 
-        if st.button("💾 Spara inställningar"):
+            inst_inputs = {}
+            for fält in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
+                inst_inputs[fält] = st.number_input(fält, value=float(inst.get(fält, 0)), min_value=0.0, step=1.0)
+
+            spara = st.form_submit_button("Spara inställningar")
+
+        if spara:
             spara_inställning("Kvinnans namn", namn)
             spara_inställning("Födelsedatum", född.strftime("%Y-%m-%d"))
             spara_inställning("Startdatum", startdatum.strftime("%Y-%m-%d"))
-            for fält in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
-                val = float(inst.get(fält, 0))
-                spara_inställning(fält, val)
+            for nyckel, värde in inst_inputs.items():
+                spara_inställning(nyckel, värde)
             st.success("Inställningar sparade!")
 
     scenformulär(df, inst)
