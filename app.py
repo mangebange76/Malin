@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -9,7 +9,7 @@ scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
 gc = gspread.authorize(credentials)
 
-# Spreadsheet-URL
+# Spreadsheet
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1--mqpIEEta9An4kFvHZBJoFlRz1EtozxCy2PnD4PNJ0/edit?usp=drivesdk"
 sh = gc.open_by_url(SPREADSHEET_URL)
 
@@ -20,13 +20,13 @@ DATA_COLUMNS = [
     "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj", "Övriga män",
     "Älskar med", "Sover med", "Nils sex",
     "DT tid per man (sek)", "DT total tid (sek)", "Total tid (sek)", "Total tid (h)",
-    "Scenens längd (h)",
     "Prenumeranter", "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
-    "Minuter per kille"
+    "Minuter per kille", "Scenens längd (h)"
 ]
 
 INST_COLUMNS = ["Inställning", "Värde", "Senast ändrad"]
 
+# Initiera blad
 def init_sheet(name, cols):
     try:
         worksheet = sh.worksheet(name)
@@ -46,7 +46,6 @@ def init_inställningar():
         worksheet = sh.add_worksheet(title="Inställningar", rows="100", cols="3")
         worksheet.update("A1", [INST_COLUMNS])
         standard = [
-            ["Tid per man (minuter)", "2", datetime.now().strftime("%Y-%m-%d")],
             ["Kvinnans namn", "Malin", datetime.now().strftime("%Y-%m-%d")],
             ["Födelsedatum", "1984-03-26", datetime.now().strftime("%Y-%m-%d")],
             ["Startdatum", "2014-03-26", datetime.now().strftime("%Y-%m-%d")],
@@ -57,49 +56,11 @@ def init_inställningar():
         ]
         worksheet.update(f"A2:C{len(standard)+1}", standard)
 
-def säkerställ_kolumner(df):
-    for kolumn in DATA_COLUMNS:
-        if kolumn not in df.columns:
-            df[kolumn] = ""
-    return df[DATA_COLUMNS]
+# Main
+def main():
+    init_sheet("Data", DATA_COLUMNS)
+    init_inställningar()
+    st.title("✅ Appen laddad korrekt")
 
-def spara_data(df):
-    df = df.fillna("").astype(str)
-    worksheet = sh.worksheet("Data")
-    worksheet.clear()
-    worksheet.update("A1", [df.columns.tolist()] + df.values.tolist())
-
-def ladda_data():
-    try:
-        worksheet = sh.worksheet("Data")
-        data = worksheet.get_all_records()
-        if not data:
-            return pd.DataFrame(columns=DATA_COLUMNS)
-        df = pd.DataFrame(data)
-        return säkerställ_kolumner(df)
-    except:
-        return pd.DataFrame(columns=DATA_COLUMNS)
-
-def läs_inställningar():
-    worksheet = sh.worksheet("Inställningar")
-    data = worksheet.get_all_records()
-    inst = {}
-    for rad in data:
-        val = str(rad["Värde"])
-        try:
-            inst[rad["Inställning"]] = float(val.replace(",", "."))
-        except:
-            inst[rad["Inställning"]] = val
-    return inst
-
-def spara_inställning(nyckel, värde):
-    worksheet = sh.worksheet("Inställningar")
-    data = worksheet.get_all_records()
-    df = pd.DataFrame(data)
-    idag = datetime.now().strftime("%Y-%m-%d")
-    if nyckel in df["Inställning"].values:
-        idx = df[df["Inställning"] == nyckel].index[0]
-        worksheet.update_cell(idx + 2, 2, str(värde))
-        worksheet.update_cell(idx + 2, 3, idag)
-    else:
-        worksheet.append_row([nyckel, str(värde), idag])
+if __name__ == "__main__":
+    main()
