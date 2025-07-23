@@ -34,7 +34,8 @@ def init_sheet(name, cols):
         worksheet = sh.add_worksheet(title=name, rows="1000", cols="30")
         worksheet.update("A1", [cols])
     else:
-        existing_cols = worksheet.row_values(1)
+        values = worksheet.get_all_values()
+        existing_cols = values[0] if values else []
         if existing_cols != cols:
             worksheet.resize(rows=1)
             worksheet.update("A1", [cols])
@@ -79,7 +80,6 @@ def spara_inställning(nyckel, värde):
     else:
         worksheet.append_row([nyckel, str(värde), idag])
 
-# MAIN
 def main():
     init_sheet("Data", DATA_COLUMNS)
     init_inställningar()
