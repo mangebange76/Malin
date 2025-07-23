@@ -56,11 +56,52 @@ def init_inställningar():
         ]
         worksheet.update(f"A2:C{len(standard)+1}", standard)
 
-# Main
+def läs_inställningar():
+    worksheet = sh.worksheet("Inställningar")
+    data = worksheet.get_all_records()
+    inst = {}
+    for rad in data:
+        val = str(rad["Värde"])
+        try:
+            inst[rad["Inställning"]] = float(val.replace(",", "."))
+        except:
+            inst[rad["Inställning"]] = val
+    return inst
+
+def spara_inställning(nyckel, värde):
+    worksheet = sh.worksheet("Inställningar")
+    df = pd.DataFrame(worksheet.get_all_records())
+    idag = datetime.now().strftime("%Y-%m-%d")
+    if nyckel in df["Inställning"].values:
+        idx = df[df["Inställning"] == nyckel].index[0]
+        worksheet.update_cell(idx + 2, 2, str(värde))
+        worksheet.update_cell(idx + 2, 3, idag)
+    else:
+        worksheet.append_row([nyckel, str(värde), idag])
+
 def main():
     init_sheet("Data", DATA_COLUMNS)
     init_inställningar()
-    st.title("✅ Appen laddad korrekt")
+    inst = läs_inställningar()
+
+    st.title("🎬 Malin Filmproduktion")
+
+    with st.sidebar:
+        st.header("Inställningar")
+
+        namn = st.text_input("Kvinnans namn", value=str(inst.get("Kvinnans namn", "")))
+        född = st.date_input("Födelsedatum", value=pd.to_datetime(inst.get("Födelsedatum", "1984-03-26")))
+        startdatum = st.date_input("Startdatum (första scen)", value=pd.to_datetime(inst.get("Startdatum", "2014-03-26")))
+
+        spara_inställning("Kvinnans namn", namn)
+        spara_inställning("Födelsedatum", född.strftime("%Y-%m-%d"))
+        spara_inställning("Startdatum", startdatum.strftime("%Y-%m-%d"))
+
+        st.divider()
+
+        for fält in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
+            val = st.number_input(fält, value=float(inst.get(fält, 0)), min_value=0.0, step=1.0)
+            spara_inställning(fält, val)
 
 if __name__ == "__main__":
     main()
