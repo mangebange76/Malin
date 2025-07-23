@@ -26,6 +26,17 @@ DATA_COLUMNS = [
 
 INST_COLUMNS = ["Inställning", "Värde", "Senast ändrad"]
 
+def säkerställ_kolumner_i_databasen():
+    try:
+        worksheet = sh.worksheet("Data")
+        befintliga = worksheet.row_values(1)
+        if befintliga != DATA_COLUMNS:
+            worksheet.clear()
+            worksheet.update("A1", [DATA_COLUMNS])
+    except:
+        worksheet = sh.add_worksheet(title="Data", rows="1000", cols="30")
+        worksheet.update("A1", [DATA_COLUMNS])
+
 def init_sheet(name, cols):
     try:
         worksheet = sh.worksheet(name)
@@ -109,14 +120,6 @@ def lägg_till_datum(df, inst):
         return df.assign(Datum=startdatum)
     return df
 
-def beräkna_ålder(födelsedatum_str, referensdatum_str):
-    try:
-        födelsedatum = pd.to_datetime(födelsedatum_str)
-        referensdatum = pd.to_datetime(referensdatum_str)
-        return int((referensdatum - födelsedatum).days // 365.25)
-    except:
-        return ""
-
 def beräkna_dt_tid(dt_tid_per_man, tot_män):
     if tot_män == 0 or dt_tid_per_man == 0:
         return 0
@@ -137,12 +140,9 @@ def beräkna_prenumeranter(rad):
     )
     return int(score)
 
-def beräkna_penetration_tid(rad, total_pen_tid=14 * 3600):
-    if "Scenens längd (h)" in rad and rad["Scenens längd (h)"]:
-        try:
-            total_pen_tid = float(rad["Scenens längd (h)"]) * 3600
-        except:
-            pass
+def beräkna_penetration_tid(rad):
+    scen_längd_h = float(rad.get("Scenens längd (h)", 14))
+    total_pen_tid = scen_längd_h * 3600
 
     enkel = int(rad.get("Enkel vaginal", 0)) + int(rad.get("Enkel anal", 0))
     dubbel = int(rad.get("DP", 0)) + int(rad.get("DPP", 0)) + int(rad.get("DAP", 0))
@@ -175,12 +175,13 @@ def beräkna_tid_per_kille(rad, tid_enkel, tid_dubbel, tid_trippel, dt_tid_per_k
 
     total_tid_kille = (
         tid_enkel +
-        tid_dubbel * 2 +  # varje dubbel ger två killar samma tid
-        tid_trippel * 3   # varje trippel ger tre killar samma tid
+        tid_dubbel * 2 +
+        tid_trippel * 3
     )
 
     tid_per_kille = (total_tid_kille / total_män) if total_män > 0 else 0
-    return round((tid_per_kille + dt_tid_per_kille) / 60, 2)  # minuter
+
+    return round((tid_per_kille + dt_tid_per_kille) / 60, 2)  # i minuter
 
 def uppdatera_tid_och_intäkt(df, inst):
     dt_tid_per_man = float(inst.get("DT tid per man (sek)", 0))
@@ -289,19 +290,21 @@ def main():
 
         älskar = st.number_input("Antal älskar med", min_value=0, step=1)
         sover = st.number_input("Antal sover med", min_value=0, step=1)
-        scen_tid = st.number_input("Scenens längd (h)", min_value=1.0, step=0.5)
+
+        scen_tid = st.number_input("Scenens längd (h)", min_value=1.0, step=0.5, value=14.0 if typ == "Scen" else 0.0)
 
         dagar = st.number_input("Antal vilodagar (gäller bara vid vila)", min_value=1, step=1)
         submit = st.form_submit_button("Lägg till")
 
     if submit:
         from random import sample
+
         nya_rader = []
         senaste_datum = pd.to_datetime(df["Datum"].max()) if not df.empty else pd.to_datetime(inst.get("Startdatum"))
         nils_sextillfällen = [0] * 7
 
         if typ == "Vilovecka hemma":
-            tillfällen = sorted(sample(range(6), k=min(2, 6)))
+            tillfällen = sorted(sample(range(6), k=min(2, 6)))  # max 2 tillfällen, ej sista dagen
             for i in tillfällen:
                 nils_sextillfällen[i] = 1
 
@@ -315,17 +318,17 @@ def main():
                 sover_med = 1 if i == 6 else 0
                 älskar_med = 8 if i < 6 else 0
                 nils_sex = nils_sextillfällen[i]
-                scenens_tid = ""
+                scen_längd = ""
             elif typ == "Vila inspelningsplats":
                 älskar_med = 12
                 sover_med = 1
                 nils_sex = 0
-                scenens_tid = ""
+                scen_längd = ""
             else:  # Scen
                 älskar_med = älskar
                 sover_med = sover
                 nils_sex = 0
-                scenens_tid = scen_tid
+                scen_längd = scen_tid
 
             rad = {
                 "Datum": datum.strftime("%Y-%m-%d"),
@@ -346,7 +349,7 @@ def main():
                 "Älskar med": älskar_med,
                 "Sover med": sover_med,
                 "Nils sex": nils_sex,
-                "Scenens längd (h)": scenens_tid
+                "Scenens längd (h)": scen_längd
             }
             nya_rader.append(rad)
 
@@ -361,7 +364,6 @@ def main():
     kompisar = int(inst.get("Kompisar", 1))
     nils_fam = int(inst.get("Nils familj", 1))
 
-    # Ålder vid sista scen
     sista_datum = df["Datum"].max() if not df.empty else inst.get("Startdatum", "2014-03-26")
     ålder = beräkna_ålder(str(inst.get("Födelsedatum", "1984-03-26")), sista_datum)
 
@@ -372,17 +374,9 @@ def main():
     st.write(f"Älskat: {int(df['Älskar med'].sum())}, Snitt per man (alla grupper): {round(df['Älskar med'].sum() / (kompisar + int(inst.get('Pappans vänner', 0)) + int(inst.get('Nils vänner', 0)) + nils_fam), 2)}")
     st.write(f"Sovit med: {int(df['Sover med'].sum())}, Snitt per Nils familjemedlem: {round(df['Sover med'].sum() / nils_fam, 2)}")
 
-    # Deep throat-tid
     dt_summa = int(df["DT total tid (sek)"].sum())
     st.write(f"💋 Total deep throat-tid (sek): {dt_summa}")
 
-    # Snittlängd på scener
-    scener = df[df["Typ"] == "Scen"]
-    if not scener.empty:
-        snitt_tid = scener["Scenens längd (h)"].astype(float).mean()
-        st.write(f"🎬 Snittlängd på scener: {round(snitt_tid, 2)} timmar")
-
-    # Prenumeranter senaste 30 dagar
     if not df.empty:
         df["Datum_dt"] = pd.to_datetime(df["Datum"], errors="coerce")
         senast = df["Datum_dt"].max()
@@ -391,10 +385,19 @@ def main():
         st.write(f"📈 Prenumeranter senaste 30 dagar: {int(pren30)}")
         df = df.drop(columns=["Datum_dt"])
 
-    # Minuter per man (penetration + DT)
     df["Minuter per man"] = (df["Total tid (sek)"].astype(float) + df["DT total tid (sek)"].astype(float)) / (
         df[["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj", "Övriga män"]].sum(axis=1).replace(0, 1)
     ) / 60
     df["Minuter per man"] = df["Minuter per man"].round(2)
+
+    # Snittlängd för scener (endast Scen-rader med angiven längd)
+    if "Scenens längd (h)" in df.columns:
+        try:
+            scen_df = df[(df["Typ"] == "Scen") & (df["Scenens längd (h)"] != "")]
+            scen_df["Scenens längd (h)"] = scen_df["Scenens längd (h)"].astype(float)
+            snitt_scen_längd = round(scen_df["Scenens längd (h)"].mean(), 2)
+            st.write(f"🎞️ Snittlängd av scen (h): {snitt_scen_längd}")
+        except:
+            pass
 
     st.dataframe(df.sort_values("Datum"))
