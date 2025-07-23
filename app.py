@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
-from random import sample
+from random import sample, randint
 
 # Autentisering
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -27,7 +27,6 @@ DATA_COLUMNS = [
 
 INST_COLUMNS = ["Inställning", "Värde", "Senast ändrad"]
 
-# Initiera blad
 def init_sheet(name, cols):
     try:
         worksheet = sh.worksheet(name)
@@ -103,6 +102,13 @@ def ladda_data():
     except:
         return pd.DataFrame(columns=DATA_COLUMNS)
 
+def fördela_heltal_slumpmässigt(total, dagar=7):
+    delar = [0] * dagar
+    for _ in range(int(total)):
+        idx = randint(0, dagar - 1)
+        delar[idx] += 1
+    return delar
+
 def scenformulär(df, inst):
     st.subheader("Lägg till scen eller vila")
 
@@ -137,6 +143,11 @@ def scenformulär(df, inst):
             for i in tillfällen:
                 nils_sextillfällen[i] = 1
 
+            komp_list = fördela_heltal_slumpmässigt(1.5 * inst.get("Kompisar", 0))
+            pappans_list = fördela_heltal_slumpmässigt(1.5 * inst.get("Pappans vänner", 0))
+            nils_v_list = fördela_heltal_slumpmässigt(1.5 * inst.get("Nils vänner", 0))
+            nils_f_list = fördela_heltal_slumpmässigt(1.5 * inst.get("Nils familj", 0))
+
         antal = 7 if typ == "Vilovecka hemma" else int(dagar)
         nya_rader = []
 
@@ -148,14 +159,26 @@ def scenformulär(df, inst):
                 sover_med = 1 if i == 6 else 0
                 älskar_med = 8 if i < 6 else 0
                 nils_sex = nils_sextillfällen[i]
+                komp_i = komp_list[i]
+                pappans_i = pappans_list[i]
+                nils_v_i = nils_v_list[i]
+                nils_f_i = nils_f_list[i]
             elif typ == "Vila inspelningsplats":
                 älskar_med = 12
                 sover_med = 1
                 nils_sex = 0
+                komp_i = randint(int(0.25 * inst.get("Kompisar", 0)), int(0.5 * inst.get("Kompisar", 0)))
+                pappans_i = randint(int(0.25 * inst.get("Pappans vänner", 0)), int(0.5 * inst.get("Pappans vänner", 0)))
+                nils_v_i = randint(int(0.25 * inst.get("Nils vänner", 0)), int(0.5 * inst.get("Nils vänner", 0)))
+                nils_f_i = randint(int(0.25 * inst.get("Nils familj", 0)), int(0.5 * inst.get("Nils familj", 0)))
             else:
                 älskar_med = älskar
                 sover_med = sover
                 nils_sex = 0
+                komp_i = komp
+                pappans_i = pappans
+                nils_v_i = nils_v
+                nils_f_i = nils_f
 
             rad = {
                 "Datum": datum.strftime("%Y-%m-%d"),
@@ -163,7 +186,8 @@ def scenformulär(df, inst):
                 "DP": dp, "DPP": dpp, "DAP": dap,
                 "TPA": tpa, "TPP": tpp, "TAP": tap,
                 "Enkel vaginal": enkel_vag, "Enkel anal": enkel_anal,
-                "Kompisar": komp, "Pappans vänner": pappans, "Nils vänner": nils_v, "Nils familj": nils_f,
+                "Kompisar": komp_i, "Pappans vänner": pappans_i,
+                "Nils vänner": nils_v_i, "Nils familj": nils_f_i,
                 "Övriga män": ov,
                 "Älskar med": älskar_med,
                 "Sover med": sover_med,
