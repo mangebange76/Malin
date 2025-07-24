@@ -2,8 +2,10 @@ import streamlit as st
 import pandas as pd
 import gspread
 import numpy as np
-from google.oauth2.service_account import Credentials
 from datetime import datetime
+from google.oauth2.service_account import Credentials
+
+from konstanter import COLUMNS
 from berakningar import process_lägg_till_rader, beräkna_tid_per_kille
 
 # Autentisering
@@ -11,16 +13,6 @@ scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
 gc = gspread.authorize(credentials)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1--mqpIEEta9An4kFvHZBJoFlRz1EtozxCy2PnD4PNJ0/edit?usp=drivesdk"
-
-# Kolumner
-COLUMNS = [
-    "Datum", "Typ", "Scenens längd (h)", "Antal vilodagar", "Övriga män",
-    "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP", "TPP", "TPA", "TAP",
-    "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj",
-    "DT tid per man (sek)", "Älskar med", "Sover med", "Nils sex",
-    "Prenumeranter", "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
-    "DT total tid (sek)", "Total tid (sek)", "Total tid (h)", "Minuter per kille"
-]
 
 def init_sheet(sh):
     try:
@@ -73,6 +65,9 @@ def spara_inställningar(sh, inst):
     sheet.update("A2:C" + str(len(rows) + 1), rows)
 
 def spara_data(sh, df):
+    from konstanter import COLUMNS
+    import numpy as np
+
     df = df[COLUMNS]
 
     def städa_värde(x):
@@ -93,19 +88,14 @@ def spara_data(sh, df):
         return
 
     värden = df.values.tolist()
-    värden = [rad[:len(COLUMNS)] + [""] * (len(COLUMNS) - len(rad)) if len(rad) != len(COLUMNS) else rad for rad in värden]
+    värden = [rad[:len(COLUMNS)] + [""] * (len(COLUMNS) - len(rad)) for rad in värden]
 
     max_rader_per_update = 1000
+
     for i in range(0, len(värden), max_rader_per_update):
         start_row = i + 2
         cell_range = f"A{start_row}"
         chunk = värden[i:i + max_rader_per_update]
-
-        for idx, rad in enumerate(chunk):
-            if len(rad) != len(COLUMNS):
-                st.error(f"❌ Rad {i+idx+2} har fel antal kolumner: {len(rad)} (förväntat {len(COLUMNS)})")
-                st.write("Radens innehåll:", rad)
-                raise ValueError("Felaktig kolumnlängd vid export")
 
         try:
             sheet.update(cell_range, chunk)
@@ -116,6 +106,7 @@ def spara_data(sh, df):
             raise e
 
 def konvertera_typer(df):
+    from konstanter import COLUMNS
     for col in COLUMNS:
         if col in df.columns:
             if "Datum" in col:
@@ -127,11 +118,13 @@ def konvertera_typer(df):
     return df
 
 def rensa_databasen(sh):
+    from konstanter import COLUMNS
     sheet = sh.worksheet("Data")
     sheet.resize(rows=1)
     sheet.update("A1", [COLUMNS])
 
 def scenformulär(df, inst, sh):
+    from konstanter import COLUMNS
     with st.form("lägg_till_scen"):
         f = {}
         f["Typ"] = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"], key="typ")
@@ -146,10 +139,10 @@ def scenformulär(df, inst, sh):
             f[nyckel] = st.number_input(nyckel, 0, int(inst.get(nyckel, 0)), step=1, key=nyckel + "_grupp")
 
         f["DT tid per man (sek)"] = st.number_input("DT tid per man (sek)", 0, 9999, step=1, key="dt_tid")
-
         f["Älskar med"] = st.number_input("Antal älskar med", 0, 100, step=1, key="alskar")
         f["Sover med"] = st.number_input("Antal sover med", 0, 100, step=1, key="sover")
 
+        from berakningar import beräkna_tid_per_kille, process_lägg_till_rader
         tid_per_kille_min, total_tid_h = beräkna_tid_per_kille(f)
         st.markdown(f"**Minuter per kille (inkl. DT):** {round(tid_per_kille_min, 2)} min")
         st.markdown(f"**Total tid för scenen:** {round(total_tid_h, 2)} h")
@@ -181,7 +174,9 @@ def inställningspanel(sh, inst):
         f["Födelsedatum"] = st.text_input("Födelsedatum (YYYY-MM-DD)", inst.get("Födelsedatum", "1984-03-26"))
         for grupp in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
             f[grupp] = st.number_input(grupp, 0, 1000, int(inst.get(grupp, 0)))
-        if st.form_submit_button("Spara inställningar"):
+
+        submitted = st.form_submit_button("Spara inställningar")
+        if submitted:
             spara_inställningar(sh, f)
             st.success("✅ Inställningar sparade")
 
@@ -197,6 +192,7 @@ def visa_data(df):
         st.info(f"Senaste rad: {senaste['Datum']} – {senaste['Typ']}")
 
 def ensure_columns_exist(df):
+    from konstanter import COLUMNS
     for col in COLUMNS:
         if col not in df.columns:
             df[col] = 0
