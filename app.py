@@ -64,18 +64,16 @@ def spara_inställningar(sh, inst):
 
 def spara_data(sh, df):
     df = säkerställ_kolumner(df)
-
     import numpy as np
     def städa_värde(x):
         if pd.isna(x) or x in [None, np.nan, float("inf"), float("-inf")]:
             return ""
         if isinstance(x, (float, int)):
-            return round(x, 4)
+            return x
         s = str(x).replace("\n", " ").strip()
         return s[:5000]
 
     df = df.applymap(städa_värde)
-
     sheet = sh.worksheet("Data")
     sheet.clear()
     sheet.update("A1", [df.columns.tolist()])
@@ -87,12 +85,10 @@ def spara_data(sh, df):
     värden = [rad[:len(COLUMNS)] + [""] * (len(COLUMNS) - len(rad)) for rad in värden]
 
     max_rader_per_update = 1000
-
     for i in range(0, len(värden), max_rader_per_update):
         start_row = i + 2
         cell_range = f"A{start_row}"
         chunk = värden[i:i + max_rader_per_update]
-
         try:
             sheet.update(cell_range, chunk)
         except Exception as e:
@@ -120,21 +116,20 @@ def rensa_databasen(sh):
 def scenformulär(df, inst, sh):
     with st.form("lägg_till_scen"):
         f = {}
-        f["Typ"] = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"], key="typ")
-        f["Antal vilodagar"] = st.number_input("Antal vilodagar", 0, 30, step=1, key="antal_vilodagar")
-        f["Scenens längd (h)"] = st.number_input("Scenens längd (h)", 0.0, 48.0, step=0.5, key="scen_längd")
-        f["Övriga män"] = st.number_input("Övriga män", 0, 500, step=1, key="övriga")
+        f["Typ"] = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"])
+        f["Antal vilodagar"] = st.number_input("Antal vilodagar", 0, 30, step=1)
+        f["Scenens längd (h)"] = st.number_input("Scenens längd (h)", 0.0, 48.0, step=0.5)
+        f["Övriga män"] = st.number_input("Övriga män", 0, 500, step=1)
 
         for nyckel in ["Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP", "TPP", "TPA", "TAP"]:
-            f[nyckel] = st.number_input(nyckel, 0, 500, step=1, key=nyckel)
+            f[nyckel] = st.number_input(nyckel, 0, 500, step=1)
 
         for nyckel in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
-            f[nyckel] = st.number_input(nyckel, 0, int(inst.get(nyckel, 0)), step=1, key=nyckel + "_grupp")
+            f[nyckel] = st.number_input(nyckel, 0, int(inst.get(nyckel, 0)), step=1)
 
-        f["DT tid per man (sek)"] = st.number_input("DT tid per man (sek)", 0, 9999, step=1, key="dt_tid")
-
-        f["Älskar med"] = st.number_input("Antal älskar med", 0, 100, step=1, key="alskar")
-        f["Sover med"] = st.number_input("Antal sover med", 0, 100, step=1, key="sover")
+        f["DT tid per man (sek)"] = st.number_input("DT tid per man (sek)", 0, 9999, step=1)
+        f["Älskar med"] = st.number_input("Antal älskar med", 0, 100, step=1)
+        f["Sover med"] = st.number_input("Antal sover med", 0, 100, step=1)
 
         tid_per_kille_min, total_tid_h = beräkna_tid_per_kille(f)
         st.markdown(f"**Minuter per kille (inkl. DT):** {round(tid_per_kille_min, 2)} min")
@@ -143,27 +138,28 @@ def scenformulär(df, inst, sh):
         if total_tid_h > 18:
             st.warning("⚠️ Total tid överstiger 18 timmar!")
 
+        # Bekräftelse
+        bekräfta = st.checkbox("Jag bekräftar att jag vill lägga till denna scen")
+
         submitted = st.form_submit_button("Lägg till")
         if submitted:
-            f["Minuter per kille"] = round(tid_per_kille_min, 2)
+            if not bekräfta:
+                st.warning("⚠️ Du måste bekräfta att du vill lägga till scenen.")
+                return
+
+            # Kontrollera att alla obligatoriska fält har värden
+            obligatoriska_fält = [
+                "Typ", "Scenens längd (h)", "Övriga män", "DT tid per man (sek)", "Älskar med", "Sover med"
+            ]
+            for fält in obligatoriska_fält:
+                if f[fält] in [None, ""]:
+                    st.error(f"❌ Fältet '{fält}' saknar värde.")
+                    return
+
             df = process_lägg_till_rader(df, inst, f)
             df = konvertera_typer(df)
             spara_data(sh, df)
             st.success("✅ Raden tillagd")
-            st.info(f"✅ Scen tillagd: {f['Typ']} – {datetime.today().strftime('%Y-%m-%d')}")
-
-            for k in f:
-                try:
-                    if k in st.session_state:
-                        st.session_state[k] = 0 if isinstance(st.session_state[k], (int, float)) else ""
-                except:
-                    pass
-
-            for extra_key in ["typ", "antal_vilodagar", "scen_längd", "övriga", "dt_tid", "alskar", "sover"]:
-                try:
-                    st.session_state[extra_key] = 0
-                except:
-                    pass
 
 def inställningspanel(sh, inst):
     st.sidebar.header("Inställningar")
@@ -203,8 +199,8 @@ def main():
     inställningspanel(sh, inst)
 
     df = init_sheet(sh)
-    df = säkerställ_kolumner(df)
     df = konvertera_typer(df)
+    df = säkerställ_kolumner(df)
 
     scenformulär(df, inst, sh)
     visa_data(df)
