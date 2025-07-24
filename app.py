@@ -1,15 +1,26 @@
 import streamlit as st
 import pandas as pd
 import gspread
+import numpy as np
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 from berakningar import process_lägg_till_rader, beräkna_tid_per_kille
-from konstanter import COLUMNS, säkerställ_kolumner
 
+# Autentisering
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
 gc = gspread.authorize(credentials)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1--mqpIEEta9An4kFvHZBJoFlRz1EtozxCy2PnD4PNJ0/edit?usp=drivesdk"
+
+# Kolumner
+COLUMNS = [
+    "Datum", "Typ", "Scenens längd (h)", "Antal vilodagar", "Övriga män",
+    "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP", "TPP", "TPA", "TAP",
+    "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj",
+    "DT tid per man (sek)", "Älskar med", "Sover med", "Nils sex",
+    "Prenumeranter", "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
+    "DT total tid (sek)", "Total tid (sek)", "Total tid (h)", "Minuter per kille"
+]
 
 def init_sheet(sh):
     try:
@@ -18,7 +29,8 @@ def init_sheet(sh):
         sheet = sh.add_worksheet(title="Data", rows="1000", cols="40")
         sheet.update("A1", [COLUMNS])
     df = pd.DataFrame(sheet.get_all_records())
-    return säkerställ_kolumner(df)
+    df = df.reindex(columns=COLUMNS, fill_value=0)
+    return df
 
 def läs_inställningar(sh):
     try:
@@ -27,12 +39,20 @@ def läs_inställningar(sh):
         sheet = sh.add_worksheet(title="Inställningar", rows="100", cols="3")
         sheet.update("A1:C1", [["Namn", "Värde", "Senast ändrad"]])
         standard = [
-            ["Startdatum", "2014-03-26"], ["Kvinnans namn", "Malin"], ["Födelsedatum", "1984-03-26"],
-            ["Kompisar", "50"], ["Pappans vänner", "25"], ["Nils vänner", "15"], ["Nils familj", "10"]
+            ["Startdatum", "2014-03-26"],
+            ["Kvinnans namn", "Malin"],
+            ["Födelsedatum", "1984-03-26"],
+            ["Kompisar", "50"],
+            ["Pappans vänner", "25"],
+            ["Nils vänner", "15"],
+            ["Nils familj", "10"]
         ]
         idag = datetime.today().strftime("%Y-%m-%d")
         sheet.update("A2:C8", [[namn, värde, idag] for namn, värde in standard])
     df = pd.DataFrame(sheet.get_all_records())
+    if "Namn" not in df.columns or "Värde" not in df.columns:
+        st.error("Fel: Bladet 'Inställningar' saknar nödvändiga kolumner.")
+        return {}
     return {row["Namn"]: tolka_värde(row["Värde"]) for _, row in df.iterrows()}
 
 def tolka_värde(v):
@@ -53,8 +73,7 @@ def spara_inställningar(sh, inst):
     sheet.update("A2:C" + str(len(rows) + 1), rows)
 
 def spara_data(sh, df):
-    import numpy as np
-    df = säkerställ_kolumner(df)
+    df = df[COLUMNS]
 
     def städa_värde(x):
         if pd.isna(x) or x in [None, np.nan, float("inf"), float("-inf")]:
@@ -74,10 +93,20 @@ def spara_data(sh, df):
         return
 
     värden = df.values.tolist()
-    for i in range(0, len(värden), 1000):
+    värden = [rad[:len(COLUMNS)] + [""] * (len(COLUMNS) - len(rad)) if len(rad) != len(COLUMNS) else rad for rad in värden]
+
+    max_rader_per_update = 1000
+    for i in range(0, len(värden), max_rader_per_update):
         start_row = i + 2
-        chunk = värden[i:i + 1000]
         cell_range = f"A{start_row}"
+        chunk = värden[i:i + max_rader_per_update]
+
+        for idx, rad in enumerate(chunk):
+            if len(rad) != len(COLUMNS):
+                st.error(f"❌ Rad {i+idx+2} har fel antal kolumner: {len(rad)} (förväntat {len(COLUMNS)})")
+                st.write("Radens innehåll:", rad)
+                raise ValueError("Felaktig kolumnlängd vid export")
+
         try:
             sheet.update(cell_range, chunk)
         except Exception as e:
@@ -91,7 +120,7 @@ def konvertera_typer(df):
         if col in df.columns:
             if "Datum" in col:
                 df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
-            elif col == "Typ":
+            elif col in ["Typ"]:
                 df[col] = df[col].astype(str)
             else:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
@@ -117,13 +146,12 @@ def scenformulär(df, inst, sh):
             f[nyckel] = st.number_input(nyckel, 0, int(inst.get(nyckel, 0)), step=1, key=nyckel + "_grupp")
 
         f["DT tid per man (sek)"] = st.number_input("DT tid per man (sek)", 0, 9999, step=1, key="dt_tid")
+
         f["Älskar med"] = st.number_input("Antal älskar med", 0, 100, step=1, key="alskar")
         f["Sover med"] = st.number_input("Antal sover med", 0, 100, step=1, key="sover")
 
         tid_per_kille_min, total_tid_h = beräkna_tid_per_kille(f)
-        f["Minuter per kille"] = round(tid_per_kille_min, 2)
-
-        st.markdown(f"**Minuter per kille (inkl. DT):** {f['Minuter per kille']} min")
+        st.markdown(f"**Minuter per kille (inkl. DT):** {round(tid_per_kille_min, 2)} min")
         st.markdown(f"**Total tid för scenen:** {round(total_tid_h, 2)} h")
 
         if total_tid_h > 18:
@@ -135,13 +163,14 @@ def scenformulär(df, inst, sh):
             df = konvertera_typer(df)
             spara_data(sh, df)
             st.success("✅ Raden tillagd")
+            st.info(f"✅ Scen tillagd: {f['Typ']} – {datetime.today().strftime('%Y-%m-%d')}")
 
-            for k in list(f.keys()):
+            for k in f:
                 if k in st.session_state:
-                    if isinstance(st.session_state[k], (int, float)):
-                        st.session_state[k] = 0
-                    elif isinstance(st.session_state[k], str):
-                        st.session_state[k] = ""
+                    st.session_state[k] = 0 if isinstance(st.session_state[k], (int, float)) else ""
+            for extra_key in ["typ", "antal_vilodagar", "scen_längd", "övriga", "dt_tid", "alskar", "sover"]:
+                if extra_key in st.session_state:
+                    st.session_state[extra_key] = 0
 
 def inställningspanel(sh, inst):
     st.sidebar.header("Inställningar")
@@ -163,16 +192,31 @@ def inställningspanel(sh, inst):
 def visa_data(df):
     st.subheader("📊 Databasens innehåll")
     st.dataframe(df)
+    if not df.empty:
+        senaste = df.iloc[-1]
+        st.info(f"Senaste rad: {senaste['Datum']} – {senaste['Typ']}")
+
+def ensure_columns_exist(df):
+    for col in COLUMNS:
+        if col not in df.columns:
+            df[col] = 0
+    return df
 
 def main():
     st.set_page_config(page_title="Malin-produktionsapp", layout="wide")
     st.title("🎬 Malin-produktionsapp")
 
+    credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
+    gc = gspread.authorize(credentials)
     sh = gc.open_by_url(SHEET_URL)
+
     inst = läs_inställningar(sh)
     inställningspanel(sh, inst)
+
     df = init_sheet(sh)
+    df = ensure_columns_exist(df)
     df = konvertera_typer(df)
+
     scenformulär(df, inst, sh)
     visa_data(df)
 
