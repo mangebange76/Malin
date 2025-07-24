@@ -24,8 +24,7 @@ def ensure_columns_exist(df):
     for col in COLUMNS:
         if col not in df.columns:
             df[col] = 0
-    df = df[COLUMNS]
-    return df
+    return df[COLUMNS]
 
 def init_sheet(sh):
     try:
@@ -145,7 +144,9 @@ def scenformulär(df, inst, sh):
         f["Sover med"] = st.number_input("Antal sover med", 0, 100, step=1, key="sover")
 
         tid_per_kille_min, total_tid_h = beräkna_tid_per_kille(f)
-        st.markdown(f"**Minuter per kille (inkl. DT):** {round(tid_per_kille_min, 2)} min")
+        f["Minuter per kille"] = round(tid_per_kille_min, 2)
+
+        st.markdown(f"**Minuter per kille (inkl. DT):** {f['Minuter per kille']} min")
         st.markdown(f"**Total tid för scenen:** {round(total_tid_h, 2)} h")
 
         if total_tid_h > 18:
