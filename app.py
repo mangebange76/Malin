@@ -13,13 +13,14 @@ gc = gspread.authorize(credentials)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1--mqpIEEta9An4kFvHZBJoFlRz1EtozxCy2PnD4PNJ0/edit?usp=drivesdk"
 
 COLUMNS = [
-    "Datum", "Typ", "Scenens längd (h)", "Antal vilodagar", "Övriga män",
+    "Datum", "Typ", "Scenens längd (h)", "Övriga män",
     "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP",
     "TPP", "TPA", "TAP", "Kompisar", "Pappans vänner",
     "Nils vänner", "Nils familj", "DT tid per man (sek)",
     "Älskar med", "Sover med", "Nils sex", "Prenumeranter",
-    "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
-    "DT total tid (sek)", "Total tid (sek)", "Total tid (h)", "Minuter per kille"
+    "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)",
+    "Kompisars lön ($)", "DT total tid (sek)", "Total tid (sek)",
+    "Total tid (h)", "Minuter per kille"
 ]
 
 def init_sheet(sh):
@@ -48,23 +49,7 @@ def läs_inställningar(sh):
             ["Nils familj", "10"]
         ]
         sheet.update("A2:C8", [[namn, värde, datetime.today().strftime("%Y-%m-%d")] for namn, värde in standard])
-
     df = pd.DataFrame(sheet.get_all_records())
-
-    if "Namn" not in df.columns:
-        sheet.update("A1:C1", [["Namn", "Värde", "Senast ändrad"]])
-        standard = [
-            ["Startdatum", "2014-03-26"],
-            ["Kvinnans namn", "Malin"],
-            ["Födelsedatum", "1984-03-26"],
-            ["Kompisar", "50"],
-            ["Pappans vänner", "25"],
-            ["Nils vänner", "15"],
-            ["Nils familj", "10"]
-        ]
-        sheet.update("A2:C8", [[namn, värde, datetime.today().strftime("%Y-%m-%d")] for namn, värde in standard])
-        df = pd.DataFrame(sheet.get_all_records())
-
     return {row["Namn"]: tolka_värde(row["Värde"]) for _, row in df.iterrows()}
 
 def tolka_värde(v):
@@ -180,26 +165,24 @@ def visa_data(df):
         if max_tid > 18:
             st.warning("⚠️ Minst en rad har total tid över 18 timmar!")
 
+def visa_inställningar(inst, sh):
+    st.sidebar.header("Inställningar")
+    nya = {}
+    for nyckel in ["Startdatum", "Kvinnans namn", "Födelsedatum", "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
+        if "datum" in nyckel.lower():
+            nya[nyckel] = st.sidebar.text_input(nyckel, value=str(inst.get(nyckel, "")))
+        else:
+            nya[nyckel] = st.sidebar.number_input(nyckel, value=int(inst.get(nyckel, 0)), step=1)
+    if st.sidebar.button("Spara inställningar"):
+        spara_inställningar(sh, nya)
+        st.experimental_rerun()
+
 def main():
     st.title("Malin-produktionsapp")
-
-    try:
-        sh = gc.open_by_url(SHEET_URL)
-    except Exception as e:
-        st.error(f"Kunde inte öppna kalkylarket: {e}")
-        return
-
-    try:
-        df = init_sheet(sh)
-    except Exception as e:
-        st.error(f"Kunde inte läsa data: {e}")
-        return
-
-    try:
-        inst = läs_inställningar(sh)
-    except Exception as e:
-        st.error(f"Kunde inte läsa inställningar: {e}")
-        return
+    gc = autentisera()
+    sh = gc.open_by_url(SHEET_URL)
+    df = init_sheet(sh)
+    inst = läs_inställningar(sh)
 
     visa_inställningar(inst, sh)
     scenformulär(df, inst, sh)
