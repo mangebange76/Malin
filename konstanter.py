@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta
 import pandas as pd
 
-# Kolumner i rätt ordning – används i alla moduler
 COLUMNS = [
     "Datum", "Typ", "Scenens längd (h)", "Antal vilodagar", "Övriga män",
     "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP", "TPP", "TPA", "TAP",
@@ -18,22 +17,13 @@ def säkerställ_kolumner(df):
     return df[COLUMNS]
 
 def bestäm_datum(df, inst):
-    """Returnerar korrekt datum för nästa rad baserat på inställning eller föregående rad."""
     if df.empty:
-        startdatum = inst.get("Startdatum")
-        if isinstance(startdatum, str):
-            try:
-                return datetime.strptime(startdatum, "%Y-%m-%d").strftime("%Y-%m-%d")
-            except:
-                pass
-        return datetime.today().strftime("%Y-%m-%d")
-    else:
-        senaste_datum = df["Datum"].iloc[-1]
+        start = inst.get("Startdatum", datetime.today().strftime("%Y-%m-%d"))
         try:
-            senaste = pd.to_datetime(senaste_datum, errors="coerce")
-            if pd.isna(senaste):
-                return datetime.today().strftime("%Y-%m-%d")
-            nästa = senaste + timedelta(days=1)
-            return nästa.strftime("%Y-%m-%d")
+            return datetime.strptime(start, "%Y-%m-%d").strftime("%Y-%m-%d")
         except:
             return datetime.today().strftime("%Y-%m-%d")
+    senaste = pd.to_datetime(df["Datum"].iloc[-1], errors="coerce")
+    if pd.isna(senaste):
+        return datetime.today().strftime("%Y-%m-%d")
+    return (senaste + timedelta(days=1)).strftime("%Y-%m-%d")
