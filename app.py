@@ -1,6 +1,7 @@
-import streamlit as st
-st.write("Secrets tillgängliga:", list(st.secrets.keys()))
-import streamlit as st
+if "SHEET_URL" not in st.secrets:
+    st.error("❌ SHEET_URL saknas i secrets. Kontrollera att du lagt in det korrekt i Streamlit Cloud.")
+    st.stop()
+    import streamlit as st
 import pandas as pd
 import datetime
 from google.oauth2.service_account import Credentials
