@@ -72,7 +72,7 @@ def spara_inställningar(sh, inst):
     sheet.update("A2:C" + str(len(rows) + 1), rows)
 
 def spara_data(sh, df):
-    df = df[COLUMNS]  # Säkerställ rätt kolumner
+    df = df[COLUMNS]
     df = df.fillna("").astype(str)
     sheet = sh.worksheet("Data")
     sheet.clear()
@@ -130,13 +130,14 @@ def scenformulär(df, inst, sh):
             st.success("✅ Raden tillagd")
             st.info(f"✅ Scen tillagd: {f['Typ']} – {datetime.today().strftime('%Y-%m-%d')}")
 
-            # Nollställ fält utan rerun
             for k in f:
-                if k in st.session_state:
-                    st.session_state[k] = 0 if isinstance(st.session_state[k], (int, float)) else ""
+                värde = st.session_state.get(k)
+                if värde is not None:
+                    st.session_state[k] = 0 if isinstance(värde, (int, float)) else ""
 
             for extra_key in ["typ", "antal_vilodagar", "scen_längd", "övriga", "dt_tid", "alskar", "sover"]:
-                if extra_key in st.session_state:
+                värde = st.session_state.get(extra_key)
+                if värde is not None:
                     st.session_state[extra_key] = 0
 
 def inställningspanel(sh, inst):
@@ -175,8 +176,6 @@ def main():
     st.set_page_config(page_title="Malin-produktionsapp", layout="wide")
     st.title("🎬 Malin-produktionsapp")
 
-    credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
-    gc = gspread.authorize(credentials)
     sh = gc.open_by_url(SHEET_URL)
 
     inst = läs_inställningar(sh)
