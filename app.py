@@ -12,6 +12,24 @@ gc = gspread.authorize(credentials)
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1--mqpIEEta9An4kFvHZBJoFlRz1EtozxCy2PnD4PNJ0/edit?usp=drivesdk"
 
+def init_sheet(sh):
+    try:
+        sheet = sh.worksheet("Data")
+    except gspread.WorksheetNotFound:
+        sheet = sh.add_worksheet(title="Data", rows="1000", cols="40")
+        sheet.update("A1:AD1", [list(pd.DataFrame(columns=[
+            "Datum", "Typ", "Scenens längd (h)", "Antal vilodagar", "Övriga män",
+            "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP", "TPP", "TPA", "TAP",
+            "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj",
+            "DT tid per man (sek)", "Älskar med", "Sover med", "Nils sex",
+            "Prenumeranter", "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
+            "DT total tid (sek)", "Total tid (sek)", "Total tid (h)", "Minuter per kille"
+        ]).columns)])
+
+    df = pd.DataFrame(sheet.get_all_records())
+    df = df.reindex(columns=COLUMNS, fill_value=0)
+    return df
+
 COLUMNS = [
     "Datum", "Typ", "Scenens längd (h)", "Övriga män",
     "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP",
@@ -22,16 +40,6 @@ COLUMNS = [
     "Kompisars lön ($)", "DT total tid (sek)", "Total tid (sek)",
     "Total tid (h)", "Minuter per kille"
 ]
-
-def init_sheet(sh):
-    try:
-        sheet = sh.worksheet("Data")
-    except gspread.WorksheetNotFound:
-        sheet = sh.add_worksheet(title="Data", rows="1000", cols="40")
-        sheet.update("A1", [COLUMNS])
-    df = pd.DataFrame(sheet.get_all_records())
-    df = df.reindex(columns=COLUMNS, fill_value=0)
-    return df
 
 def läs_inställningar(sh):
     try:
@@ -48,8 +56,14 @@ def läs_inställningar(sh):
             ["Nils vänner", "15"],
             ["Nils familj", "10"]
         ]
-        sheet.update("A2:C8", [[namn, värde, datetime.today().strftime("%Y-%m-%d")] for namn, värde in standard])
+        idag = datetime.today().strftime("%Y-%m-%d")
+        sheet.update("A2:C8", [[namn, värde, idag] for namn, värde in standard])
+
     df = pd.DataFrame(sheet.get_all_records())
+    if "Namn" not in df.columns or "Värde" not in df.columns:
+        st.error("Fel: 'Inställningar'-bladet saknar nödvändiga kolumner.")
+        return {}
+
     return {row["Namn"]: tolka_värde(row["Värde"]) for _, row in df.iterrows()}
 
 def tolka_värde(v):
@@ -70,6 +84,18 @@ def spara_inställningar(sh, nya_inst):
             df.at[i, "Värde"] = nya_inst[namn]
             df.at[i, "Senast ändrad"] = idag
     sheet.update("A2:C" + str(len(df) + 1), df.values.tolist())
+
+def visa_inställningar(inst, sh):
+    st.sidebar.subheader("Inställningar")
+    nya = {}
+    for key in ["Startdatum", "Kvinnans namn", "Födelsedatum", "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
+        if "datum" in key.lower():
+            nya[key] = st.sidebar.text_input(key, value=str(inst.get(key, "")))
+        else:
+            nya[key] = st.sidebar.number_input(key, min_value=0, value=int(inst.get(key, 0)), step=1)
+    if st.sidebar.button("Spara inställningar"):
+        spara_inställningar(sh, nya)
+        st.experimental_rerun()
 
 def ensure_columns_exist(df):
     kolumner = [
@@ -96,14 +122,15 @@ def konvertera_typer(df):
 def rensa_data(sh):
     sheet = sh.worksheet("Data")
     sheet.resize(rows=1)
-    sheet.update("A1:AD1", [list(pd.DataFrame(columns=[
+    kolumner = [
         "Datum", "Typ", "Scenens längd (h)", "Antal vilodagar", "Övriga män",
         "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP", "TPP", "TPA", "TAP",
         "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj",
         "DT tid per man (sek)", "Älskar med", "Sover med", "Nils sex",
         "Prenumeranter", "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
         "DT total tid (sek)", "Total tid (sek)", "Total tid (h)", "Minuter per kille"
-    ).columns)])
+    ]
+    sheet.update("A1:AD1", [kolumner])
 
 def save_data(sh, df):
     df = ensure_columns_exist(df)
@@ -166,27 +193,35 @@ def visa_data(df):
             st.warning("⚠️ Minst en rad har total tid över 18 timmar!")
 
 def visa_inställningar(inst, sh):
-    st.sidebar.header("Inställningar")
+    st.sidebar.subheader("Inställningar")
     nya = {}
     for nyckel in ["Startdatum", "Kvinnans namn", "Födelsedatum", "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
-        if "datum" in nyckel.lower():
-            nya[nyckel] = st.sidebar.text_input(nyckel, value=str(inst.get(nyckel, "")))
+        if isinstance(inst.get(nyckel), (int, float)):
+            nya[nyckel] = st.sidebar.number_input(nyckel, value=inst.get(nyckel, 0))
         else:
-            nya[nyckel] = st.sidebar.number_input(nyckel, value=int(inst.get(nyckel, 0)), step=1)
+            nya[nyckel] = st.sidebar.text_input(nyckel, value=inst.get(nyckel, ""))
     if st.sidebar.button("Spara inställningar"):
         spara_inställningar(sh, nya)
-        st.experimental_rerun()
+        st.sidebar.success("Inställningar sparade. Ladda om sidan för att se ändringar.")
+
+    if st.sidebar.button("Rensa databas"):
+        rensa_data(sh)
+        st.sidebar.warning("Databasen har rensats.")
 
 def main():
-    st.title("Malin-produktionsapp")
-    gc = autentisera()
-    sh = gc.open_by_url(SHEET_URL)
-    df = init_sheet(sh)
-    inst = läs_inställningar(sh)
+    st.set_page_config(page_title="Malin-produktionsapp", layout="wide")
+    st.title("Malin-produktionsapp 🎬")
+    try:
+        gc = autentisera()
+        sh = gc.open_by_url(SHEET_URL)
+        df = init_sheet(sh)
+        inst = läs_inställningar(sh)
 
-    visa_inställningar(inst, sh)
-    scenformulär(df, inst, sh)
-    visa_data(df)
+        visa_inställningar(inst, sh)
+        scenformulär(df, inst, sh)
+        visa_data(df)
+    except Exception as e:
+        st.error(f"🚨 Fel vid laddning: {e}")
 
 if __name__ == "__main__":
     main()
