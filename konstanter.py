@@ -1,4 +1,3 @@
-# konstanter.py
 COLUMNS = [
     "Datum", "Typ", "Scenens längd (h)", "Antal vilodagar", "Övriga män",
     "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP", "TPP", "TPA", "TAP",
@@ -9,7 +8,7 @@ COLUMNS = [
 ]
 
 def säkerställ_kolumner(df):
-    for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = 0
+    for kolumn in COLUMNS:
+        if kolumn not in df.columns:
+            df[kolumn] = 0
     return df
