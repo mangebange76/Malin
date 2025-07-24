@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime
+from datetime import datetime, timedelta
 from berakningar import process_lägg_till_rader, beräkna_tid_per_kille
-from konstanter import COLUMNS, säkerställ_kolumner, bestäm_datum
+from konstanter import COLUMNS, säkerställ_kolumner
 
 # Autentisering
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -53,6 +53,26 @@ def tolka_värde(v):
     except:
         return str(v)
 
+def bestäm_datum(df, inst):
+    if df.empty:
+        startdatum = inst.get("Startdatum")
+        if isinstance(startdatum, str):
+            try:
+                return datetime.strptime(startdatum, "%Y-%m-%d").strftime("%Y-%m-%d")
+            except:
+                pass
+        return datetime.today().strftime("%Y-%m-%d")
+    else:
+        senaste_datum = df["Datum"].iloc[-1]
+        try:
+            senaste = pd.to_datetime(senaste_datum, errors="coerce")
+            if pd.isna(senaste):
+                return datetime.today().strftime("%Y-%m-%d")
+            nästa = senaste + timedelta(days=1)
+            return nästa.strftime("%Y-%m-%d")
+        except:
+            return datetime.today().strftime("%Y-%m-%d")
+
 def spara_inställningar(sh, inst):
     sheet = sh.worksheet("Inställningar")
     idag = datetime.today().strftime("%Y-%m-%d")
@@ -63,31 +83,34 @@ def spara_inställningar(sh, inst):
     sheet.update("A2:C" + str(len(rows) + 1), rows)
 
 def spara_data(sh, df):
-    df = säkerställ_kolumner(df)
-    sheet = sh.worksheet("Data")
+    df = df[COLUMNS]
+    import numpy as np
 
-    # Konvertera värden till skrivbara format
     def städa_värde(x):
-        if pd.isna(x):
+        if pd.isna(x) or x in [None, np.nan, float("inf"), float("-inf")]:
             return ""
-        if isinstance(x, (int, float)):
-            return round(x, 2)
-        return str(x).replace("\n", " ").strip()
+        if isinstance(x, (float, int)):
+            return x
+        s = str(x).replace("\n", " ").strip()
+        return s[:5000]
 
-    df = df[COLUMNS].copy()
     df = df.applymap(städa_värde)
+
+    sheet = sh.worksheet("Data")
+    sheet.clear()
+    sheet.update("A1", [df.columns.tolist()])
+
+    if df.empty:
+        return
 
     värden = df.values.tolist()
     värden = [rad[:len(COLUMNS)] + [""] * (len(COLUMNS) - len(rad)) for rad in värden]
 
-    sheet.clear()
-    sheet.update("A1", [COLUMNS])
-
-    max_rader = 1000
-    for i in range(0, len(värden), max_rader):
+    max_rader_per_update = 1000
+    for i in range(0, len(värden), max_rader_per_update):
         start_row = i + 2
-        chunk = värden[i:i+max_rader]
         cell_range = f"A{start_row}"
+        chunk = värden[i:i + max_rader_per_update]
         try:
             sheet.update(cell_range, chunk)
         except Exception as e:
@@ -95,6 +118,17 @@ def spara_data(sh, df):
             st.write("Chunk som skulle skrivas:", chunk)
             st.write("Antal kolumner:", len(chunk[0]) if chunk else 0)
             raise e
+
+def konvertera_typer(df):
+    for col in COLUMNS:
+        if col in df.columns:
+            if "Datum" in col:
+                df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
+            elif col in ["Typ"]:
+                df[col] = df[col].astype(str)
+            else:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    return df
 
 def rensa_databasen(sh):
     sheet = sh.worksheet("Data")
@@ -104,6 +138,8 @@ def rensa_databasen(sh):
 def scenformulär(df, inst, sh):
     with st.form("lägg_till_scen"):
         f = {}
+        f["Datum"] = bestäm_datum(df, inst)
+        st.markdown(f"**Datum:** {f['Datum']}")
         f["Typ"] = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"], key="typ")
         f["Antal vilodagar"] = st.number_input("Antal vilodagar", 0, 30, step=1, key="antal_vilodagar")
         f["Scenens längd (h)"] = st.number_input("Scenens längd (h)", 0.0, 48.0, step=0.5, key="scen_längd")
@@ -116,25 +152,18 @@ def scenformulär(df, inst, sh):
             f[nyckel] = st.number_input(nyckel, 0, int(inst.get(nyckel, 0)), step=1, key=nyckel + "_grupp")
 
         f["DT tid per man (sek)"] = st.number_input("DT tid per man (sek)", 0, 9999, step=1, key="dt_tid")
-
         f["Älskar med"] = st.number_input("Antal älskar med", 0, 100, step=1, key="alskar")
         f["Sover med"] = st.number_input("Antal sover med", 0, 100, step=1, key="sover")
 
         tid_per_kille_min, total_tid_h = beräkna_tid_per_kille(f)
-        f["Minuter per kille"] = tid_per_kille_min
-        f["Total tid (h)"] = total_tid_h
-
         st.markdown(f"**Minuter per kille (inkl. DT):** {round(tid_per_kille_min, 2)} min")
         st.markdown(f"**Total tid för scenen:** {round(total_tid_h, 2)} h")
 
         if total_tid_h > 18:
             st.warning("⚠️ Total tid överstiger 18 timmar!")
 
-        bekräfta = st.checkbox("Bekräfta att du vill lägga till denna rad")
-
         submitted = st.form_submit_button("Lägg till")
-        if submitted and bekräfta:
-            f["Datum"] = bestäm_datum(df, inst)
+        if submitted:
             df = process_lägg_till_rader(df, inst, f)
             df = konvertera_typer(df)
             spara_data(sh, df)
@@ -175,13 +204,6 @@ def visa_data(df):
         senaste = df.iloc[-1]
         st.info(f"Senaste rad: {senaste['Datum']} – {senaste['Typ']}")
 
-def ensure_columns_exist(df):
-    from konstanter import COLUMNS
-    for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = 0
-    return df
-
 def main():
     st.set_page_config(page_title="Malin-produktionsapp", layout="wide")
     st.title("🎬 Malin-produktionsapp")
@@ -194,7 +216,7 @@ def main():
     inställningspanel(sh, inst)
 
     df = init_sheet(sh)
-    df = ensure_columns_exist(df)
+    df = säkerställ_kolumner(df)
     df = konvertera_typer(df)
 
     scenformulär(df, inst, sh)
