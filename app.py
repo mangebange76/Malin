@@ -47,9 +47,24 @@ def läs_inställningar(sh):
             ["Nils vänner", "15"],
             ["Nils familj", "10"]
         ]
-        idag = datetime.today().strftime("%Y-%m-%d")
-        sheet.update("A2:C8", [[namn, värde, idag] for namn, värde in standard])
+        sheet.update("A2:C8", [[namn, värde, datetime.today().strftime("%Y-%m-%d")] for namn, värde in standard])
+
     df = pd.DataFrame(sheet.get_all_records())
+
+    if "Namn" not in df.columns:
+        sheet.update("A1:C1", [["Namn", "Värde", "Senast ändrad"]])
+        standard = [
+            ["Startdatum", "2014-03-26"],
+            ["Kvinnans namn", "Malin"],
+            ["Födelsedatum", "1984-03-26"],
+            ["Kompisar", "50"],
+            ["Pappans vänner", "25"],
+            ["Nils vänner", "15"],
+            ["Nils familj", "10"]
+        ]
+        sheet.update("A2:C8", [[namn, värde, datetime.today().strftime("%Y-%m-%d")] for namn, värde in standard])
+        df = pd.DataFrame(sheet.get_all_records())
+
     return {row["Namn"]: tolka_värde(row["Värde"]) for _, row in df.iterrows()}
 
 def tolka_värde(v):
@@ -96,8 +111,14 @@ def konvertera_typer(df):
 def rensa_data(sh):
     sheet = sh.worksheet("Data")
     sheet.resize(rows=1)
-    rubriker = ensure_columns_exist(pd.DataFrame()).columns.tolist()
-    sheet.update("A1:AD1", [rubriker])
+    sheet.update("A1:AD1", [list(pd.DataFrame(columns=[
+        "Datum", "Typ", "Scenens längd (h)", "Antal vilodagar", "Övriga män",
+        "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP", "TPP", "TPA", "TAP",
+        "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj",
+        "DT tid per man (sek)", "Älskar med", "Sover med", "Nils sex",
+        "Prenumeranter", "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
+        "DT total tid (sek)", "Total tid (sek)", "Total tid (h)", "Minuter per kille"
+    ).columns)])
 
 def save_data(sh, df):
     df = ensure_columns_exist(df)
