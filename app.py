@@ -160,7 +160,7 @@ def scenformulär(df, inst, sh):
         df = process_lägg_till_rader(df, inst, f)
         save_data(sh, df)
         st.success("Raden har lagts till!")
-        st.experimental_rerun()
+        st.rerun()
 
 def visa_data(df):
     st.subheader("Databas")
