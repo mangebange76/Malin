@@ -46,19 +46,18 @@ def process_lägg_till_rader(df, inst, f):
     elif f["Typ"] == "Vilovecka hemma":
         dagar = 7
         multiplikator = 1.5
-        for grupp in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
-            tot = round(inst.get(grupp, 0) * multiplikator)
-            fördelat = fördela_heltal(tot, dagar)
-            for i in range(dagar):
-                if len(nya_rader) <= i:
-                    rad = skapa_rad(f.copy(), nytt_datum + timedelta(days=i), inst)
-                    rad["Typ"] = "Vilovecka hemma"
-                    rad["Älskar med"] = 8
-                    rad["Sover med"] = 0
-                    nya_rader.append(rad)
-                nya_rader[i][grupp] = fördelat[i]
+        fördelade = {grupp: fördela_heltal(round(inst.get(grupp, 0) * multiplikator), dagar)
+                     for grupp in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]}
 
-        # Slumpa 0–2 tillfällen med Nils
+        for i in range(dagar):
+            rad = skapa_rad(f.copy(), nytt_datum + timedelta(days=i), inst)
+            rad["Typ"] = "Vilovecka hemma"
+            rad["Älskar med"] = 8
+            rad["Sover med"] = 0
+            for grupp in fördelade:
+                rad[grupp] = fördelade[grupp][i]
+            nya_rader.append(rad)
+
         antal = random.randint(0, 2)
         dagar_med_nils = random.sample(range(dagar), antal)
         for i in dagar_med_nils:
