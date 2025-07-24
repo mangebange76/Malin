@@ -1,78 +1,103 @@
-from datetime import datetime
+# berakningar.py
+import pandas as pd
+import random
+from datetime import datetime, timedelta
 from konstanter import COLUMNS
 
-def beräkna_tid_per_kille(f):
-    multiplar = {
-        "Enkel vaginal": 1,
-        "Enkel anal": 1,
-        "DP": 2,
-        "DPP": 2,
-        "DAP": 2,
-        "TPP": 3,
-        "TPA": 3,
-        "TAP": 3
-    }
-    antal_killar = sum(f.get(k, 0) * v for k, v in multiplar.items()) + f.get("Övriga män", 0)
-    dt_tid = f.get("DT tid per man (sek)", 0)
-    total_dt_tid = antal_killar * dt_tid
-    älskar_tid = f.get("Älskar med", 0) * 1800  # 30 min per tillfälle
-    total_tid = total_dt_tid + älskar_tid
-    total_tid_h = total_tid / 3600
-    minuter_per_kille = (total_tid / antal_killar / 60) if antal_killar else 0
-    return minuter_per_kille, total_tid_h
-
 def process_lägg_till_rader(df, inst, f):
-    ny_rad = {
-        "Datum": datetime.today().strftime("%Y-%m-%d"),
-        "Typ": f.get("Typ"),
-        "Scenens längd (h)": f.get("Scenens längd (h)", 0),
-        "Antal vilodagar": f.get("Antal vilodagar", 0),
-        "Övriga män": f.get("Övriga män", 0),
-        "Enkel vaginal": f.get("Enkel vaginal", 0),
-        "Enkel anal": f.get("Enkel anal", 0),
-        "DP": f.get("DP", 0),
-        "DPP": f.get("DPP", 0),
-        "DAP": f.get("DAP", 0),
-        "TPP": f.get("TPP", 0),
-        "TPA": f.get("TPA", 0),
-        "TAP": f.get("TAP", 0),
-        "Kompisar": f.get("Kompisar", 0),
-        "Pappans vänner": f.get("Pappans vänner", 0),
-        "Nils vänner": f.get("Nils vänner", 0),
-        "Nils familj": f.get("Nils familj", 0),
-        "DT tid per man (sek)": f.get("DT tid per man (sek)", 0),
-        "Älskar med": f.get("Älskar med", 0),
-        "Sover med": f.get("Sover med", 0),
-        "Nils sex": f.get("Nils sex", 0),
-        "Prenumeranter": 0,
-        "Intäkt ($)": 0,
-        "Kvinnans lön ($)": 0,
-        "Mäns lön ($)": 0,
-        "Kompisars lön ($)": 0,
-        "DT total tid (sek)": 0,
-        "Total tid (sek)": 0,
-        "Total tid (h)": 0,
-        "Minuter per kille": 0
+    idag = datetime.today().strftime("%Y-%m-%d")
+    typ = f["Typ"]
+
+    if typ == "Scen":
+        ny_rad = skapa_scenrad(f, idag)
+        df = pd.concat([df, pd.DataFrame([ny_rad])], ignore_index=True)
+
+    elif typ == "Vila inspelningsplats":
+        dagar = int(f.get("Antal vilodagar", 0))
+        for _ in range(dagar):
+            ny_rad = skapa_vilarad(idag)
+            df = pd.concat([df, pd.DataFrame([ny_rad])], ignore_index=True)
+
+    elif typ == "Vilovecka hemma":
+        startdatum = datetime.today()
+        for i in range(7):
+            dag = startdatum + timedelta(days=i)
+            ny_rad = skapa_vilovecka_hemma(dag)
+            df = pd.concat([df, pd.DataFrame([ny_rad])], ignore_index=True)
+
+    df = df.reindex(columns=COLUMNS, fill_value=0)
+    return df
+
+def skapa_scenrad(f, datum):
+    total_tid = f["Scenens längd (h)"] * 3600
+    dt_tid_total = f["DT tid per man (sek)"] * (
+        f["Kompisar"] + f["Pappans vänner"] + f["Nils vänner"] + f["Nils familj"]
+    )
+
+    minuter_per_kille = 0
+    antal_killar = (
+        f["Enkel vaginal"] + f["Enkel anal"] +
+        2 * (f["DP"] + f["DPP"] + f["DAP"]) +
+        3 * (f["TPP"] + f["TPA"] + f["TAP"]) +
+        f["Kompisar"] + f["Pappans vänner"] + f["Nils vänner"] + f["Nils familj"]
+    )
+    if antal_killar > 0:
+        minuter_per_kille = (total_tid + dt_tid_total) / 60 / antal_killar
+
+    return {
+        "Datum": datum,
+        **{k: f.get(k, 0) for k in COLUMNS if k not in ["Datum", "Minuter per kille", "Total tid (h)", "Total tid (sek)", "DT total tid (sek)"]},
+        "DT total tid (sek)": dt_tid_total,
+        "Total tid (sek)": total_tid + dt_tid_total,
+        "Total tid (h)": (total_tid + dt_tid_total) / 3600,
+        "Minuter per kille": round(minuter_per_kille, 2),
     }
 
-    minuter, timmar = beräkna_tid_per_kille(f)
-    antal_killar = sum(f.get(k, 0) * v for k, v in {
-        "Enkel vaginal": 1,
-        "Enkel anal": 1,
-        "DP": 2,
-        "DPP": 2,
-        "DAP": 2,
-        "TPP": 3,
-        "TPA": 3,
-        "TAP": 3
-    }.items()) + f.get("Övriga män", 0)
+def skapa_vilarad(datum):
+    return {
+        "Datum": datum,
+        "Typ": "Vila inspelningsplats",
+        "Antal vilodagar": 1,
+        "Kvinnans lön ($)": 0,
+        "Minuter per kille": 0,
+        "Total tid (h)": 0,
+        "Total tid (sek)": 0,
+        "DT total tid (sek)": 0
+    }
 
-    ny_rad["DT total tid (sek)"] = f.get("DT tid per man (sek)", 0) * antal_killar
-    ny_rad["Total tid (sek)"] = ny_rad["DT total tid (sek)"] + f.get("Älskar med", 0) * 1800
-    ny_rad["Total tid (h)"] = ny_rad["Total tid (sek)"] / 3600
-    ny_rad["Minuter per kille"] = minuter
+def skapa_vilovecka_hemma(datum):
+    nils_sex = 0
+    rand = random.random()
+    if rand < 0.1:
+        nils_sex = 2
+    elif rand < 0.6:
+        nils_sex = 1
 
-    # Säkerställ rätt kolumnordning
-    ny_rad = {col: ny_rad.get(col, 0) for col in COLUMNS}
-    df.loc[len(df)] = ny_rad
-    return df
+    return {
+        "Datum": datum.strftime("%Y-%m-%d"),
+        "Typ": "Vilovecka hemma",
+        "Antal vilodagar": 0,
+        "Sover med": 1 if datum.weekday() == 6 else 0,
+        "Nils sex": nils_sex,
+        "Kvinnans lön ($)": 0,
+        "Minuter per kille": 0,
+        "Total tid (h)": 0,
+        "Total tid (sek)": 0,
+        "DT total tid (sek)": 0
+    }
+
+def beräkna_tid_per_kille(f):
+    total_tid = f["Scenens längd (h)"] * 3600
+    dt_tid_total = f["DT tid per man (sek)"] * (
+        f["Kompisar"] + f["Pappans vänner"] + f["Nils vänner"] + f["Nils familj"]
+    )
+
+    antal_killar = (
+        f["Enkel vaginal"] + f["Enkel anal"] +
+        2 * (f["DP"] + f["DPP"] + f["DAP"]) +
+        3 * (f["TPP"] + f["TPA"] + f["TAP"]) +
+        f["Kompisar"] + f["Pappans vänner"] + f["Nils vänner"] + f["Nils familj"]
+    )
+    minuter_per_kille = ((total_tid + dt_tid_total) / 60 / antal_killar) if antal_killar > 0 else 0
+    total_tid_h = (total_tid + dt_tid_total) / 3600
+    return minuter_per_kille, total_tid_h
