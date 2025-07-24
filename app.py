@@ -5,13 +5,12 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 from berakningar import process_lägg_till_rader, beräkna_tid_per_kille
 
-# Autentisering
+# Konfiguration
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
 gc = gspread.authorize(credentials)
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1--mqpIEEta9An4kFvHZBJoFlRz1EtozxCy2PnD4PNJ0/edit?usp=drivesdk"
 
-# Kolumner
 COLUMNS = [
     "Datum", "Typ", "Scenens längd (h)", "Antal vilodagar", "Övriga män",
     "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP", "TPP", "TPA", "TAP",
@@ -21,6 +20,13 @@ COLUMNS = [
     "DT total tid (sek)", "Total tid (sek)", "Total tid (h)", "Minuter per kille"
 ]
 
+def ensure_columns_exist(df):
+    for col in COLUMNS:
+        if col not in df.columns:
+            df[col] = 0
+    df = df[COLUMNS]
+    return df
+
 def init_sheet(sh):
     try:
         sheet = sh.worksheet("Data")
@@ -28,8 +34,7 @@ def init_sheet(sh):
         sheet = sh.add_worksheet(title="Data", rows="1000", cols="40")
         sheet.update("A1", [COLUMNS])
     df = pd.DataFrame(sheet.get_all_records())
-    df = df.reindex(columns=COLUMNS, fill_value=0)
-    return df
+    return ensure_columns_exist(df)
 
 def läs_inställningar(sh):
     try:
@@ -49,9 +54,6 @@ def läs_inställningar(sh):
         idag = datetime.today().strftime("%Y-%m-%d")
         sheet.update("A2:C8", [[namn, värde, idag] for namn, värde in standard])
     df = pd.DataFrame(sheet.get_all_records())
-    if "Namn" not in df.columns or "Värde" not in df.columns:
-        st.error("Fel: Bladet 'Inställningar' saknar nödvändiga kolumner.")
-        return {}
     return {row["Namn"]: tolka_värde(row["Värde"]) for _, row in df.iterrows()}
 
 def tolka_värde(v):
@@ -72,9 +74,9 @@ def spara_inställningar(sh, inst):
     sheet.update("A2:C" + str(len(rows) + 1), rows)
 
 def spara_data(sh, df):
-    df = df[COLUMNS]
-
     import numpy as np
+    df = ensure_columns_exist(df)
+
     def städa_värde(x):
         if pd.isna(x) or x in [None, np.nan, float("inf"), float("-inf")]:
             return ""
@@ -92,17 +94,13 @@ def spara_data(sh, df):
     if df.empty:
         return
 
-    # Justera rader så att varje rad har exakt lika många kolumner som COLUMNS
     värden = df.values.tolist()
-    värden = [rad[:len(COLUMNS)] + [""] * (len(COLUMNS) - len(rad)) for rad in värden]
-
     max_rader_per_update = 1000
 
     for i in range(0, len(värden), max_rader_per_update):
         start_row = i + 2
         cell_range = f"A{start_row}"
         chunk = värden[i:i + max_rader_per_update]
-
         try:
             sheet.update(cell_range, chunk)
         except Exception as e:
@@ -121,6 +119,7 @@ def konvertera_typer(df):
             else:
                 df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     return df
+
 def rensa_databasen(sh):
     sheet = sh.worksheet("Data")
     sheet.resize(rows=1)
@@ -155,19 +154,20 @@ def scenformulär(df, inst, sh):
         submitted = st.form_submit_button("Lägg till")
         if submitted:
             df = process_lägg_till_rader(df, inst, f)
+            df = ensure_columns_exist(df)
             df = konvertera_typer(df)
             spara_data(sh, df)
             st.success("✅ Raden tillagd")
-            st.info(f"✅ Scen tillagd: {f['Typ']} – {datetime.today().strftime('%Y-%m-%d')}")
 
-            # Nollställ fält utan rerun
-            for k in f:
+            nycklar_att_rensa = list(f.keys()) + [
+                "typ", "antal_vilodagar", "scen_längd", "övriga", "dt_tid", "alskar", "sover"
+            ]
+            for k in nycklar_att_rensa:
                 if k in st.session_state:
-                    st.session_state[k] = 0 if isinstance(st.session_state[k], (int, float)) else ""
-
-            for extra_key in ["typ", "antal_vilodagar", "scen_längd", "övriga", "dt_tid", "alskar", "sover"]:
-                if extra_key in st.session_state:
-                    st.session_state[extra_key] = 0
+                    if isinstance(st.session_state[k], (int, float)):
+                        st.session_state[k] = 0
+                    elif isinstance(st.session_state[k], str):
+                        st.session_state[k] = ""
 
 def inställningspanel(sh, inst):
     st.sidebar.header("Inställningar")
@@ -195,18 +195,10 @@ def visa_data(df):
         senaste = df.iloc[-1]
         st.info(f"Senaste rad: {senaste['Datum']} – {senaste['Typ']}")
 
-def ensure_columns_exist(df):
-    for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = 0
-    return df
-
 def main():
     st.set_page_config(page_title="Malin-produktionsapp", layout="wide")
     st.title("🎬 Malin-produktionsapp")
 
-    credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
-    gc = gspread.authorize(credentials)
     sh = gc.open_by_url(SHEET_URL)
 
     inst = läs_inställningar(sh)
