@@ -1,5 +1,5 @@
 import streamlit as st
-st.write("SHEET_URL hittad:", st.secrets.get("SHEET_URL", "SHEET_URL saknas!"))
+st.write("Secrets tillgängliga:", list(st.secrets.keys()))
 import streamlit as st
 import pandas as pd
 import datetime
