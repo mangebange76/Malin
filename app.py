@@ -1,168 +1,180 @@
 import streamlit as st
 import pandas as pd
+import datetime
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime
+from konstanter import COLUMNS, säkerställ_kolumner
 from berakningar import process_lägg_till_rader, beräkna_tid_per_kille
 
-# Konfigurera och autentisera
-scope = ["https://spreadsheets.google.com/feeds", 
-         "https://www.googleapis.com/auth/drive"]
-credentials = Credentials.from_service_account_info(
-    st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
+# Autentisering
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
 gc = gspread.authorize(credentials)
-SHEET_URL = st.secrets.get("SHEET_URL", "")
+SHEET_URL = st.secrets["GOOGLE_CREDENTIALS"]["SHEET_URL"]
+sh = gc.open_by_url(SHEET_URL)
+sheet = sh.sheet1
 
-# Konstanter
-COLUMNS = [
-    "Datum", "Typ", "Antal vilodagar", "Nya män",
-    "Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP",
-    "TPP", "TPA", "TAP",
-    "Kompisar", "Pappans vänner", "Nils vänner", "Nils familj",
-    "DT tid per man (sek)", "Älskar med", "Sover med", "Nils sex",
-    "Prenumeranter", "Intäkt ($)", "Kvinnans lön ($)", "Mäns lön ($)", "Kompisars lön ($)",
-    "DT total tid (sek)", "Total tid (sek)", "Total tid (h)", "Minuter per kille"
-]
+# Funktion för att initiera databasen med rätt kolumner
+def initiera_databas():
+    headers = sheet.row_values(1)
+    if headers != COLUMNS:
+        sheet.clear()
+        sheet.insert_row(COLUMNS, index=1)
 
-def init_sheet(sh):
+# Funktion för att hämta inställningar från settings-blad
+def läs_inställningar():
     try:
-        sheet = sh.worksheet("Data")
-    except gspread.WorksheetNotFound:
-        sheet = sh.add_worksheet(title="Data", rows="2000", cols=str(len(COLUMNS)))
-        sheet.update("A1", [COLUMNS])
-    df = pd.DataFrame(sh.worksheet("Data").get_all_records())
-    df = df.reindex(columns=COLUMNS, fill_value=0)
-    return df
+        settings_sheet = sh.worksheet("settings")
+        settings_data = settings_sheet.get_all_records()
+        return settings_data[0] if settings_data else {}
+    except Exception:
+        return {}
 
-def säkerställ_kolumner(df):
-    for col in COLUMNS:
-        if col not in df.columns:
-            df[col] = 0
-    return df[COLUMNS]
-
-def läs_inställningar(sh):
+# Funktion för att spara inställningar till settings-blad
+def spara_inställningar(data):
     try:
-        sheet = sh.worksheet("Inställningar")
-    except gspread.WorksheetNotFound:
-        sheet = sh.add_worksheet(title="Inställningar", rows="100", cols="3")
-        sheet.update("A1:C1", [["Namn", "Värde", "Senast ändrad"]])
-        default = [
-            ["Startdatum", datetime.today().strftime("%Y-%m-%d")],
-            ["Kvinnans namn", "Malin"],
-            ["Födelsedatum", "1984-03-26"],
-            ["Kompisar", 50],
-            ["Pappans vänner", 25],
-            ["Nils vänner", 15],
-            ["Nils familj", 10],
-        ]
-        sheet.update("A2:C8", [[k, v, datetime.today().strftime("%Y-%m-%d")] for k,v in default])
-    df = pd.DataFrame(sheet.get_all_records())
-    inst = {}
-    for _, row in df.iterrows():
-        inst[row["Namn"]] = float(row["Värde"]) if isinstance(row["Värde"], (int,float,str)) and str(row["Värde"]).replace('.', '',1).isdigit() else row["Värde"]
-    return inst
+        settings_sheet = sh.worksheet("settings")
+    except Exception:
+        settings_sheet = sh.add_worksheet(title="settings", rows="10", cols="10")
+    settings_sheet.clear()
+    settings_sheet.append_row(list(data.keys()))
+    settings_sheet.append_row(list(data.values()))
 
-def spara_inställningar(sh, inst):
-    sheet = sh.worksheet("Inställningar")
-    idag = datetime.today().strftime("%Y-%m-%d")
-    rows = [[k, inst[k], idag] for k in inst]
-    sheet.update("A2:C" + str(len(rows)+1), rows)
-
-def spara_data(sh, df):
-    df = df[COLUMNS]
-    import numpy as np
-    def städa(x):
-        if pd.isna(x) or x in [None, np.nan, float("inf"), float("-inf")]:
-            return ""
-        return x
-    df = df.applymap(städa)
-    sheet = sh.worksheet("Data")
+# Funktion för att rensa databasen
+def rensa_databas():
     sheet.clear()
-    sheet.update("A1", [COLUMNS])
-    if df.empty: return
-    vals = df.values.tolist()
-    max_chunk = 1000
-    for i in range(0, len(vals), max_chunk):
-        r = i + 2
-        chunk = vals[i:i+max_chunk]
-        try:
-            sheet.update(f"A{r}", chunk)
-        except Exception as e:
-            st.error(f"❌ Fel vid skrivning till A{r}")
-            st.write(chunk)
-            raise
+    sheet.insert_row(COLUMNS, index=1)
 
-def inställningspanel(sh, inst):
-    st.sidebar.header("Inställningar")
-    with st.sidebar.form("inställningar"):
-        f = {}
-        f["Startdatum"] = st.text_input("Startdatum (YYYY‑MM‑DD)", inst.get("Startdatum", ""))
-        f["Kvinnans namn"] = st.text_input("Kvinnans namn", inst.get("Kvinnans namn", ""))
-        f["Födelsedatum"] = st.text_input("Födelsedatum (YYYY‑MM‑DD)", inst.get("Födelsedatum", ""))
-        for grp in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
-            f[grp] = st.number_input(grp, 0, 10000, int(inst.get(grp, 0)))
-        if st.form_submit_button("Spara inställningar"):
-            spara_inställningar(sh, f)
-            st.success("Inställningar sparade")
-    if st.sidebar.button("Rensa databas"):
-        sh.worksheet("Data").resize(rows=1)
-        sh.worksheet("Data").update("A1", [COLUMNS])
-        st.sidebar.success("Databasen rensad")
+# Funktion för att hämta befintlig data
+def hämta_data():
+    try:
+        data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        säkerställ_kolumner(df)
+        return df
+    except Exception as e:
+        st.error(f"Fel vid hämtning av data: {e}")
+        return pd.DataFrame(columns=COLUMNS)
 
-def scenformulär(df, inst, sh):
-    st.subheader("Lägg till scen / vila")
-    with st.form("scenform", clear_on_submit=False):
-        f = {}
-        f["Typ"] = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"])
-        f["Antal vilodagar"] = st.number_input("Antal vilodagar", 0, 30, step=1)
-        f["Nya män"] = st.number_input("Nya män", 0, 500, step=1)
-        for key in ["Enkel vaginal", "Enkel anal", "DP", "DPP", "DAP", "TPP", "TPA", "TAP"]:
-            f[key] = st.number_input(key, 0, 500, step=1)
-        for grp in ["Kompisar", "Pappans vänner", "Nils vänner", "Nils familj"]:
-            f[grp] = st.number_input(grp, 0, int(inst.get(grp, 0)), step=1)
-        f["DT tid per man (sek)"] = st.number_input("DT tid per man (sek)", 0, 9999, step=1)
-        f["Älskar med"] = st.number_input("Älskar med", 0, 100, step=1)
-        f["Sover med"] = st.number_input("Sover med", 0, 100, step=1)
-        st.write("✔ Jag bekräftar att uppgifterna är korrekta")
-        confirmed = st.checkbox("Bekräfta inför sparande")
-        tid_min, total_h = beräkna_tid_per_kille(f)
-        st.markdown(f"**Total tid:** {total_h:.2f} h  •  **Minuter per kille:** {tid_min:.2f} min")
-        if total_h > 18:
-            st.warning("⚠️ Total tid överstiger 18 timmar! Redigera innan sparande.")
-        ok = st.form_submit_button("Lägg till i databas")
-        if ok:
-            if not confirmed:
-                st.error("Du måste bekräfta data innan sparning.")
-            elif total_h > 18:
-                st.error("Total tid över 18 timmar. Justera värden först.")
-            else:
-                df = process_lägg_till_rader(df, inst, f)
-                df = säkerställ_kolumner(df)
-                spara_data(sh, df)
-                st.success("✅ Data sparad")
-    return df
+# Funktion för att spara ny rad till databasen
+def spara_data(rad):
+    try:
+        rad = ["" if v is None else v for v in rad]
+        if len(rad) != len(COLUMNS):
+            st.error(f"Fel antal kolumner: {len(rad)} ≠ {len(COLUMNS)}")
+            return
+        sheet.append_row(rad)
+        st.success("Raden sparades.")
+    except Exception as e:
+        st.error(f"Fel vid sparande av data: {e}")
 
-def visa_data(df):
-    st.subheader("Databas")
-    st.dataframe(df)
-    if not df.empty:
-        rng = df.iloc[-1]
-        st.info(f"Senaste: {rng['Datum']} – {rng['Typ']}")
+# Visa inställningsformulär
+def inställningar():
+    st.header("Inställningar")
+    data = läs_inställningar()
 
+    namn = st.text_input("Namn", value=data.get("namn", ""))
+    födelsedatum = st.date_input("Födelsedatum", value=pd.to_datetime(data.get("födelsedatum", "2000-01-01")))
+    kompisar = st.number_input("Max antal kompisar", value=int(data.get("kompisar", 0)), min_value=0)
+    pappans_vänner = st.number_input("Max antal pappans vänner", value=int(data.get("pappans_vänner", 0)), min_value=0)
+    nils_vänner = st.number_input("Max antal Nils vänner", value=int(data.get("nils_vänner", 0)), min_value=0)
+    nils_familj = st.number_input("Max antal Nils familj", value=int(data.get("nils_familj", 0)), min_value=0)
+
+    if st.button("Spara inställningar"):
+        data = {
+            "namn": namn,
+            "födelsedatum": str(födelsedatum),
+            "kompisar": kompisar,
+            "pappans_vänner": pappans_vänner,
+            "nils_vänner": nils_vänner,
+            "nils_familj": nils_familj,
+        }
+        spara_inställningar(data)
+        st.success("Inställningarna sparades.")
+
+    if st.button("Rensa databasen"):
+        rensa_databas()
+        st.success("Databasen har rensats.")
+
+# Visa formulär för att lägga till scen
+def scenformulär():
+    st.header("Lägg till scen")
+
+    df = hämta_data()
+    inst = läs_inställningar()
+
+    with st.form("scenformulär"):
+        datum = st.date_input("Datum", value=datetime.date.today())
+        typ = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"])
+        antal_vilodagar = st.number_input("Antal vilodagar", value=0, min_value=0)
+        nya_män = st.number_input("Nya män", value=0, min_value=0)
+        enkel_vaginal = st.number_input("Enkel vaginal", value=0, min_value=0)
+        enkel_anal = st.number_input("Enkel anal", value=0, min_value=0)
+        dp = st.number_input("DP", value=0, min_value=0)
+        dpp = st.number_input("DPP", value=0, min_value=0)
+        dap = st.number_input("DAP", value=0, min_value=0)
+        tpp = st.number_input("TPP", value=0, min_value=0)
+        tpa = st.number_input("TPA", value=0, min_value=0)
+        tap = st.number_input("TAP", value=0, min_value=0)
+        tid_enkel = st.number_input("Tid enkel (sek)", value=0, min_value=0)
+        tid_dubbel = st.number_input("Tid dubbel (sek)", value=0, min_value=0)
+        tid_trippel = st.number_input("Tid trippel (sek)", value=0, min_value=0)
+        vila = st.number_input("Vila (sek)", value=0, min_value=0)
+
+        kompisar = st.number_input(f"Kompisar (max {inst.get('kompisar', 0)})", value=0, min_value=0)
+        if kompisar > inst.get("kompisar", 0):
+            st.warning(f"Överskrider max tillåtna kompisar ({inst.get('kompisar', 0)})")
+
+        pappans_vänner = st.number_input(f"Pappans vänner (max {inst.get('pappans_vänner', 0)})", value=0, min_value=0)
+        if pappans_vänner > inst.get("pappans_vänner", 0):
+            st.warning(f"Överskrider max tillåtna pappans vänner ({inst.get('pappans_vänner', 0)})")
+
+        nils_vänner = st.number_input(f"Nils vänner (max {inst.get('nils_vänner', 0)})", value=0, min_value=0)
+        if nils_vänner > inst.get("nils_vänner", 0):
+            st.warning(f"Överskrider max tillåtna Nils vänner ({inst.get('nils_vänner', 0)})")
+
+        nils_familj = st.number_input(f"Nils familj (max {inst.get('nils_familj', 0)})", value=0, min_value=0)
+        if nils_familj > inst.get("nils_familj", 0):
+            st.warning(f"Överskrider max tillåtna Nils familj ({inst.get('nils_familj', 0)})")
+
+        dt_tid_per_man = st.number_input("DT tid per man", value=0)
+        antal_varv = st.number_input("Antal varv", value=0)
+        älskar_med = st.number_input("Älskar med", value=0)
+        sover_med = st.number_input("Sover med", value=0)
+        nils_sex = st.number_input("Nils sex", value=0)
+        prenumeranter = st.number_input("Prenumeranter", value=0)
+        intakt = st.number_input("Intäkt ($)", value=0.0)
+        kvinnans_lön = st.number_input("Kvinnans lön ($)", value=0.0)
+        mäns_lön = st.number_input("Mäns lön ($)", value=0.0)
+        kompisars_lön = st.number_input("Kompisars lön ($)", value=0.0)
+        dt_total_tid = st.number_input("DT total tid (sek)", value=0)
+        total_tid_sek = st.number_input("Total tid (sek)", value=0)
+        total_tid_h = st.number_input("Total tid (h)", value=0.0)
+        min_per_kille = st.number_input("Minuter per kille", value=0.0)
+
+        bekräfta = st.checkbox("Bekräfta att du vill lägga till raden")
+
+        submitted = st.form_submit_button("Lägg till scen")
+
+        if submitted and bekräfta:
+            rad = [
+                str(datum), typ, antal_vilodagar, nya_män, enkel_vaginal, enkel_anal, dp, dpp, dap, tpp, tpa, tap,
+                tid_enkel, tid_dubbel, tid_trippel, kompisar, pappans_vänner, nils_vänner, nils_familj,
+                dt_tid_per_man, antal_varv, älskar_med, sover_med, nils_sex, prenumeranter, intakt,
+                kvinnans_lön, mäns_lön, kompisars_lön, dt_total_tid, total_tid_sek, total_tid_h, min_per_kille, vila
+            ]
+            spara_data(rad)
+
+# Huvudprogram
 def main():
-    st.set_page_config(page_title="Malin-produktionsapp", layout="wide")
-    st.title("🎬 Malin-produktionsapp")
-    if not SHEET_URL:
-        st.error("SHEET_URL saknas i secrets")
-        return
-    sh = gc.open_by_url(SHEET_URL)
-    inst = läs_inställningar(sh)
-    inställningspanel(sh, inst)
-    df = init_sheet(sh)
-    df = säkerställ_kolumner(df)
-    df = konvertera_typer(df) if 'konvertera_typer' in globals() else df
-    df = scenformulär(df, inst, sh)
-    visa_data(df)
+    st.title("Malin-produktionsapp")
+    initiera_databas()
+
+    menyval = st.sidebar.selectbox("Meny", ["Inställningar", "Lägg till scen"])
+    if menyval == "Inställningar":
+        inställningar()
+    elif menyval == "Lägg till scen":
+        scenformulär()
 
 if __name__ == "__main__":
     main()
