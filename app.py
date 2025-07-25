@@ -2,12 +2,12 @@ import streamlit as st
 import pandas as pd
 import gspread
 from datetime import datetime, timedelta
-from google.oauth2 import service_account
-from konstanter import COLUMNS, säkerställ_kolumner
-from berakningar import process_lägg_till_rader, beräkna_tid_per_kille
+from google.oauth2.service_account import Credentials
+from konstanter import COLUMNS
+import random
 
-# Anslut till Google Sheets
-credentials = service_account.Credentials.from_service_account_info(
+# Autentisering och initiering av kalkylark
+credentials = Credentials.from_service_account_info(
     st.secrets["GOOGLE_CREDENTIALS"],
     scopes=["https://www.googleapis.com/auth/spreadsheets"],
 )
@@ -15,168 +15,148 @@ gc = gspread.authorize(credentials)
 SHEET_URL = st.secrets["GOOGLE_CREDENTIALS"]["SHEET_URL"]
 sh = gc.open_by_url(SHEET_URL)
 
-# Hämta eller skapa blad
-def get_worksheet(name, columns=None):
+# Säkerställ ark
+def säkerställ_ark():
     try:
-        return sh.worksheet(name)
-    except gspread.exceptions.WorksheetNotFound:
-        ws = sh.add_worksheet(title=name, rows="1000", cols=str(len(columns or [])))
-        if columns:
-            ws.append_row(columns)
-        return ws
+        sh.worksheet("Data")
+    except:
+        sh.add_worksheet(title="Data", rows="1000", cols="50")
+        sh.worksheet("Data").append_row(COLUMNS)
 
-# Säkerställ att 'Data' och 'Inställningar' finns
-data_ws = get_worksheet("Data", columns=COLUMNS)
-inst_ws = get_worksheet("Inställningar", columns=["Fält", "Värde"])
+    try:
+        ws = sh.worksheet("Inställningar")
+        if ws.row_count < 2 or ws.cell(1, 1).value != "Fält":
+            raise Exception("Felaktig struktur")
+    except:
+        sh.add_worksheet(title="Inställningar", rows="100", cols="2")
+        inst = sh.worksheet("Inställningar")
+        inst.update("A1:B8", [
+            ["Fält", "Värde"],
+            ["Startdatum", datetime.today().strftime("%Y-%m-%d")],
+            ["Födelsedatum", "2000-01-01"],
+            ["Kvinnans namn", "Anna"],
+            ["Kompisar", "20"],
+            ["Pappans vänner", "15"],
+            ["Nils vänner", "10"],
+            ["Nils familj", "5"],
+        ])
+
+säkerställ_ark()
 
 # Läs inställningar
 def läs_inställningar():
-    try:
-        df = pd.DataFrame(inst_ws.get_all_records())
-        return {rad["Fält"]: rad["Värde"] for _, rad in df.iterrows()}
-    except Exception as e:
-        st.error(f"Kunde inte läsa inställningar: {e}")
-        return {}
+    ws = sh.worksheet("Inställningar")
+    df = pd.DataFrame(ws.get_all_records())
+    return {rad["Fält"]: rad["Värde"] for _, rad in df.iterrows()}
 
-# Spara inställningar
-def spara_inställningar(data):
-    inst_ws.clear()
-    inst_ws.append_row(["Fält", "Värde"])
-    for key, val in data.items():
-        inst_ws.append_row([key, val])
+inst = läs_inställningar()
 
-# Läs in data
-def hämta_data():
-    rows = data_ws.get_all_values()
-    if not rows or rows[0] != COLUMNS:
-        data_ws.clear()
-        data_ws.append_row(COLUMNS)
-        return pd.DataFrame(columns=COLUMNS)
-    return pd.DataFrame(data_ws.get_all_records())
-
-# Spara ny rad
-def spara_data(rad):
-    df = hämta_data()
-    säkerställ_kolumner(df)
-    ny_df = pd.DataFrame([rad], columns=COLUMNS)
-    df = pd.concat([df, ny_df], ignore_index=True)
-    data_ws.clear()
-    data_ws.append_row(COLUMNS)
-    for _, row in df.iterrows():
-        data_ws.append_row([row.get(col, "") for col in COLUMNS])
-
-# Bestäm datum
-def bestäm_datum():
-    df = hämta_data()
-    inst = läs_inställningar()
+# Läs data
+def läs_data():
+    data_ws = sh.worksheet("Data")
+    df = pd.DataFrame(data_ws.get_all_records())
     if df.empty:
-        startdatum = inst.get("Startdatum", datetime.today().strftime("%Y-%m-%d"))
-        return pd.to_datetime(startdatum).date()
-    else:
-        senaste = pd.to_datetime(df["Datum"].iloc[-1]).date()
-        return senaste + timedelta(days=1)
+        return pd.DataFrame(columns=COLUMNS)
+    return df[COLUMNS] if all(col in df.columns for col in COLUMNS) else pd.DataFrame(columns=COLUMNS)
 
-# Inställningsformulär
-def inställningar():
-    st.subheader("Inställningar")
-    inst = läs_inställningar()
+# Nästa datum
+def nästa_datum(df):
+    if df.empty:
+        return datetime.strptime(inst["Startdatum"], "%Y-%m-%d")
+    senaste = max(pd.to_datetime(df["Datum"]))
+    return senaste + timedelta(days=1)
+
+# Slumpfunktion
+def slumpa_procentsats(maxvärde, minp, maxp):
+    procent = random.randint(minp, maxp)
+    return round((int(maxvärde) * procent) / 100)
+
+# App
+st.title("Malin-produktionsapp")
+val = st.radio("Välj läge", ["Lägg till scen", "Inställningar"])
+
+# Inställningar
+if val == "Inställningar":
     with st.form("instform"):
-        namn = st.text_input("Kvinnans namn", inst.get("Namn", ""))
-        födelse = st.date_input("Födelsedatum", value=pd.to_datetime(inst.get("Födelsedatum", "2000-01-01")), min_value=datetime(1970, 1, 1).date())
-        startdatum = st.date_input("Startdatum", value=pd.to_datetime(inst.get("Startdatum", datetime.today().strftime("%Y-%m-%d"))), min_value=datetime(1990, 1, 1).date())
-        kompisar = st.number_input("Max kompisar", 0, 999, int(inst.get("Kompisar", 0)))
-        pappa = st.number_input("Max pappans vänner", 0, 999, int(inst.get("Pappans vänner", 0)))
-        nils = st.number_input("Max Nils vänner", 0, 999, int(inst.get("Nils vänner", 0)))
-        familj = st.number_input("Max Nils familj", 0, 999, int(inst.get("Nils familj", 0)))
-        submit = st.form_submit_button("Spara")
-    if submit:
-        spara_inställningar({
-            "Namn": namn,
-            "Födelsedatum": str(födelse),
-            "Startdatum": str(startdatum),
-            "Kompisar": kompisar,
-            "Pappans vänner": pappa,
-            "Nils vänner": nils,
-            "Nils familj": familj,
-        })
-        st.success("Inställningar sparade.")
+        startdatum = st.date_input("Startdatum", value=datetime.today(), min_value=datetime(1990, 1, 1))
+        födelsedatum = st.date_input("Födelsedatum", value=datetime(2000, 1, 1), min_value=datetime(1970, 1, 1))
+        namn = st.text_input("Kvinnans namn", value=inst.get("Kvinnans namn", "Anna"))
+        kompisar = st.number_input("Kompisar", min_value=0, value=int(inst.get("Kompisar", 20)))
+        pappans = st.number_input("Pappans vänner", min_value=0, value=int(inst.get("Pappans vänner", 15)))
+        nils = st.number_input("Nils vänner", min_value=0, value=int(inst.get("Nils vänner", 10)))
+        familj = st.number_input("Nils familj", min_value=0, value=int(inst.get("Nils familj", 5)))
+        submit = st.form_submit_button("Spara inställningar")
 
-# Formulär för att lägga till scen
-def scenformulär():
-    st.subheader("Lägg till scen")
-    inst = läs_inställningar()
-    datum = bestäm_datum()
+        if submit:
+            nydata = [
+                ["Fält", "Värde"],
+                ["Startdatum", startdatum.strftime("%Y-%m-%d")],
+                ["Födelsedatum", födelsedatum.strftime("%Y-%m-%d")],
+                ["Kvinnans namn", namn],
+                ["Kompisar", str(kompisar)],
+                ["Pappans vänner", str(pappans)],
+                ["Nils vänner", str(nils)],
+                ["Nils familj", str(familj)],
+            ]
+            ws = sh.worksheet("Inställningar")
+            ws.clear()
+            ws.update("A1", nydata)
+            st.success("Inställningar sparade.")
 
-    with st.form("scenformulär", clear_on_submit=False):
-        st.write(f"Datum för denna rad: **{datum}**")
+# Lägg till scen
+if val == "Lägg till scen":
+    df = läs_data()
+    med st.form("scenformulär", clear_on_submit=False):
         typ = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"])
-        vilodagar = st.number_input("Antal vilodagar", 0, 30, 0)
-        nya_män = st.number_input("Nya män", 0, 99, 0)
-        enkel_vag = st.number_input("Enkel vaginal", 0, 99, 0)
-        enkel_anal = st.number_input("Enkel anal", 0, 99, 0)
-        dp = st.number_input("DP", 0, 99, 0)
-        dpp = st.number_input("DPP", 0, 99, 0)
-        dap = st.number_input("DAP", 0, 99, 0)
-        tpp = st.number_input("TPP", 0, 99, 0)
-        tpa = st.number_input("TPA", 0, 99, 0)
-        tap = st.number_input("TAP", 0, 99, 0)
-        tid_enkel = st.number_input("Tid enkel", 0, 999, 0)
-        tid_dubbel = st.number_input("Tid dubbel", 0, 999, 0)
-        tid_trippel = st.number_input("Tid trippel", 0, 999, 0)
-        vila = st.number_input("Vila", 0, 999, 0)
-        kompisar = st.number_input(f"Kompisar (max {inst.get('Kompisar', 0)})", 0, 999, 0)
-        pappans = st.number_input(f"Pappans vänner (max {inst.get('Pappans vänner', 0)})", 0, 999, 0)
-        nils_v = st.number_input(f"Nils vänner (max {inst.get('Nils vänner', 0)})", 0, 999, 0)
-        nils_f = st.number_input(f"Nils familj (max {inst.get('Nils familj', 0)})", 0, 999, 0)
-        dt_tid_per_man = st.number_input("DT tid per man", 0, 999, 0)
-        antal_varv = st.number_input("Antal varv", 0, 999, 0)
-        älskar = st.number_input("Älskar med", 0, 99, 0)
-        sover = st.number_input("Sover med", 0, 99, 0)
-        nils_sex = st.number_input("Nils sex", 0, 99, 0)
-        subs = st.number_input("Prenumeranter", 0, 999999, 0)
-        kvinna_lön = st.number_input("Kvinnans lön ($)", 0.0, 99999.0, 0.0)
-        män_lön = st.number_input("Mäns lön ($)", 0.0, 99999.0, 0.0)
-        kompis_lön = st.number_input("Kompisars lön ($)", 0.0, 99999.0, 0.0)
-        dt_tid_total = st.number_input("DT total tid (sek)", 0, 999999, 0)
-        total_tid_sek = st.number_input("Total tid (sek)", 0, 999999, 0)
-        total_tid_h = st.number_input("Total tid (h)", 0.0, 99.0, 0.0)
-        minuter_per_kille = st.number_input("Minuter per kille", 0.0, 9999.0, 0.0)
+        antal_vilodagar = st.number_input("Antal vilodagar", min_value=1, value=1 if typ == "Vila inspelningsplats" else 0)
+        bekräfta = st.checkbox("Bekräfta att du vill lägga till")
 
-        bekräfta = st.checkbox("Bekräfta att du vill lägga till raden")
-        submit = st.form_submit_button("Lägg till")
+        skicka = st.form_submit_button("Lägg till")
 
-    if submit:
-        if not bekräfta:
-            st.warning("Du måste bekräfta att du vill lägga till raden.")
-            return
+        if skicka and bekräfta and typ == "Vila inspelningsplats":
+            nya_rader = []
+            datum = nästa_datum(df)
 
-        if any([
-            kompisar > int(inst.get("Kompisar", 0)),
-            pappans > int(inst.get("Pappans vänner", 0)),
-            nils_v > int(inst.get("Nils vänner", 0)),
-            nils_f > int(inst.get("Nils familj", 0))
-        ]):
-            st.error("Ett eller flera värden överskrider maxgränserna enligt inställningarna.")
-            return
+            for i in range(int(antal_vilodagar)):
+                rad = {
+                    "Datum": (datum + timedelta(days=i)).strftime("%Y-%m-%d"),
+                    "Typ": typ,
+                    "Antal vilodagar": antal_vilodagar,
+                    "Nya män": 0,
+                    "Enkel vaginal": 0,
+                    "Enkel anal": 0,
+                    "DP": 0,
+                    "DPP": 0,
+                    "DAP": 0,
+                    "TPP": 0,
+                    "TPA": 0,
+                    "TAP": 0,
+                    "Tid enkel": 0,
+                    "Tid dubbel": 0,
+                    "Tid trippel": 0,
+                    "Vila": 0,
+                    "Kompisar": slumpa_procentsats(inst["Kompisar"], 10, 60),
+                    "Pappans vänner": slumpa_procentsats(inst["Pappans vänner"], 20, 70),
+                    "Nils vänner": slumpa_procentsats(inst["Nils vänner"], 10, 60),
+                    "Nils familj": slumpa_procentsats(inst["Nils familj"], 30, 80),
+                    "DT tid per man": 0,
+                    "Antal varv": 0,
+                    "Älskar med": 12,
+                    "Sover med": 1,
+                    "Nils sex": 0,
+                    "Prenumeranter": 0,
+                    "Intäkt ($)": 0,
+                    "Kvinnans lön ($)": 0,
+                    "Mäns lön ($)": 0,
+                    "Kompisars lön ($)": 0,
+                    "DT total tid (sek)": 0,
+                    "Total tid (sek)": 0,
+                    "Total tid (h)": 0,
+                    "Minuter per kille": 0,
+                }
+                nya_rader.append([rad[k] for k in COLUMNS])
 
-        rad = [
-            str(datum), typ, vilodagar, nya_män, enkel_vag, enkel_anal, dp, dpp, dap,
-            tpp, tpa, tap, tid_enkel, tid_dubbel, tid_trippel, vila, kompisar, pappans,
-            nils_v, nils_f, dt_tid_per_man, antal_varv, älskar, sover, nils_sex,
-            subs, 0.0, kvinna_lön, män_lön, kompis_lön, dt_tid_total, total_tid_sek,
-            total_tid_h, minuter_per_kille
-        ]
-        spara_data(rad)
-        st.success("Raden har lagts till.")
-
-# Huvudfunktion
-def main():
-    st.title("Malin-produktionsapp")
-    meny = st.sidebar.radio("Välj vy", ["Lägg till scen", "Inställningar"])
-    if meny == "Inställningar":
-        inställningar()
-    else:
-        scenformulär()
-
-if __name__ == "__main__":
-    main()
+            # Lägg till i databladet
+            ws = sh.worksheet("Data")
+            ws.append_rows(nya_rader, value_input_option="USER_ENTERED")
+            st.success(f"{len(nya_rader)} vilodag(ar) tillagda.")
