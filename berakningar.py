@@ -1,14 +1,9 @@
-import pandas as pd
+# berakningar.py (temporär dummy-version)
 
-def process_lägg_till_rader(df, inst, f):
-    ny_rad = {col: f.get(col, 0) for col in df.columns}
-    return pd.concat([df, pd.DataFrame([ny_rad])], ignore_index=True)
+def process_lägg_till_rader(f):
+    # Returnerar bara f utan förändring, tills vi bygger riktiga beräkningar
+    return [f]
 
-def konvertera_typer(df):
-    for col in df.columns:
-        if df[col].dtype == object:
-            try:
-                df[col] = pd.to_numeric(df[col])
-            except:
-                pass
-    return df
+def beräkna_tid_per_kille(rad):
+    # Returnerar ett dummyvärde tills vi bygger riktig funktion
+    return 0.0
