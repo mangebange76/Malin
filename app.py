@@ -9,7 +9,7 @@ from berakningar import process_lägg_till_rader, beräkna_tid_per_kille
 scope = ["https://www.googleapis.com/auth/spreadsheets"]
 credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
 gc = gspread.authorize(credentials)
-SHEET_URL = st.secrets["SHEET_URL"]
+SHEET_URL = st.secrets["GOOGLE_CREDENTIALS"]["SHEET_URL"]
 sh = gc.open_by_url(SHEET_URL)
 data_sheet = sh.worksheet("Data")
 settings_sheet = sh.worksheet("Inställningar")
