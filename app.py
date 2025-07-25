@@ -6,7 +6,6 @@ from datetime import datetime
 from konstanter import COLUMNS, säkerställ_kolumner
 from berakningar import process_lägg_till_rader, beräkna_tid_per_kille
 
-# Autentisera
 scope = ["https://www.googleapis.com/auth/spreadsheets"]
 credentials = Credentials.from_service_account_info(st.secrets["GOOGLE_CREDENTIALS"], scopes=scope)
 gc = gspread.authorize(credentials)
@@ -15,7 +14,6 @@ sh = gc.open_by_url(SHEET_URL)
 data_sheet = sh.worksheet("Data")
 settings_sheet = sh.worksheet("Inställningar")
 
-# Läs inställningar
 def läs_inställningar():
     try:
         df = pd.DataFrame(settings_sheet.get_all_records())
@@ -26,24 +24,20 @@ def läs_inställningar():
         st.error(f"Kunde inte läsa inställningar: {e}")
         return {}
 
-# Spara inställningar
 def spara_inställningar(inst):
     settings_sheet.clear()
     settings_sheet.append_row(list(inst.keys()))
     settings_sheet.append_row(list(inst.values()))
 
-# Skapa tom databas om den saknas
 def säkerställ_data():
     existerande = data_sheet.get_all_values()
     if not existerande:
         data_sheet.append_row(COLUMNS)
 
-# Rensa databasen
 def rensa_databas():
     data_sheet.clear()
     data_sheet.append_row(COLUMNS)
 
-# Hämta senaste datum
 def hämta_nästa_datum():
     values = data_sheet.get_all_values()
     if len(values) <= 1:
@@ -53,7 +47,6 @@ def hämta_nästa_datum():
     nästa = datetime.strptime(senaste, "%Y-%m-%d") + pd.Timedelta(days=1)
     return nästa.strftime("%Y-%m-%d")
 
-# Huvudvyn
 def huvudvy():
     st.title("Lägg till scen")
     inst = läs_inställningar()
@@ -122,11 +115,10 @@ def huvudvy():
             data_sheet.append_row(rad)
             st.success("Rad sparad!")
 
-# Inställningsvyn
 def inställningsvy():
     st.title("Inställningar")
     befintliga = läs_inställningar()
-    med st.form("instform"):
+    with st.form("instform"):
         startdatum = st.date_input("Startdatum", value=pd.to_datetime(befintliga.get("Startdatum", datetime.now())))
         namn = st.text_input("Kvinnans namn", value=befintliga.get("Namn", ""))
         födelsedatum = st.date_input("Födelsedatum", value=pd.to_datetime(befintliga.get("Födelsedatum", datetime(2000, 1, 1))))
@@ -155,7 +147,6 @@ def inställningsvy():
             rensa_databas()
             st.warning("Databasen är rensad!")
 
-# Huvudfunktion
 def main():
     säkerställ_data()
     val = st.sidebar.selectbox("Välj läge", ["Lägg till scen", "Inställningar"])
