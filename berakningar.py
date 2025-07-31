@@ -1,85 +1,32 @@
-def beräkna_radvärden(data):
-    c = data["Män"]
-    d = data["Fitta"]
-    e = data["Rumpa"]
-    f = data["DP"]
-    g = data["DPP"]
-    h = data["DAP"]
-    i = data["TAP"]
-    j = data["Tid S"]
-    k = data["Tid D"]
-    l = data["Vila"]
-    v = data["Pappans vänner"]
-    w = data["Grannar"]
-    x = data["Nils vänner"]
-    y = data["Nils familj"]
-    s = data["Älskar"]
-    t = data["Sover med"]
-    ab = data["Nils"]
+def beräkna_radvärden(befintliga_rader, f):
+    index = len(befintliga_rader)
+    veckodagar = ["Lördag", "Söndag", "Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag"]
+    veckodag = veckodagar[index % 7]
+    scen = index
 
-    # Summeringar
-    m = (c + d + e) * j
-    n = (f + g + h) * k
-    o = i * k
-    p = (c + d + e + f + g + h + i) * l
-    q = (m + n + o + p) / 3600  # timmar
-    r = 7 + 3 + q + 1           # klockan
-    u = v + w + x + y
-    z = u + c
+    män = f["Män"]
+    fitta = f["Fitta"]
+    rumpa = f["Rumpa"]
+    dp = f["DP"]
+    dpp = f["DPP"]
+    dap = f["DAP"]
+    tap = f["TAP"]
+    tid_s = f["Tid S"]
+    tid_d = f["Tid D"]
+    vila = f["Vila"]
 
-    try:
-        ac = 10800 / c if c > 0 else 0  # Hångel
-    except:
-        ac = 0
+    summa_s = (män + fitta + rumpa) * tid_s
+    summa_d = (dp + dpp + dap) * tid_d
+    summa_tp = tap * tid_d
+    summa_vila = (män + fitta + rumpa + dp + dpp + dap + tap) * vila
+    summa_tid = (summa_s + summa_d + summa_tp + summa_vila) / 3600
+    klockan = 7 + 3 + summa_tid + 1
 
-    try:
-        ad = (n * 0.65) / z if z > 0 else 0  # Suger
-    except:
-        ad = 0
-
-    an = 1  # Prenumeranter per manuell enhet, justerbar
-    ae = (c + d + e + f + g + h + i) * an
-    af = 15
-    ag = ae * af
-    ah = c * 120
-    aj = max(150, min(800, ae * 0.10))  # Malins lön
-    ai = (aj + 120) * u
-    ak = ag * 0.20
-    al = ag - ah - ai - aj - ak
-    am = u
-
-    # Hårdhetspoäng
-    hårdhet = 0
-    if f > 0:
-        hårdhet += 2
-    if g > 0:
-        hårdhet += 3
-    if h > 0:
-        hårdhet += 5
-    if i > 0:
-        hårdhet += 7
-
-    return {
-        **data,
-        "Summa S": m,
-        "Summa D": n,
-        "Summa TP": o,
-        "Summa Vila": p,
-        "Summa tid": q,
-        "Klockan": r,
-        "Känner": u,
-        "Totalt Män": z,
-        "Tid kille": ((m / z) + (n / z) + (o / z) + ad) / 60 if z > 0 else 0,
-        "Hångel": ac,
-        "Suger": ad,
-        "Prenumeranter": ae,
-        "Avgift": af,
-        "Intäkter": ag,
-        "Intäkt män": ah,
-        "Intäkt Känner": ai,
-        "Lön Malin": aj,
-        "intäkt Företaget": ak,
-        "Vinst": al,
-        "Känner Sammanlagt": am,
-        "Hårdhet": hårdhet
-    }
+    return [
+        veckodag, scen, män, fitta, rumpa, dp, dpp, dap, tap,
+        tid_s, tid_d, vila, summa_s, summa_d, summa_tp, summa_vila,
+        summa_tid, klockan, f["Älskar"], f["Sover med"],
+        0,  # Känner
+        f["Pappans vänner"], f["Grannar"], f["Nils vänner"], f["Nils familj"],
+        0, 0, f["Nils"], 10800 / max(män, 1), 0, 0, 15, 0, 0, 0, 150, 0, 0, 0
+    ]
