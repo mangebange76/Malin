@@ -3,8 +3,9 @@ import pandas as pd
 import gspread
 from datetime import datetime, timedelta
 from oauth2client.service_account import ServiceAccountCredentials
+from berakningar import beräkna_radvärden
 
-# --- Konstanter ---
+# --- Kolumnrubriker ---
 KOLUMN_RUBRIKER = [
     "Datum", "Veckodag", "Scen", "Män", "Fitta", "Rumpa", "DP", "DPP", "DAP", "TAP",
     "Tid S", "Tid D", "Vila", "Summa S", "Summa D", "Summa TP", "Summa Vila", 
@@ -15,7 +16,7 @@ KOLUMN_RUBRIKER = [
     "Hårdhet"
 ]
 
-# --- Google Sheets init ---
+# --- Google Sheets Setup ---
 scope = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/spreadsheets",
@@ -25,7 +26,6 @@ credentials = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["GOOGL
 client = gspread.authorize(credentials)
 sheet = client.open_by_url(st.secrets["SHEET_URL"]).sheet1
 
-# --- Funktioner ---
 def läs_data():
     rows = sheet.get_all_records()
     return pd.DataFrame(rows)
@@ -36,19 +36,20 @@ def säkerställ_kolumner():
         sheet.clear()
         sheet.append_row(KOLUMN_RUBRIKER)
 
-# --- Streamlit UI ---
+# --- App Start ---
 st.title("Malin-produktionsapp")
 
-# Inställningar i sidopanel
+# Sidopanel: inställningar
 st.sidebar.header("Inställningar")
 startdatum = st.sidebar.date_input("Startdatum", value=datetime.today())
 födelsedatum = st.sidebar.date_input("Kvinnans födelsedatum", value=datetime(2000, 1, 1))
 kvinnans_namn = st.sidebar.text_input("Kvinnans namn", value="Malin")
 
-# Läs och förbered
+# Läs existerande data
 säkerställ_kolumner()
 df = läs_data()
 
+# Nästa radens metadata
 nästa_datum = startdatum + timedelta(days=len(df))
 veckodagar = ["lördag", "söndag", "måndag", "tisdag", "onsdag", "torsdag", "fredag"]
 nästa_veckodag = veckodagar[len(df) % 7]
@@ -80,12 +81,20 @@ with st.form("scenformulär"):
 
     spara = st.form_submit_button("Bekräfta och spara")
 
-# --- Spara till Google Sheet ---
+# Om bekräfta
 if spara:
-    ny_rad = [
-        nästa_datum.strftime("%Y-%m-%d"), nästa_veckodag, nästa_scen, c, d, e, f, g, h, i,
-        j, k, l, "", "", "", "", "", "", s, t, "", v, w, x, y, "", "", ab, "", "", an, af,
-        "", "", "", "", "", "", "", "", ""
-    ]
+    fält = {
+        "Män": c, "Fitta": d, "Rumpa": e, "DP": f, "DPP": g, "DAP": h, "TAP": i,
+        "Tid S": j, "Tid D": k, "Vila": l, "Älskar": s, "Sover med": t,
+        "Pappans vänner": v, "Grannar": w, "Nils vänner": x, "Nils familj": y,
+        "Nils": ab, "Prenumeranter": an, "Avgift": af
+    }
+    ny_rad = beräkna_radvärden(
+        fält, 
+        datum=nästa_datum.strftime("%Y-%m-%d"), 
+        veckodag=nästa_veckodag, 
+        scenummer=nästa_scen, 
+        ålder=ålder
+    )
     sheet.append_row(ny_rad)
     st.success("✅ Raden har sparats!")
