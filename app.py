@@ -58,7 +58,7 @@ nästa_scen = len(df) + 1
 
 # Formulär
 with st.form("scenformulär"):
-    st.subheader(f"Ny rad för {kvinnans_namn} ({ålder} år) – {nästa_datum} ({nästa_veckodag})")
+    st.subheader(f"Ny rad för {kvinnans_namn} ({ålder} år) – {nästa_datum.strftime('%Y-%m-%d')} ({nästa_veckodag})")
     c = st.number_input("Män", min_value=0, step=1)
     d = st.number_input("Fitta", min_value=0, step=1)
     e = st.number_input("Rumpa", min_value=0, step=1)
