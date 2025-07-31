@@ -1,105 +1,73 @@
 import streamlit as st
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-import pandas as pd
-from datetime import datetime, timedelta
+from google.oauth2.service_account import Credentials
 from berakningar import beräkna_radvärden
 
-# Autentisering
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials = ServiceAccountCredentials.from_json_keyfile_dict(
-    dict(st.secrets["GOOGLE_CREDENTIALS"]), scope)
+st.set_page_config(page_title="Malin", layout="centered")
+
+# === Steg 1: Autentisera mot Google Sheets ===
+scope = ["https://www.googleapis.com/auth/spreadsheets"]
+credentials = Credentials.from_service_account_info(
+    st.secrets["GOOGLE_CREDENTIALS"], scopes=scope
+)
 client = gspread.authorize(credentials)
+sheet = client.open_by_url(st.secrets["SHEET_URL"]).sheet1
 
-# Öppna ark
-sheet_url = st.secrets["SHEET_URL"]
-sheet = client.open_by_url(sheet_url).sheet1
-
-# Kolumnrubriker enligt struktur
-KOLUMNER = [
+# === Steg 2: Säkerställ att kolumnerna finns ===
+kolumnnamn = [
     "Veckodag", "Scen", "Män", "Fitta", "Rumpa", "DP", "DPP", "DAP", "TAP",
-    "Tid S", "Tid D", "Vila", "Summa S", "Summa D", "Summa TP", "Summa Vila", "Summa tid",
-    "Klockan", "Älskar", "Sover med", "Känner", "Pappans vänner", "Grannar",
-    "Nils vänner", "Nils familj", "Totalt Män", "Tid kille", "Nils",
+    "Tid S", "Tid D", "Vila", "Summa S", "Summa D", "Summa TP", "Summa Vila",
+    "Summa tid", "Klockan", "Älskar", "Sover med", "Känner", "Pappans vänner",
+    "Grannar", "Nils vänner", "Nils familj", "Totalt Män", "Tid kille", "Nils",
     "Hångel", "Suger", "Prenumeranter", "Avgift", "Intäkter", "Intäkt män",
-    "Intäkt Känner", "Lön Malin", "Intäkt Företaget", "Vinst", "Känner Sammanlagt", "Hårdhet"
+    "Intäkt Känner", "Lön Malin", "Intäkt Företaget", "Vinst", "Känner Sammanlagt",
+    "Hårdhet"
 ]
+if sheet.row_count == 0 or sheet.row_values(1) != kolumnnamn:
+    sheet.clear()
+    sheet.insert_row(kolumnnamn, index=1)
 
-# Säkerställ att arket har rätt kolumner
-def säkerställ_kolumner():
-    befintliga = sheet.row_values(1)
-    if befintliga != KOLUMNER:
-        sheet.resize(rows=1)
-        sheet.insert_row(KOLUMNER, 1)
+# === Steg 3: Formulär för inmatning ===
+st.header("Lägg till ny rad")
 
-säkerställ_kolumner()
+with st.form("data_form"):
+    män = st.number_input("Antal män", min_value=0)
+    fitta = st.number_input("Fitta", min_value=0)
+    rumpa = st.number_input("Rumpa", min_value=0)
+    dp = st.number_input("DP", min_value=0)
+    dpp = st.number_input("DPP", min_value=0)
+    dap = st.number_input("DAP", min_value=0)
+    tap = st.number_input("TAP", min_value=0)
+    tid_s = st.number_input("Tid S (sek)", value=60, min_value=0)
+    tid_d = st.number_input("Tid D (sek)", value=60, min_value=0)
+    vila = st.number_input("Vila (sek)", value=7, min_value=0)
+    älskar = st.number_input("Älskar", min_value=0)
+    sover_med = st.number_input("Sover med", min_value=0)
+    nils = st.number_input("Nils", min_value=0)
+    pappans_vänner = st.number_input("Pappans vänner", min_value=0)
+    grannar = st.number_input("Grannar", min_value=0)
+    nils_vänner = st.number_input("Nils vänner", min_value=0)
+    nils_familj = st.number_input("Nils familj", min_value=0)
 
-# Funktion för att hämta nästa veckodag
-def nästa_veckodag(föregående):
-    dagar = ["Lördag", "Söndag", "Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag"]
-    idx = (dagar.index(föregående) + 1) % 7
-    return dagar[idx]
+    submitted = st.form_submit_button("Spara")
 
-# Hämta senaste rad (om någon finns)
-data = sheet.get_all_records()
-senaste_rad = data[-1] if data else {}
-senaste_veckodag = senaste_rad.get("Veckodag", "Lördag")
-senaste_scen = int(senaste_rad.get("Scen", 0)) if senaste_rad else 0
+# === Steg 4: Spara rad ===
+if submitted:
+    data = {
+        "Män": män, "Fitta": fitta, "Rumpa": rumpa,
+        "DP": dp, "DPP": dpp, "DAP": dap, "TAP": tap,
+        "Tid S": tid_s, "Tid D": tid_d, "Vila": vila,
+        "Älskar": älskar, "Sover med": sover_med,
+        "Nils": nils,
+        "Pappans vänner": pappans_vänner,
+        "Grannar": grannar,
+        "Nils vänner": nils_vänner,
+        "Nils familj": nils_familj,
+    }
 
-st.title("Malin-produktionsapp")
+    # Lägg till automatiskt veckodag, scen etc
+    befintliga_rader = sheet.get_all_values()
+    ny_rad = beräkna_radvärden(befintliga_rader, data)
 
-with st.form("ny_rad"):
-    st.subheader("Lägg till ny händelse")
-
-    män = st.number_input("Män", min_value=0, step=1)
-    fitta = st.number_input("Fitta", min_value=0, step=1)
-    rumpa = st.number_input("Rumpa", min_value=0, step=1)
-    dp = st.number_input("DP", min_value=0, step=1)
-    dpp = st.number_input("DPP", min_value=0, step=1)
-    dap = st.number_input("DAP", min_value=0, step=1)
-    tap = st.number_input("TAP", min_value=0, step=1)
-    tid_s = st.number_input("Tid S (sek)", value=60, step=1)
-    tid_d = st.number_input("Tid D (sek)", value=60, step=1)
-    vila = st.number_input("Vila (sek)", value=7, step=1)
-    älskar = st.number_input("Älskar", min_value=0, step=1)
-    sover_med = st.number_input("Sover med", min_value=0, step=1)
-    pappans_vänner = st.number_input("Pappans vänner", min_value=0, step=1)
-    grannar = st.number_input("Grannar", min_value=0, step=1)
-    nils_vänner = st.number_input("Nils vänner", min_value=0, step=1)
-    nils_familj = st.number_input("Nils familj", min_value=0, step=1)
-    nils = st.number_input("Nils (antal gånger)", min_value=0, step=1)
-
-    submitted = st.form_submit_button("Spara händelse")
-
-    if submitted:
-        # Grunddata
-        ny_rad = {
-            "Veckodag": nästa_veckodag(senaste_veckodag),
-            "Scen": senaste_scen + 1,
-            "Män": män,
-            "Fitta": fitta,
-            "Rumpa": rumpa,
-            "DP": dp,
-            "DPP": dpp,
-            "DAP": dap,
-            "TAP": tap,
-            "Tid S": tid_s,
-            "Tid D": tid_d,
-            "Vila": vila,
-            "Älskar": älskar,
-            "Sover med": sover_med,
-            "Pappans vänner": pappans_vänner,
-            "Grannar": grannar,
-            "Nils vänner": nils_vänner,
-            "Nils familj": nils_familj,
-            "Nils": nils
-        }
-
-        # Beräkna övriga kolumner
-        beräknad_rad = beräkna_radvärden(ny_rad)
-
-        # Lägg till som rad i samma ordning som KOLUMNER
-        rad_lista = [beräknad_rad.get(k, "") for k in KOLUMNER]
-        sheet.append_row(rad_lista)
-
-        st.success("Händelse tillagd!")
+    sheet.append_row(ny_rad)
+    st.success("Rad tillagd!")
