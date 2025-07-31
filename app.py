@@ -22,7 +22,7 @@ scope = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
-credentials = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["GOOGLE_CREDENTIALS"], scope)
+credentials = ServiceAccountCredentials.from_json_keyfile_dict(dict(st.secrets["GOOGLE_CREDENTIALS"]), scope)
 client = gspread.authorize(credentials)
 sheet = client.open_by_url(st.secrets["SHEET_URL"]).sheet1
 
