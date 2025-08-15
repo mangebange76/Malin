@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
@@ -17,6 +18,7 @@ st.title("Malin-produktionsapp")
 
 # =============================== Hjälpfunktioner ================================
 def _retry_call(fn, *args, **kwargs):
+    """Exponential backoff för 429/RESOURCE_EXHAUSTED."""
     delay = 0.5
     for _ in range(6):
         try:
@@ -48,6 +50,20 @@ def _ms_str_from_seconds(sec: int) -> str:
     s = sec % 60
     return f"{int(m)}m {int(s)}s"
 
+def _parse_iso_date(s: str):
+    s = (s or "").strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s).date()
+    except Exception:
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except Exception:
+                continue
+    return None
+
 # =============================== Google Sheets =================================
 @st.cache_resource(show_spinner=False)
 def get_client():
@@ -59,6 +75,7 @@ client = get_client()
 
 @st.cache_resource(show_spinner=False)
 def resolve_sheet():
+    """Öppna arket via ID eller URL (ingen Drive-API krävs)."""
     sid = st.secrets.get("GOOGLE_SHEET_ID", "").strip() if "GOOGLE_SHEET_ID" in st.secrets else ""
     if sid:
         st.caption("🆔 Öppnar via GOOGLE_SHEET_ID…")
@@ -87,6 +104,7 @@ sheet = resolve_sheet()
 
 # =========================== Header-säkring / migration =========================
 DEFAULT_COLUMNS = [
+    "Datum",               # NY kolumn: används för 30-dagars
     "Veckodag","Scen","Män","Fitta","Rumpa","DP","DPP","DAP","TAP",
     "Tid S","Tid D","Vila","Summa S","Summa D","Summa TP","Summa Vila",
     "Tid Älskar (sek)","Tid Älskar",
@@ -95,13 +113,14 @@ DEFAULT_COLUMNS = [
     "Tid per kille (sek)","Tid per kille",
     "Klockan","Älskar","Sover med","Känner","Pappans vänner","Grannar",
     "Nils vänner","Nils familj","Totalt Män","Tid kille","Nils",
-    # Hångel: ny sparning i sek/kille och m:s/kille (båda för statistik)
+    # Hångel (sparas separat, påverkar ej Summa tid)
     "Hångel (sek/kille)","Hångel (m:s/kille)",
     # Suger (total) + per kille
-    "Hångel",  # legacy fält om du redan har data – fylls också med sek/kille
     "Suger","Suger per kille (sek)",
-    "Prenumeranter","Avgift","Intäkter","Intäkt män",
-    "Intäkt Känner","Lön Malin","Intäkt Företaget","Vinst","Känner Sammanlagt","Hårdhet"
+    # Prenumeranter & ekonomi (Avgift är per rad — retroaktivt oberoende)
+    "Hårdhet","Prenumeranter","Avgift","Intäkter",
+    "Kostnad män","Intäkt Känner","Lön Malin","Intäkt Företaget","Vinst",
+    "Känner Sammanlagt"
 ]
 
 def ensure_header_and_migrate():
@@ -115,7 +134,7 @@ def ensure_header_and_migrate():
     missing = [c for c in DEFAULT_COLUMNS if c not in header]
     if missing:
         new_header = header + missing
-        end_col_letter = chr(64 + min(len(new_header), 26)) if len(new_header) <= 26 else "ZZ"
+        end_col_letter = "ZZ" if len(new_header) > 26 else chr(64 + len(new_header))
         _retry_call(sheet.update, f"A1:{end_col_letter}1", [new_header])
         st.caption(f"🔧 Migrerade header, lade till: {', '.join(missing)}")
         st.session_state["COLUMNS"] = new_header
@@ -140,6 +159,7 @@ def _init_cfg_defaults():
     st.session_state["CFG"].setdefault("MAX_GRANNAR", 10)
     st.session_state["CFG"].setdefault("MAX_NILS_VANNER", 10)
     st.session_state["CFG"].setdefault("MAX_NILS_FAMILJ", 10)
+    st.session_state["CFG"].setdefault("avgift_usd", 30.0)  # NY: pris per prenumerant (gäller nya rader)
 
 _init_cfg_defaults()
 CFG = st.session_state["CFG"]
@@ -158,6 +178,9 @@ max_g  = st.sidebar.number_input("Max Grannar",        min_value=0, step=1, valu
 max_nv = st.sidebar.number_input("Max Nils vänner",    min_value=0, step=1, value=int(CFG["MAX_NILS_VANNER"]))
 max_nf = st.sidebar.number_input("Max Nils familj",    min_value=0, step=1, value=int(CFG["MAX_NILS_FAMILJ"]))
 
+st.sidebar.subheader("Pris per prenumerant (gäller NÄSTA rad)")
+avgift_input = st.sidebar.number_input("Avgift (USD, per ny rad)", min_value=0.0, step=1.0, value=float(CFG["avgift_usd"]))
+
 if st.sidebar.button("💾 Spara inställningar"):
     CFG.update({
         "startdatum": startdatum,
@@ -167,6 +190,7 @@ if st.sidebar.button("💾 Spara inställningar"):
         "MAX_GRANNAR": int(max_g),
         "MAX_NILS_VANNER": int(max_nv),
         "MAX_NILS_FAMILJ": int(max_nf),
+        "avgift_usd": float(avgift_input),
     })
     st.session_state.update(
         MAX_PAPPAN=int(max_p),
@@ -182,12 +206,34 @@ st.session_state.setdefault("MAX_GRANNAR",     int(CFG["MAX_GRANNAR"]))
 st.session_state.setdefault("MAX_NILS_VANNER", int(CFG["MAX_NILS_VANNER"]))
 st.session_state.setdefault("MAX_NILS_FAMILJ", int(CFG["MAX_NILS_FAMILJ"]))
 
+# ===== 30 dagar (rullande) i sidopanelen =====
+st.sidebar.subheader("📆 30 dagar (rullande)")
+try:
+    all_rows = _retry_call(sheet.get_all_records)
+    cutoff = date.today() - timedelta(days=30)
+    active_subs = 0.0
+    active_rev = 0.0
+    for r in all_rows:
+        d = _parse_iso_date(r.get("Datum", ""))
+        if not d or d < cutoff:
+            continue
+        subs = float(r.get("Prenumeranter", 0) or 0)
+        fee  = float(r.get("Avgift", 30) or 0)
+        # använd radens sparade avgift (ingen retroaktiv ändring)
+        active_subs += subs
+        active_rev  += subs * fee
+    st.sidebar.metric("Aktiva prenumeranter", int(active_subs))
+    st.sidebar.metric("Intäkter (30 dagar)", f"${active_rev:,.2f}")
+except Exception as e:
+    st.sidebar.warning(f"Kunde inte räkna 30-dagars: {e}")
+
 # ============================== Radräkning / Scen ==============================
 def _init_row_count():
     if "ROW_COUNT" not in st.session_state:
         try:
-            vals = _retry_call(sheet.col_values, 1)
-            st.session_state.ROW_COUNT = max(0, len(vals) - 1) if (vals and vals[0] == "Veckodag") else len(vals)
+            vals = _retry_call(sheet.col_values, 1)  # kolumn A = Datum
+            # räkna datarader = total rader - header
+            st.session_state.ROW_COUNT = max(0, len(vals) - 1) if (vals and vals[0] == "Datum") else len(vals)
         except Exception:
             st.session_state.ROW_COUNT = 0
 _init_row_count()
@@ -250,7 +296,8 @@ grund_preview = {
     "Tid S": tid_s, "Tid D": tid_d, "Vila": vila,
     "Älskar": älskar, "Sover med": sover_med,
     "Pappans vänner": pappans_vänner, "Grannar": grannar,
-    "Nils vänner": nils_vänner, "Nils familj": nils_familj, "Nils": nils
+    "Nils vänner": nils_vänner, "Nils familj": nils_familj, "Nils": nils,
+    "Avgift": float(CFG["avgift_usd"]),  # NY: pris per prenumerant för NÄSTA rad
 }
 
 def _calc_preview(grund):
@@ -268,6 +315,13 @@ preview = _calc_preview(grund_preview)
 
 st.markdown("---")
 st.subheader("🔎 Förhandsvisning (innan spar)")
+
+def _usd(x):
+    try:
+        return f"${float(x):,.2f}"
+    except Exception:
+        return "-"
+
 col1, col2 = st.columns(2)
 with col1:
     st.metric("Datum / veckodag", f"{rad_datum} / {veckodag}")
@@ -279,7 +333,24 @@ with col2:
     st.metric("Tid per kille", preview.get("Tid per kille", "-"))  # min:sek
     st.metric("Tid per kille (sek)", int(preview.get("Tid per kille (sek)", 0)))
     st.metric("Suger per kille (sek)", int(preview.get("Suger per kille (sek)", 0)))
+
 st.caption(f"Klockan blir: {preview.get('Klockan','-')} (start {starttid})")
+
+# ===== Prenumeranter & Ekonomi (live) =====
+st.markdown("#### 📈 Prenumeranter & Ekonomi (live)")
+ec1, ec2, ec3, ec4 = st.columns(4)
+with ec1:
+    st.metric("Prenumeranter (rad)", int(preview.get("Prenumeranter", 0)))
+    st.metric("Avgift (rad)", _usd(preview.get("Avgift", CFG['avgift_usd'])))
+with ec2:
+    st.metric("Intäkter (rad)", _usd(preview.get("Intäkter", 0)))
+    st.metric("Lön Malin", _usd(preview.get("Lön Malin", 0)))
+with ec3:
+    st.metric("Kostnad män", _usd(preview.get("Intäkt män", 0)))  # label bytt
+    st.metric("Intäkt Känner", _usd(preview.get("Intäkt Känner", 0)))
+with ec4:
+    st.metric("Intäkt Företaget", _usd(preview.get("Intäkt Företaget", 0)))
+    st.metric("Vinst (rad)", _usd(preview.get("Vinst", 0)))
 
 # Bonus-info i sidopanelen
 try:
@@ -298,12 +369,20 @@ def _store_pending(grund, scen, rad_datum, veckodag, over_max):
         "over_max": over_max
     }
 
-def _parse_date(d):
+def _parse_date_for_save(d):
     return d if isinstance(d, date) else datetime.strptime(d, "%Y-%m-%d").date()
 
 def _save_row(grund, rad_datum, veckodag):
     try:
+        # Se till att avgift för denna rad (ny) följer sidopanelens värde just nu:
+        grund = dict(grund)
+        grund["Avgift"] = float(CFG["avgift_usd"])
         ber = calc_row_values(grund, rad_datum, födelsedatum, starttid)
+        # Lägg in Datum i resultat före vi bygger raden
+        ber["Datum"] = rad_datum.isoformat()
+        # Byt label "Intäkt män" -> "Kostnad män" i arket (vi skriver i "Kostnad män"-kolumnen)
+        if "Intäkt män" in ber:
+            ber["Kostnad män"] = ber["Intäkt män"]
     except Exception as e:
         st.error(f"Beräkningen misslyckades vid sparning: {e}")
         return
@@ -324,7 +403,7 @@ def _apply_auto_max_and_save(pending):
     st.session_state["CFG"] = cfg
 
     grund = pending["grund"]
-    rad_datum = _parse_date(pending["rad_datum"])
+    rad_datum = _parse_date_for_save(pending["rad_datum"])
     veckodag = pending["veckodag"]
     _save_row(grund, rad_datum, veckodag)
 
