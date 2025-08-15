@@ -105,7 +105,7 @@ sheet = resolve_sheet()
 # =========================== Header-säkring / migration =========================
 DEFAULT_COLUMNS = [
     "Datum",               # används för 30-dagars
-    "Typ",                 # NY: t.ex. "Vila på jobbet" eller tomt
+    "Typ",                 # "Vila på jobbet", "Vila i hemmet" eller tomt
     "Veckodag","Scen","Män","Fitta","Rumpa","DP","DPP","DAP","TAP",
     "Tid S","Tid D","Vila","Summa S","Summa D","Summa TP","Summa Vila",
     "Tid Älskar (sek)","Tid Älskar",
@@ -114,11 +114,8 @@ DEFAULT_COLUMNS = [
     "Tid per kille (sek)","Tid per kille",
     "Klockan","Älskar","Sover med","Känner","Pappans vänner","Grannar",
     "Nils vänner","Nils familj","Totalt Män","Tid kille","Nils",
-    # Hångel (sparas separat, påverkar ej Summa tid)
     "Hångel (sek/kille)","Hångel (m:s/kille)",
-    # Suger (total) + per kille
     "Suger","Suger per kille (sek)",
-    # Prenumeranter & ekonomi (Avgift är per rad)
     "Hårdhet","Prenumeranter","Avgift","Intäkter",
     "Kostnad män","Intäkt Känner","Lön Malin","Intäkt Företaget","Vinst",
     "Känner Sammanlagt"
@@ -160,7 +157,7 @@ def _init_cfg_defaults():
     st.session_state["CFG"].setdefault("MAX_GRANNAR", 10)
     st.session_state["CFG"].setdefault("MAX_NILS_VANNER", 10)
     st.session_state["CFG"].setdefault("MAX_NILS_FAMILJ", 10)
-    st.session_state["CFG"].setdefault("avgift_usd", 30.0)  # pris per pren för nya rader
+    st.session_state["CFG"].setdefault("avgift_usd", 30.0)
 
 _init_cfg_defaults()
 CFG = st.session_state["CFG"]
@@ -215,9 +212,9 @@ try:
     active_subs = 0.0
     active_rev = 0.0
     for r in all_rows:
-        # Exkludera 'Vila på jobbet'
-        if (r.get("Typ") or "").strip() == "Vila på jobbet":
-            continue
+        typ = (r.get("Typ") or "").strip()
+        if typ in ("Vila på jobbet", "Vila i hemmet"):
+            continue  # exkludera helt
         d = _parse_iso_date(r.get("Datum", ""))
         if not d or d < cutoff:
             continue
@@ -300,7 +297,7 @@ grund_preview = {
     "Älskar": älskar, "Sover med": sover_med,
     "Pappans vänner": pappans_vänner, "Grannar": grannar,
     "Nils vänner": nils_vänner, "Nils familj": nils_familj, "Nils": nils,
-    "Avgift": float(CFG["avgift_usd"]),  # pris per prenumerant för NÄSTA rad
+    "Avgift": float(CFG["avgift_usd"]),
 }
 
 def _calc_preview(grund):
@@ -333,7 +330,7 @@ with col1:
     st.metric("Hångel (m:s/kille)", preview.get("Hångel (m:s/kille)", "-"))
 with col2:
     st.metric("Totalt män (raden)", int(preview.get("Totalt Män", 0)))
-    st.metric("Tid per kille", preview.get("Tid per kille", "-"))  # min:sek
+    st.metric("Tid per kille", preview.get("Tid per kille", "-"))
     st.metric("Tid per kille (sek)", int(preview.get("Tid per kille (sek)", 0)))
     st.metric("Suger per kille (sek)", int(preview.get("Suger per kille (sek)", 0)))
 
@@ -349,7 +346,7 @@ with ec2:
     st.metric("Intäkter (rad)", _usd(preview.get("Intäkter", 0)))
     st.metric("Lön Malin", _usd(preview.get("Lön Malin", 0)))
 with ec3:
-    st.metric("Kostnad män", _usd(preview.get("Intäkt män", 0)))  # label bytt
+    st.metric("Kostnad män", _usd(preview.get("Intäkt män", 0)))
     st.metric("Intäkt Känner", _usd(preview.get("Intäkt Känner", 0)))
 with ec4:
     st.metric("Intäkt Företaget", _usd(preview.get("Intäkt Företaget", 0)))
@@ -370,15 +367,10 @@ def _parse_date_for_save(d):
 
 def _save_row(grund, rad_datum, veckodag):
     try:
-        # Respektera ev. redan satt Typ/Avgift i grund (t.ex. vid "Vila på jobbet")
         base = dict(grund)
         base.setdefault("Avgift", float(CFG["avgift_usd"]))
         ber = calc_row_values(base, rad_datum, födelsedatum, starttid)
-
-        # Lägg in Datum i resultat före vi bygger raden
         ber["Datum"] = rad_datum.isoformat()
-
-        # Mappa "Intäkt män" → "Kostnad män" i arket
         if "Intäkt män" in ber:
             ber["Kostnad män"] = ber["Intäkt män"]
     except Exception as e:
@@ -445,9 +437,9 @@ if "PENDING_SAVE" in st.session_state:
             st.session_state.pop("PENDING_SAVE", None)
             st.info("Sparning avbröts. Justera värden eller max i sidopanelen.")
 
-# ============================== "Vila på jobbet" ===============================
+# ============================== Snabbåtgärder ===============================
 st.markdown("---")
-st.subheader("🛠️ Snabbåtgärd: Vila på jobbet")
+st.subheader("🛠️ Snabbåtgärder")
 
 def _rand_30_50_of_max(mx: int) -> int:
     """Slumpa 30–50% av mx (heltal). Om mx <= 0 -> 0."""
@@ -462,20 +454,17 @@ def _rand_30_50_of_max(mx: int) -> int:
     import random as _r
     return _r.randint(lo, hi)
 
+# --- Vila på jobbet ---
 if st.button("➕ Skapa 'Vila på jobbet'-rad"):
     try:
-        # Ta nästa scen/datum/veckodag precis vid klick
         scen_num = next_scene_number()
         rad_datum2, veckodag2 = datum_och_veckodag_för_scen(scen_num)
 
-        # Slumpa 30–50 % av max-värdena i sidopanelen
         pv = _rand_30_50_of_max(st.session_state.get("MAX_PAPPAN", 0))
         gr = _rand_30_50_of_max(st.session_state.get("MAX_GRANNAR", 0))
         nv = _rand_30_50_of_max(st.session_state.get("MAX_NILS_VANNER", 0))
         nf = _rand_30_50_of_max(st.session_state.get("MAX_NILS_FAMILJ", 0))
 
-        # Bygg grundrad: allt scenrelaterat 0 (det är vila),
-        # Älskar=12 och Sover med=1, samt Typ markerad.
         grund_vila = {
             "Typ": "Vila på jobbet",
             "Veckodag": veckodag2, "Scen": scen_num,
@@ -484,14 +473,46 @@ if st.button("➕ Skapa 'Vila på jobbet'-rad"):
             "Älskar": 12, "Sover med": 1,
             "Pappans vänner": pv, "Grannar": gr,
             "Nils vänner": nv, "Nils familj": nf, "Nils": 0,
-            # Radens pris hämtas från sidopanelen men EKONOMI = 0 i beräkningen för denna rad
             "Avgift": float(CFG.get("avgift_usd", 30.0)),
         }
-
         _save_row(grund_vila, rad_datum2, veckodag2)
-
     except Exception as e:
         st.error(f"Misslyckades att skapa 'Vila på jobbet'-rad: {e}")
+
+# --- Vila i hemmet (7 rader) ---
+if st.button("🏠 Skapa 'Vila i hemmet' (7 dagar)"):
+    try:
+        start_scene = next_scene_number()
+        for offset in range(7):
+            scen_num = start_scene + offset
+            rad_d, veckod = datum_och_veckodag_för_scen(scen_num)
+
+            # Dag 1–5 slump, dag 6–7 ingen känner
+            if offset <= 4:
+                pv = _rand_30_50_of_max(st.session_state.get("MAX_PAPPAN", 0))
+                gr = _rand_30_50_of_max(st.session_state.get("MAX_GRANNAR", 0))
+                nv = _rand_30_50_of_max(st.session_state.get("MAX_NILS_VANNER", 0))
+                nf = _rand_30_50_of_max(st.session_state.get("MAX_NILS_FAMILJ", 0))
+            else:
+                pv = gr = nv = nf = 0
+
+            sv = 1 if offset == 6 else 0  # dag7 sover med
+
+            grund_home = {
+                "Typ": "Vila i hemmet",
+                "Veckodag": veckod, "Scen": scen_num,
+                "Män": 0, "Fitta": 0, "Rumpa": 0, "DP": 0, "DPP": 0, "DAP": 0, "TAP": 0,
+                "Tid S": 0, "Tid D": 0, "Vila": 0,
+                "Älskar": 6, "Sover med": sv,
+                "Pappans vänner": pv, "Grannar": gr,
+                "Nils vänner": nv, "Nils familj": nf, "Nils": 0,
+                "Avgift": float(CFG.get("avgift_usd", 30.0)),
+            }
+            _save_row(grund_home, rad_d, veckod)
+
+        st.success("✅ Skapade 7 'Vila i hemmet'-rader.")
+    except Exception as e:
+        st.error(f"Misslyckades att skapa 'Vila i hemmet': {e}")
 
 # ================================ Visa & radera ================================
 st.subheader("📊 Aktuella data")
