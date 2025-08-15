@@ -2,6 +2,8 @@ import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import date, time, datetime, timedelta
+import time as _time
+import random
 
 try:
     from berakningar import beräkna_radvärden
@@ -11,7 +13,24 @@ except Exception:
 st.set_page_config(page_title="Malin", layout="centered")
 st.title("Malin-produktionsapp")
 
-# ---------- Auth: ENDAST Sheets-scope ----------
+# ---------- Retry-hjälpare för 429 ----------
+def _retry_call(fn, *args, **kwargs):
+    """Kör fn med exponential backoff vid rate limit (429/RESOURCE_EXHAUSTED)."""
+    delay = 0.5
+    for _ in range(6):  # ~ max ~15s
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            msg = str(e)
+            if any(x in msg for x in ["429", "RESOURCE_EXHAUSTED", "RATE_LIMIT_EXCEEDED"]):
+                _time.sleep(delay + random.uniform(0, 0.25))
+                delay = min(delay * 2, 4)
+                continue
+            raise
+    return fn(*args, **kwargs)
+
+# ---------- Auth: ENDAST Sheets-scope (cacheas) ----------
+@st.cache_resource(show_spinner=False)
 def get_client():
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(dict(st.secrets["GOOGLE_CREDENTIALS"]), scopes=scopes)
@@ -19,50 +38,41 @@ def get_client():
 
 client = get_client()
 
-# ---------- Öppna arket via URL/ID (ingen Drive-listning) ----------
-def _get_query_param(name, default=""):
-    if hasattr(st, "query_params"):
-        return st.query_params.get(name, [""])[0] if st.query_params.get(name) else default
-    try:
-        return st.experimental_get_query_params().get(name, [""])[0]
-    except Exception:
-        return default
-
+# ---------- Öppna arket (cacheas) ----------
+@st.cache_resource(show_spinner=False)
 def resolve_sheet(gc):
-    last_err = None
-    url = st.secrets.get("SHEET_URL", "").strip() if "SHEET_URL" in st.secrets else ""
-    if url:
-        try:
-            st.caption("🔗 Öppnar via SHEET_URL…")
-            return gc.open_by_url(url).sheet1
-        except Exception as e:
-            last_err = e
-            st.warning(f"SHEET_URL misslyckades: {e}")
+    """
+    Öppna arket EN gång per session. Preferera GOOGLE_SHEET_ID (mindre overhead) före URL.
+    """
     sid = st.secrets.get("GOOGLE_SHEET_ID", "").strip() if "GOOGLE_SHEET_ID" in st.secrets else ""
     if sid:
-        try:
-            st.caption("🆔 Öppnar via GOOGLE_SHEET_ID…")
-            return gc.open_by_key(sid).sheet1
-        except Exception as e:
-            last_err = e
-            st.warning(f"GOOGLE_SHEET_ID misslyckades: {e}")
-    qp = _get_query_param("sheet", "")
-    if qp:
-        try:
-            st.caption("🔎 Öppnar via query-param 'sheet'…")
-            return gc.open_by_url(qp).sheet1 if qp.startswith("http") else gc.open_by_key(qp).sheet1
-        except Exception as e:
-            last_err = e
-            st.warning(f"Query 'sheet' misslyckades: {e}")
+        st.caption("🆔 Öppnar via GOOGLE_SHEET_ID…")
+        return _retry_call(gc.open_by_key, sid).sheet1
 
-    st.error("Hittade inget sätt att öppna arket. Lägg in SHEET_URL eller GOOGLE_SHEET_ID i Secrets, "
-             "eller skicka ?sheet=<url|id> i adressen."
-             f"\nSenaste fel: {last_err}")
+    url = st.secrets.get("SHEET_URL", "").strip() if "SHEET_URL" in st.secrets else ""
+    if url:
+        st.caption("🔗 Öppnar via SHEET_URL…")
+        return _retry_call(gc.open_by_url, url).sheet1
+
+    # Fallback via query param ?sheet=<id|url>
+    qp = ""
+    try:
+        qp = st.experimental_get_query_params().get("sheet", [""])[0]
+    except Exception:
+        pass
+    if qp:
+        st.caption("🔎 Öppnar via query-param 'sheet'…")
+        if qp.startswith("http"):
+            return _retry_call(gc.open_by_url, qp).sheet1
+        else:
+            return _retry_call(gc.open_by_key, qp).sheet1
+
+    st.error("Lägg in GOOGLE_SHEET_ID eller SHEET_URL i Secrets (eller ?sheet=<url|id>).")
     st.stop()
 
 sheet = resolve_sheet(client)
 
-# ---------- Kolumnsäkring ----------
+# ---------- Kolumnsäkring (cacheas; körs en gång) ----------
 KOLUMNER = [
     "Veckodag","Scen","Män","Fitta","Rumpa","DP","DPP","DAP","TAP",
     "Tid S","Tid D","Vila","Summa S","Summa D","Summa TP","Summa Vila",
@@ -72,14 +82,19 @@ KOLUMNER = [
     "Hångel","Suger","Prenumeranter","Avgift","Intäkter","Intäkt män",
     "Intäkt Känner","Lön Malin","Intäkt Företaget","Vinst","Känner Sammanlagt","Hårdhet"
 ]
-try:
-    header = sheet.row_values(1)
-    if header != KOLUMNER:
-        sheet.clear()
-        sheet.insert_row(KOLUMNER, 1)
-        st.caption("🧱 Kolumnrubriker uppdaterade.")
-except Exception as e:
-    st.warning(f"Kunde inte säkerställa kolumner (fortsätter ändå): {e}")
+
+@st.cache_resource(show_spinner=False)
+def ensure_header_once(_sheet):
+    try:
+        header = _retry_call(_sheet.row_values, 1)
+        if header != KOLUMNER:
+            _retry_call(_sheet.clear)
+            _retry_call(_sheet.insert_row, KOLUMNER, 1)
+            st.caption("🧱 Kolumnrubriker uppdaterade.")
+    except Exception as e:
+        st.warning(f"Kunde inte säkerställa kolumner (fortsätter ändå): {e}")
+
+ensure_header_once(sheet)
 
 # ---------- Sidopanel ----------
 st.sidebar.header("Inställningar")
@@ -87,7 +102,7 @@ startdatum = st.sidebar.date_input("Historiskt startdatum", value=date.today())
 starttid   = st.sidebar.time_input("Starttid", value=time(7, 0))
 födelsedatum = st.sidebar.date_input("Malins födelsedatum", value=date(1999,1,1))
 
-# Max-regler i session_state (för Auto-Max)
+# Max-regler (Auto-Max) i session_state
 def _init_max(key, default_val=10):
     if key not in st.session_state:
         st.session_state[key] = default_val
@@ -106,6 +121,25 @@ def datum_och_veckodag_för_scen(scen_nummer: int):
     rad_datum = startdatum + timedelta(days=scen_nummer - 1)
     veckodagar = ["Måndag","Tisdag","Onsdag","Torsdag","Fredag","Lördag","Söndag"]
     return rad_datum, veckodagar[rad_datum.weekday()]
+
+# ---------- Minimera reads: håll koll på antal datarader lokalt ----------
+def _init_row_count():
+    if "ROW_COUNT" not in st.session_state:
+        try:
+            # Läs bara kolumn A för att approximera antal rader (mindre read)
+            vals = _retry_call(sheet.col_values, 1)  # kolumn A
+            if vals and vals[0] == "Veckodag":
+                datarader = max(0, len(vals) - 1)
+            else:
+                datarader = len(vals)
+            st.session_state.ROW_COUNT = datarader
+        except Exception:
+            st.session_state.ROW_COUNT = 0
+
+_init_row_count()
+
+def next_scene_number():
+    return st.session_state.ROW_COUNT + 1
 
 # ---------- Formulär ----------
 with st.form("ny_rad"):
@@ -126,9 +160,9 @@ with st.form("ny_rad"):
     älskar    = st.number_input("Älskar", min_value=0, step=1, value=0)
     sover_med = st.number_input("Sover med", min_value=0, step=1, value=0)
 
-    # Max-etiketter
-    lbl_p = f"Pappans vänner (max {st.session_state.MAX_PAPPAN})"
-    lbl_g = f"Grannar (max {st.session_state.MAX_GRANNAR})"
+    # Max-etiketter + heads-up
+    lbl_p  = f"Pappans vänner (max {st.session_state.MAX_PAPPAN})"
+    lbl_g  = f"Grannar (max {st.session_state.MAX_GRANNAR})"
     lbl_nv = f"Nils vänner (max {st.session_state.MAX_NILS_VANNER})"
     lbl_nf = f"Nils familj (max {st.session_state.MAX_NILS_FAMILJ})"
 
@@ -152,7 +186,7 @@ with st.form("ny_rad"):
 
     submit = st.form_submit_button("💾 Spara")
 
-# ---------- Fallback-beräkning om modulen saknas ----------
+# ---------- Fallback-beräkning (om modulen saknas) ----------
 def fallback_beräkning(rad_in, rad_datum, födelsedatum, starttid):
     c = rad_in["Män"]; d=rad_in["Fitta"]; e=rad_in["Rumpa"]
     f=rad_in["DP"]; g=rad_in["DPP"]; h=rad_in["DAP"]; i=rad_in["TAP"]
@@ -161,9 +195,11 @@ def fallback_beräkning(rad_in, rad_datum, födelsedatum, starttid):
     m = (c+d+e)*j; n=(f+g+h)*k; o=i*k; p=(c+d+e+f+g+h+i)*l
     q_sec = m+n+o+p
     q_hours = q_sec/3600.0
-    klockan_str = (datetime.combine(rad_datum, starttid) + timedelta(hours=3) + timedelta(hours=q_hours) + timedelta(hours=1)).strftime("%H:%M")
+    klockan_str = (datetime.combine(rad_datum, starttid)
+                   + timedelta(hours=3) + timedelta(hours=q_hours) + timedelta(hours=1)
+                   ).strftime("%H:%M")
 
-    # format 'xh yy min'
+    # 'xh yy min'
     h_t = int(q_sec//3600); m_t = int(round((q_sec%3600)/60.0))
     if m_t == 60: h_t += 1; m_t = 0
     summa_tid_str = f"{h_t}h {m_t} min"
@@ -184,8 +220,7 @@ def fallback_beräkning(rad_in, rad_datum, födelsedatum, starttid):
     return {
         **rad_in,
         "Summa S": m,"Summa D": n,"Summa TP": o,"Summa Vila": p,
-        "Summa tid": summa_tid_str,
-        "Summa tid (sek)": q_sec,
+        "Summa tid": summa_tid_str,"Summa tid (sek)": q_sec,
         "Klockan": klockan_str,"Känner": u,"Totalt Män": z,
         "Tid kille": ((m/z_safe)+(n/z_safe)+(o/z_safe)+ad)/60,
         "Hångel": ac,"Suger": ad,"Prenumeranter": ae,"Avgift": af,"Intäkter": ag,
@@ -193,7 +228,7 @@ def fallback_beräkning(rad_in, rad_datum, födelsedatum, starttid):
         "Vinst": al,"Känner Sammanlagt": u,"Hårdhet": hårdhet
     }
 
-# ---------- Auto-Max: tvåstegssparning med varning ----------
+# ---------- Auto-Max: pending-save hantering ----------
 def _store_pending(grund_dict, scen, rad_datum, veckodag, over_max_dict):
     st.session_state["PENDING_SAVE"] = {
         "grund": grund_dict,
@@ -208,23 +243,20 @@ def _clear_pending():
         del st.session_state["PENDING_SAVE"]
 
 def _parse_date(d):
-    # d kan vara date eller str
     if isinstance(d, date):
         return d
     return datetime.strptime(d, "%Y-%m-%d").date()
 
 def _apply_auto_max_and_save(pending):
-    # Höj max till det nya värdet för alla övertramp
+    # Höj max för alla övertramp
     for key, info in pending["over_max"].items():
         st.session_state[info["max_key"]] = info["new_value"]
 
-    # Kör beräkning & spara
     grund = pending["grund"]
     scen = pending["scen"]
     rad_datum = _parse_date(pending["rad_datum"])
     veckodag = pending["veckodag"]
 
-    # Beräkna
     try:
         if callable(beräkna_radvärden):
             ber = beräkna_radvärden(grund, rad_datum, födelsedatum, starttid)
@@ -234,21 +266,16 @@ def _apply_auto_max_and_save(pending):
         st.warning(f"Beräkning fel: {e}. Använder fallback.")
         ber = fallback_beräkning(grund, rad_datum, födelsedatum, starttid)
 
-    # I med rätt ordning
     rad = [ber.get(k, "") for k in KOLUMNER]
-    sheet.append_row(rad)
+    _retry_call(sheet.append_row, rad)
+    st.session_state.ROW_COUNT += 1  # lokalt antal ökas
 
     ålder = rad_datum.year - födelsedatum.year - ((rad_datum.month,rad_datum.day)<(födelsedatum.month,födelsedatum.day))
     st.success(f"✅ Max uppdaterades och rad sparades. Datum {rad_datum} ({veckodag}), Ålder {ålder} år, Klockan {ber['Klockan']}")
 
 # ---------- Spara (med Auto-Max) ----------
 if submit:
-    try:
-        all_vals = sheet.get_all_values()
-        scen = max(1, len(all_vals))  # nästa datarad (rad 1 = header)
-    except Exception:
-        scen = 1
-
+    scen = next_scene_number()
     rad_datum, veckodag = datum_och_veckodag_för_scen(scen)
 
     grund = {
@@ -260,7 +287,7 @@ if submit:
         "Nils vänner": nils_vänner, "Nils familj": nils_familj, "Nils": nils
     }
 
-    # Kolla Auto-Max för de fyra fälten
+    # Kolla övertramp mot max
     over_max = {}
     if pappans_vänner > st.session_state.MAX_PAPPAN:
         over_max["Pappans vänner"] = {"current_max": st.session_state.MAX_PAPPAN, "new_value": pappans_vänner, "max_key": "MAX_PAPPAN"}
@@ -272,10 +299,10 @@ if submit:
         over_max["Nils familj"] = {"current_max": st.session_state.MAX_NILS_FAMILJ, "new_value": nils_familj, "max_key": "MAX_NILS_FAMILJ"}
 
     if over_max:
-        # Steg 1: Sätt pending och visa varning med knappar
+        # Kräver bekräftelse (visas nedan)
         _store_pending(grund, scen, rad_datum, veckodag, over_max)
     else:
-        # Ingen överträdelse → spara direkt
+        # Spara direkt
         try:
             if callable(beräkna_radvärden):
                 ber = beräkna_radvärden(grund, rad_datum, födelsedatum, starttid)
@@ -287,13 +314,14 @@ if submit:
 
         rad = [ber.get(k, "") for k in KOLUMNER]
         try:
-            sheet.append_row(rad)
+            _retry_call(sheet.append_row, rad)
+            st.session_state.ROW_COUNT += 1  # lokalt antal ökas
             ålder = rad_datum.year - födelsedatum.year - ((rad_datum.month,rad_datum.day)<(födelsedatum.month,födelsedatum.day))
             st.success(f"✅ Rad sparad. Datum {rad_datum} ({veckodag}), Ålder {ålder} år, Klockan {ber['Klockan']}")
         except Exception as e:
             st.error(f"Kunde inte spara raden: {e}")
 
-# Visa ev. Auto-Max-varning efter submit
+# ---------- Visa ev. Auto-Max-varning ----------
 if "PENDING_SAVE" in st.session_state:
     pending = st.session_state["PENDING_SAVE"]
     lst = []
@@ -322,7 +350,7 @@ if "PENDING_SAVE" in st.session_state:
 # ---------- Visa & radera ----------
 st.subheader("📊 Aktuella data")
 try:
-    rows = sheet.get_all_records()
+    rows = _retry_call(sheet.get_all_records)
     if rows:
         show_secs = st.checkbox("Visa även 'Summa tid (sek)'", value=False)
         if not show_secs:
@@ -335,11 +363,12 @@ except Exception as e:
 
 st.subheader("🗑 Ta bort rad")
 try:
-    total_rows = len(sheet.get_all_values()) - 1
+    total_rows = st.session_state.ROW_COUNT  # lokalt räknat
     if total_rows > 0:
         idx = st.number_input("Radnummer att ta bort (1 = första dataraden)", min_value=1, max_value=total_rows, step=1, value=1)
         if st.button("Ta bort vald rad"):
-            sheet.delete_rows(int(idx) + 1)  # +1 för header
+            _retry_call(sheet.delete_rows, int(idx) + 1)  # +1 för header
+            st.session_state.ROW_COUNT -= 1
             st.success(f"Rad {idx} borttagen.")
             st.experimental_rerun()
     else:
