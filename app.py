@@ -57,7 +57,7 @@ def resolve_sheet():
     try:
         qp = st.experimental_get_query_params().get("sheet", [""])[0]
     except Exception:
-        pass
+        qp = ""
     if qp:
         st.caption("🔎 Öppnar via query-param 'sheet'…")
         return (_retry_call(client.open_by_url, qp).sheet1
@@ -370,7 +370,7 @@ if "PENDING_SAVE" in st.session_state:
                 st.error(f"Kunde inte spara: {e}")
             finally:
                 st.session_state.pop("PENDING_SAVE", None)
-                st.experimental_rerun()
+                st.rerun()
     with c2:
         if st.button("✋ Nej, avbryt"):
             st.session_state.pop("PENDING_SAVE", None)
@@ -399,7 +399,7 @@ try:
             _retry_call(sheet.delete_rows, int(idx) + 1)  # +1 för header
             st.session_state.ROW_COUNT -= 1
             st.success(f"Rad {idx} borttagen.")
-            st.experimental_rerun()
+            st.rerun()
     else:
         st.caption("Ingen datarad att ta bort.")
 except Exception as e:
