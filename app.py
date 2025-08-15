@@ -99,7 +99,7 @@ DEFAULT_COLUMNS = [
     "Tid per kille (sek)","Tid per kille",
     "Klockan","Älskar","Sover med","Känner","Pappans vänner","Grannar",
     "Nils vänner","Nils familj","Totalt Män","Tid kille","Nils",
-    "Hångel","Suger","Prenumeranter","Avgift","Intäkter","Intäkt män",
+    "Hångel","Suger","Suger per kille (sek)","Prenumeranter","Avgift","Intäkter","Intäkt män",
     "Intäkt Känner","Lön Malin","Intäkt Företaget","Vinst","Känner Sammanlagt","Hårdhet"
 ]
 
@@ -276,6 +276,7 @@ with col2:
     st.metric("Totalt män (raden)", int(preview.get("Totalt Män", 0)))
     st.metric("Tid per kille", preview.get("Tid per kille", "-"))  # min:sek
     st.metric("Tid per kille (sek)", int(preview.get("Tid per kille (sek)", 0)))
+    st.metric("Suger per kille (sek)", int(preview.get("Suger per kille (sek)", 0)))
 st.caption(f"Klockan blir: {preview.get('Klockan','-')} (start {starttid})")
 
 # Bonus-info i sidopanelen
