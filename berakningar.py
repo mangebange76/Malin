@@ -13,6 +13,14 @@ def _safe_int(x, default=0):
     except Exception:
         return default
 
+def _safe_float(x, default=0.0):
+    try:
+        if isinstance(x, str) and x.strip() == "":
+            return default
+        return float(x)
+    except Exception:
+        return default
+
 def _calc_u(rad_in: dict) -> int:
     """
     U = Känner = Pappans vänner + Grannar + Nils vänner + Nils familj.
@@ -40,9 +48,6 @@ def _ms_str_from_seconds(sec: int) -> str:
     s = sec % 60
     return f"{int(m)}m {int(s)}s"
 
-def _age_on_date(d: date, birth: date) -> int:
-    return d.year - birth.year - ((d.month, d.day) < (birth.month, birth.day))
-
 
 # =========================================
 # Huvudberäkning (används av app.py)
@@ -55,12 +60,15 @@ def berakna_radvarden(rad_in: dict, rad_datum: date, födelsedatum: date, startt
     - Suger per kille (sek) = Suger_total / Z.
     - Tid per kille (sek) = (S/Z) + 2*(D/Z) + 3*(TP/Z) + (Suger_total/Z), Z = Män + Känner.
     - 'Tid kille' (min) = 'Tid per kille (sek)' / 60.
-    - Hångel = 3h totalt (10 800 s) dividerat på Män → sparas som sek/kille och m:s/kille.
-    - Summa tid returneras i sek och 'xh y min'. Klockan formateras HH:MM från starttid + (3h + q + 1h).
-    - Ekonomi enligt tidigare överenskommelser (Hångel separeras, påverkar ej summeerad tid).
+    - Hångel = 3h totalt (10 800 s) dividerat på Män → sparas som sek/kille och m:s/kille (påverkar ej Summa tid).
+    - Hårdhet = (+3 om DP>0) + (+4 om DPP>0) + (+6 om DAP>0) + (+8 om TAP>0).
+    - Prenumeranter (rad) = (Män+Fitta+Rumpa+DP+DPP+DAP+TAP+Känner) × Hårdhet.
+    - Avgift (USD) kommer från rad_in["Avgift"] (default 30) och gäller endast för denna rad.
+    - Intäkter (rad) = Prenumeranter × Avgift.
+    - Lön Malin = 10% av prenumeranter (rad), åldersfaktor, min 150 / max 800.
     """
 
-    # Indata (säkerställ int)
+    # Indata (säkerställ typer)
     c = _safe_int(rad_in.get("Män", 0))
     d = _safe_int(rad_in.get("Fitta", 0))
     e = _safe_int(rad_in.get("Rumpa", 0))
@@ -78,7 +86,7 @@ def berakna_radvarden(rad_in: dict, rad_datum: date, födelsedatum: date, startt
     if sover_med < 0: sover_med = 0
     if sover_med > 1: sover_med = 1
 
-    # U = Känner
+    # U = Känner (Pappans vänner + Grannar + Nils vänner + Nils familj)
     u = _calc_u(rad_in)
 
     # Summor – inkluderar U (sekunder)
@@ -91,7 +99,7 @@ def berakna_radvarden(rad_in: dict, rad_datum: date, födelsedatum: date, startt
     extra_alskar_sec    = alskar * 1800     # 30 min/st
     extra_sover_med_sec = sover_med * 3600  # 60 min/st
 
-    # Totaltid (sek + text)
+    # Totaltid (sek + text) – Älskar/Sover med ingår i totalen
     q_sec = int(m + n + o + p + extra_alskar_sec + extra_sover_med_sec)
     q_hours = q_sec / 3600.0
     summa_tid_str = _hm_str_from_seconds(q_sec)
@@ -106,7 +114,6 @@ def berakna_radvarden(rad_in: dict, rad_datum: date, födelsedatum: date, startt
 
     # Totalt män Z = Män + Känner (exkl. älskar/sover med)
     z = int(c + u)
-    z_safe = z if z > 0 else 1
 
     # ===== Suger_total, Suger per kille & Tid per kille =====
     # Suger_total (sek, total) = 60% av (D + TP)
@@ -125,21 +132,26 @@ def berakna_radvarden(rad_in: dict, rad_datum: date, födelsedatum: date, startt
     tid_per_kille_str = _ms_str_from_seconds(tid_per_kille_sec)
 
     # ===== HÅNGEL =====
-    # 3 timmar = 10 800 sek totalt. Dividera på MÄN (C).
-    hangel_total_sec = 10800
+    hangel_total_sec = 10800  # 3h
     if c > 0:
         hangel_per_kille_sec = int(round(hangel_total_sec / c))
     else:
         hangel_per_kille_sec = 0
     hangel_per_kille_str = _ms_str_from_seconds(hangel_per_kille_sec)
 
-    # ----- Ekonomi (Hångel separerat, påverkar ej q) -----
-    ae = (c + d + e + f + g + h + i + u)  # Prenumeranter (med U)
-    af = 15
-    ag = ae * af
-    ah = c * 120
+    # ===== Hårdhet =====
+    hardhet = (3 if f > 0 else 0) + (4 if g > 0 else 0) + (6 if h > 0 else 0) + (8 if i > 0 else 0)
 
-    # Lön Malin – åldersfaktor
+    # ===== Prenumeranter (inkluderar KÄNNER) =====
+    pren_actions = c + d + e + f + g + h + i + u
+    ae = pren_actions * hardhet  # Nya prenumeranter på rad
+
+    # ----- Ekonomi -----
+    af = _safe_float(rad_in.get("Avgift", 30.0))  # Pris per prenumerant (radens eget pris)
+    ag = ae * af               # Intäkter (rad)
+    ah = c * 120               # Intäkt män (i appen visas som "Kostnad män")
+
+    # Lön Malin – åldersfaktor (på nya prenumeranter per rad)
     ålder = (rad_datum.year - födelsedatum.year
              - ((rad_datum.month, rad_datum.day) < (födelsedatum.month, födelsedatum.day)))
     if ålder < 18:
@@ -148,13 +160,12 @@ def berakna_radvarden(rad_in: dict, rad_datum: date, födelsedatum: date, startt
     elif 26 <= ålder <= 30: faktor = 1.10
     elif 31 <= ålder <= 40: faktor = 1.00
     else:                    faktor = 0.90
-    aj_base = max(150, min(800, ae * 0.10))
-    aj = max(150, min(800, aj_base * faktor))  # Lön Malin
+    aj_base = max(150, min(800, ae * 0.10))     # 10% av nya pren (rad)
+    aj = max(150, min(800, aj_base * faktor))   # åldersjusterad
 
     ai = (aj + 120) * u        # Intäkt Känner
     ak = ag * 0.20             # Intäkt Företaget
     al = ag - ah - ai - aj - ak# Vinst
-    hårdhet = (2 if f > 0 else 0) + (3 if g > 0 else 0) + (5 if h > 0 else 0) + (7 if i > 0 else 0)
 
     # Returnera komplett resultatrad
     return {
@@ -172,7 +183,7 @@ def berakna_radvarden(rad_in: dict, rad_datum: date, födelsedatum: date, startt
         "Summa tid": summa_tid_str,
         "Klockan": klockan_str,
         "Totalt Män": z,
-        # Suger = TOTAL sekunder (60% av (D+TP)) + per kille
+        # Suger (total) + per kille
         "Suger": suger_total_sec,
         "Suger per kille (sek)": suger_per_kille_sec,
         # Tid per kille (sek och text) + "Tid kille" i minuter
@@ -182,17 +193,17 @@ def berakna_radvarden(rad_in: dict, rad_datum: date, födelsedatum: date, startt
         # Hångel (per kille)
         "Hångel (sek/kille)": hangel_per_kille_sec,
         "Hångel (m:s/kille)": hangel_per_kille_str,
-        # Ekonomi
+        # Prenumeranter + ekonomi
+        "Hårdhet": hardhet,
         "Prenumeranter": ae,
         "Avgift": af,
         "Intäkter": ag,
-        "Intäkt män": ah,
+        "Intäkt män": ah,           # visas som "Kostnad män" i appen
         "Intäkt Känner": ai,
         "Lön Malin": aj,
         "Intäkt Företaget": ak,
         "Vinst": al,
         "Känner Sammanlagt": u,
-        "Hårdhet": hårdhet
     }
 
 # Alias med prickar (om någon importerar det namnet).
