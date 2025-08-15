@@ -1,22 +1,18 @@
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime
+
 try:
     from berakningar import beräkna_radvärden
 except Exception:
-    berakna_radvärden = None  # appen startar även om filen saknas
+    beräkna_radvärden = None  # appen startar även om filen saknas
 
 st.set_page_config(page_title="Malin", layout="centered")
 st.title("Malin-produktionsapp")
 
-# ---------- 1) Auth: breda scopes (Sheets + Drive) ----------
+# ---------- 1) Auth: ENBART Sheets-scope (ingen Drive) ----------
 def get_client():
-    # Viktigt: Drive-scope behövs för open() via namn och vissa gspread-anrop.
-    SCOPES = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
+    SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(
         dict(st.secrets["GOOGLE_CREDENTIALS"]), scopes=SCOPES
     )
@@ -24,47 +20,39 @@ def get_client():
 
 client = get_client()
 
-# ---------- 2) Hitta arket på flera sätt (oförändrad logik, nu med rätt scopes) ----------
+# ---------- 2) Öppna arket UTAN Drive API ----------
 def resolve_sheet(gc):
-    # 1) Full URL
-    if "SHEET_URL" in st.secrets:
+    sheet = None
+    err = None
+
+    # 1) Via full URL (rekommenderas)
+    url = st.secrets.get("SHEET_URL", "").strip()
+    if url:
         try:
-            sh = gc.open_by_url(st.secrets["SHEET_URL"])
-            st.caption("🔗 Öppnade Google Sheet via SHEET_URL.")
-            return sh.sheet1
+            sheet = gc.open_by_url(url).sheet1
+            st.caption("🔗 Öppnade Google Sheet via SHEET_URL (open_by_url).")
+            return sheet
         except Exception as e:
+            err = e
             st.warning(f"Kunde inte öppna via SHEET_URL: {e}")
 
-    # 2) Bara ID
-    if "GOOGLE_SHEET_ID" in st.secrets:
+    # 2) Via ID (om du vill undvika att lagra full URL)
+    sheet_id = st.secrets.get("GOOGLE_SHEET_ID", "").strip()
+    if sheet_id:
         try:
-            sh = gc.open_by_key(st.secrets["GOOGLE_SHEET_ID"])
-            st.caption("🆔 Öppnade Google Sheet via GOOGLE_SHEET_ID.")
-            return sh.sheet1
+            sheet = gc.open_by_key(sheet_id).sheet1
+            st.caption("🆔 Öppnade Google Sheet via GOOGLE_SHEET_ID (open_by_key).")
+            return sheet
         except Exception as e:
+            err = e
             st.warning(f"Kunde inte öppna via GOOGLE_SHEET_ID: {e}")
 
-    # 3) Namn
-    if "SHEET_NAME" in st.secrets:
-        try:
-            sh = gc.open(st.secrets["SHEET_NAME"])
-            st.caption("📄 Öppnade Google Sheet via SHEET_NAME.")
-            return sh.sheet1
-        except Exception as e:
-            st.warning(f"Kunde inte öppna via SHEET_NAME: {e}")
-
-    # 4) Fallback på det namn du använder
-    try:
-        sh = gc.open("MalinData2")
-        st.caption("🪪 Öppnade Google Sheet via fallback-namnet 'MalinData2'.")
-        return sh.sheet1
-    except Exception as e:
-        st.error(
-            "Kunde inte öppna något Google Sheet.\n\n"
-            "Testade i ordning: SHEET_URL → GOOGLE_SHEET_ID → SHEET_NAME → 'MalinData2'.\n"
-            f"Fel från Google: {e}"
-        )
-        raise
+    st.error(
+        "Hittade inget sätt att öppna Google Sheet utan Drive API.\n"
+        "Lägg in antingen SHEET_URL eller GOOGLE_SHEET_ID i Secrets."
+        f"\nSenaste fel: {err}"
+    )
+    st.stop()
 
 sheet = resolve_sheet(client)
 
@@ -162,9 +150,9 @@ if submit:
     }
 
     # Försök med din modul; annars fallback
-    if berakna_radvärden:
+    if beräkna_radvärden:
         try:
-            ber = berakna_radvärden(grund)
+            ber = beräkna_radvärden(grund)
         except Exception as e:
             st.warning(f"berakningar.py kastade fel ({e}). Använder fallback-beräkning.")
             ber = fallback_beräkning(grund)
@@ -179,24 +167,3 @@ if submit:
         st.success("✅ Rad sparad.")
     except Exception as e:
         st.error(f"Kunde inte spara raden: {e}")
-
-def main():
-    st.title("Malin-produktionsapp")
-
-    # Visa datan från arket
-    try:
-        data = sheet.get_all_records()
-        if data:
-            st.subheader("📊 Nuvarande data i arket")
-            st.dataframe(data)
-        else:
-            st.info("Inga rader sparade ännu.")
-    except Exception as e:
-        st.error(f"Kunde inte läsa från Google Sheet: {e}")
-        return
-
-    # Formuläret är redan definierat ovan och körs automatiskt
-    st.caption("Använd formuläret ovan för att lägga till en ny rad.")
-
-if __name__ == "__main__":
-    main()
