@@ -10,7 +10,10 @@ def _safe_int(x, default=0):
         return default
 
 def _calc_u(rad_in: dict) -> int:
-    """U = Känner = Pappans vänner + Grannar + Nils vänner + Nils familj."""
+    """
+    U = Känner = Pappans vänner + Grannar + Nils vänner + Nils familj.
+    (Dessa fält förväntas redan finnas i rad_in.)
+    """
     return (
         _safe_int(rad_in.get("Pappans vänner", 0)) +
         _safe_int(rad_in.get("Grannar", 0)) +
@@ -19,7 +22,7 @@ def _calc_u(rad_in: dict) -> int:
     )
 
 def _hm_str_from_seconds(q_sec: int) -> str:
-    """Returnera t.ex. '4h 49 min'."""
+    """Returnera t.ex. '4h 49 min' från ett heltal sekunder."""
     h = q_sec // 3600
     m = round((q_sec % 3600) / 60)
     if m == 60:
@@ -36,12 +39,13 @@ def _age_on_date(d: date, birth: date) -> int:
 # =========================================
 def beräkna_radvärden(rad_in: dict, rad_datum: date, födelsedatum: date, starttid: time) -> dict:
     """
-    Beräkna alla radfält enligt överenskommen logik.
-    - Inkluderar U (Känner) i M (Summa S), N (Summa D), O (Summa TP) och P (Summa Vila).
-    - AE (Prenumeranter) inkluderar också U (enl. “Ja”).
-    - Summa tid i 'xh y min' samt sparar 'Summa tid (sek)'.
-    - Klockan: 7 + 3 + q + 1 → visas HH:MM.
-    - Lön Malin har åldersfaktor.
+    Beräknar alla radfält enligt överenskommen logik.
+
+    - U (Känner) ingår i M, N, O, P.
+    - Älskar bidrar med extra tid: Älskar × 30 minuter (1800 s per enhet) till totalen.
+    - AE (Prenumeranter) inkluderar U.
+    - Summa tid returneras i både sekunder och som 'xh y min'.
+    - Klockan beräknas som 7 + 3 + q + 1 (q i timmar) och presenteras HH:MM.
     """
 
     # Indata (säkra int)
@@ -53,26 +57,34 @@ def beräkna_radvärden(rad_in: dict, rad_datum: date, födelsedatum: date, star
     h = _safe_int(rad_in.get("DAP", 0))
     i = _safe_int(rad_in.get("TAP", 0))
 
-    j = _safe_int(rad_in.get("Tid S", 0))
-    k = _safe_int(rad_in.get("Tid D", 0))
-    l = _safe_int(rad_in.get("Vila", 0))
+    j = _safe_int(rad_in.get("Tid S", 0))  # sek
+    k = _safe_int(rad_in.get("Tid D", 0))  # sek
+    l = _safe_int(rad_in.get("Vila", 0))   # sek
 
-    # U = Känner
+    alskar = _safe_int(rad_in.get("Älskar", 0))  # antal (ger tidsbonus)
+
+    # U = Känner (summa av relationsfälten)
     u = _calc_u(rad_in)
 
-    # Summor (inkluderar U i M, N, O, P enligt ditt “Ja”)
-    m = (c + d + e + u) * j                 # Summa S
-    n = (f + g + h + u) * k                 # Summa D
-    o = (i + u) * k                         # Summa TP
-    p = (c + d + e + f + g + h + i + u) * l # Summa Vila
+    # Summor – inkluderar U
+    m = (c + d + e + u) * j                 # Summa S (sek)
+    n = (f + g + h + u) * k                 # Summa D (sek)
+    o = (i + u) * k                         # Summa TP (sek)
+    p = (c + d + e + f + g + h + i + u) * l # Summa Vila (sek)
 
-    q_sec = m + n + o + p
+    # Extra tid från Älskar: 30 min per enhet = 1800 sek
+    extra_alskar_sec = alskar * 1800
+
+    # Total tid i sekunder (inkluderar Älskar)
+    q_sec = m + n + o + p + extra_alskar_sec
     q_hours = q_sec / 3600.0
 
-    # Klockan: (7 + 3 + q + 1) → visa HH:MM
+    # Klockan (7 + 3 + q + 1) → presenteras HH:MM
     klockan_str = (
         datetime.combine(rad_datum, starttid)
-        + timedelta(hours=3) + timedelta(hours=q_hours) + timedelta(hours=1)
+        + timedelta(hours=3)
+        + timedelta(hours=q_hours)
+        + timedelta(hours=1)
     ).strftime("%H:%M")
 
     # Summa tid som text
@@ -81,9 +93,10 @@ def beräkna_radvärden(rad_in: dict, rad_datum: date, födelsedatum: date, star
     # Övrigt
     z = u + c
     z_safe = z if z > 0 else 1
-    ac = 10800 / max(c, 1)       # Hångel
-    ad = (n * 0.65) / z_safe     # Suger
-    ae = (c + d + e + f + g + h + i + u)  # Prenumeranter (NU MED U)
+
+    ac = 10800 / max(c, 1)   # Hångel
+    ad = (n * 0.65) / z_safe # Suger (obs: bygger på uppdaterat N)
+    ae = (c + d + e + f + g + h + i + u)  # Prenumeranter (MED U)
     af = 15
     ag = ae * af
     ah = c * 120
@@ -96,6 +109,7 @@ def beräkna_radvärden(rad_in: dict, rad_datum: date, födelsedatum: date, star
     elif 26 <= ålder <= 30: faktor = 1.10
     elif 31 <= ålder <= 40: faktor = 1.00
     else:                    faktor = 0.90
+
     aj_base = max(150, min(800, ae * 0.10))
     aj = max(150, min(800, aj_base * faktor))  # Lön Malin
 
@@ -106,11 +120,26 @@ def beräkna_radvärden(rad_in: dict, rad_datum: date, födelsedatum: date, star
 
     return {
         **rad_in,
-        "Summa S": m, "Summa D": n, "Summa TP": o, "Summa Vila": p,
-        "Summa tid": summa_tid_str, "Summa tid (sek)": q_sec,
-        "Klockan": klockan_str, "Känner": u, "Totalt Män": z,
+        "Summa S": m,
+        "Summa D": n,
+        "Summa TP": o,
+        "Summa Vila": p,
+        "Summa tid (sek)": q_sec,
+        "Summa tid": summa_tid_str,
+        "Klockan": klockan_str,
+        "Känner": u,
+        "Totalt Män": z,
         "Tid kille": ((m / z_safe) + (n / z_safe) + (o / z_safe) + ad) / 60,
-        "Hångel": ac, "Suger": ad, "Prenumeranter": ae, "Avgift": af, "Intäkter": ag,
-        "Intäkt män": ah, "Intäkt Känner": ai, "Lön Malin": aj, "Intäkt Företaget": ak,
-        "Vinst": al, "Känner Sammanlagt": u, "Hårdhet": hårdhet
+        "Hångel": ac,
+        "Suger": ad,
+        "Prenumeranter": ae,
+        "Avgift": af,
+        "Intäkter": ag,
+        "Intäkt män": ah,
+        "Intäkt Känner": ai,
+        "Lön Malin": aj,
+        "Intäkt Företaget": ak,
+        "Vinst": al,
+        "Känner Sammanlagt": u,
+        "Hårdhet": hårdhet
     }
