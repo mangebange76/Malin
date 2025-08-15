@@ -4,14 +4,13 @@ from google.oauth2.service_account import Credentials
 from datetime import date, time, datetime, timedelta
 import time as _time
 import random
-import pandas as pd
 
-# ===================== Import av extern beräkning (om finns) =====================
+# ===================== Import av extern beräkning =====================
+# I berakningar.py ska funktionen heta: berakna_radvarden(rad_in, rad_datum, födelsedatum, starttid)
 try:
-    # I din berakningar.py ska funktionen heta berakna_radvarden (utan prickar).
-    from berakningar import berakna_radvarden as ext_calc_row
+    from berakningar import berakna_radvarden as calc_row_values
 except Exception:
-    ext_calc_row = None
+    calc_row_values = None
 
 # ============================== App-inställningar ===============================
 st.set_page_config(page_title="Malin", layout="centered")
@@ -146,8 +145,11 @@ CFG = st.session_state["CFG"]
 
 startdatum = st.sidebar.date_input("Historiskt startdatum", value=_clamp(CFG["startdatum"], MIN_START, date(2100,1,1)))
 starttid   = st.sidebar.time_input("Starttid", value=CFG["starttid"])
-födelsedatum = st.sidebar.date_input("Malins födelsedatum", value=_clamp(CFG["födelsedatum"], MIN_FOD, date.today()),
-                                     min_value=MIN_FOD, max_value=date.today())
+födelsedatum = st.sidebar.date_input(
+    "Malins födelsedatum",
+    value=_clamp(CFG["födelsedatum"], MIN_FOD, date.today()),
+    min_value=MIN_FOD, max_value=date.today()
+)
 
 st.sidebar.subheader("Maxvärden (Auto-Max med varning)")
 max_p  = st.sidebar.number_input("Max Pappans vänner", min_value=0, step=1, value=int(CFG["MAX_PAPPAN"]))
@@ -237,117 +239,7 @@ if nils_vänner > st.session_state.MAX_NILS_VANNER:
 if nils_familj > st.session_state.MAX_NILS_FAMILJ:
     st.markdown(f"<span style='color:#d00'>⚠️ {nils_familj} > max {st.session_state.MAX_NILS_FAMILJ}</span>", unsafe_allow_html=True)
 
-# =========================== Fallback-beräkning (lokal) =========================
-def _fallback_calc(grund: dict, rad_datum: date, fod: date, starttid: time) -> dict:
-    # Alias
-    c = int(grund.get("Män", 0))
-    d = int(grund.get("Fitta", 0))
-    e = int(grund.get("Rumpa", 0))
-    f = int(grund.get("DP", 0))
-    g = int(grund.get("DPP", 0))
-    h = int(grund.get("DAP", 0))
-    i = int(grund.get("TAP", 0))
-    j = int(grund.get("Tid S", 0))
-    k = int(grund.get("Tid D", 0))
-    l = int(grund.get("Vila", 0))
-    alskar    = int(grund.get("Älskar", 0))
-    sover_med = int(grund.get("Sover med", 0))
-    if sover_med < 0: sover_med = 0
-    if sover_med > 1: sover_med = 1
-
-    # U = Känner
-    u = int(grund.get("Pappans vänner",0)) + int(grund.get("Grannar",0)) + int(grund.get("Nils vänner",0)) + int(grund.get("Nils familj",0))
-
-    # Summor inkl U
-    m = (c + d + e + u) * j                 # Summa S (sek)
-    n = (f + g + h + u) * k                 # Summa D (sek)
-    o = (i + u) * k                         # Summa TP (sek)
-    p = (c + d + e + f + g + h + i + u) * l # Summa Vila (sek)
-
-    # Extra tid
-    extra_alskar_sec    = alskar * 1800
-    extra_sover_med_sec = sover_med * 3600
-
-    # Total tid
-    q_sec = m + n + o + p + extra_alskar_sec + extra_sover_med_sec
-    q_hours = q_sec / 3600.0
-
-    # Klockan (7 + 3 + q + 1) → HH:MM från starttid
-    klockan_str = (
-        datetime.combine(rad_datum, starttid)
-        + timedelta(hours=3)
-        + timedelta(hours=q_hours)
-        + timedelta(hours=1)
-    ).strftime("%H:%M")
-
-    # Totalt män Z = Män + U (exkl. älskar / sover med)
-    z = u + c
-    z_safe = z if z > 0 else 1
-
-    # Tid per kille (sek): M/Z + N/(Z*2) + O/(Z*3)
-    if z > 0:
-        tid_per_kille_sec = int(round(m / z + n / (z * 2) + o / (z * 3)))
-    else:
-        tid_per_kille_sec = 0
-
-    # Övrig ekonomi (som tidigare)
-    ac = 10800 / max(c, 1)   # Hångel
-    ad = (n * 0.65) / z_safe # Suger
-    ae = (c + d + e + f + g + h + i + u)  # Prenumeranter
-    af = 15
-    ag = ae * af
-    ah = c * 120
-
-    # Ålder + lön
-    alder = rad_datum.year - fod.year - ((rad_datum.month,rad_datum.day) < (fod.month,fod.day))
-    if alder < 18:
-        raise ValueError("Ålder < 18 — spärrad rad.")
-    if   18 <= alder <= 25: faktor = 1.20
-    elif 26 <= alder <= 30: faktor = 1.10
-    elif 31 <= alder <= 40: faktor = 1.00
-    else:                    faktor = 0.90
-    aj_base = max(150, min(800, ae * 0.10))
-    aj = max(150, min(800, aj_base * faktor))
-
-    ai = (aj + 120) * u
-    ak = ag * 0.20
-    al = ag - ah - ai - aj - ak
-    hardhet = (2 if f > 0 else 0) + (3 if g > 0 else 0) + (5 if h > 0 else 0) + (7 if i > 0 else 0)
-
-    return {
-        **grund,
-        "Känner": u,
-        "Summa S": m, "Summa D": n, "Summa TP": o, "Summa Vila": p,
-        "Tid Älskar (sek)": extra_alskar_sec, "Tid Älskar": _hm_str_from_seconds(extra_alskar_sec),
-        "Tid Sover med (sek)": extra_sover_med_sec, "Tid Sover med": _hm_str_from_seconds(extra_sover_med_sec),
-        "Summa tid (sek)": q_sec, "Summa tid": _hm_str_from_seconds(q_sec),
-        "Klockan": klockan_str,
-        "Totalt Män": z,
-        "Tid per kille (sek)": tid_per_kille_sec, "Tid per kille": _ms_str_from_seconds(tid_per_kille_sec),
-        "Tid kille": ((m / z_safe) + (n / z_safe) + (o / z_safe) + ad) / 60,
-        "Hångel": ac, "Suger": ad, "Prenumeranter": ae, "Avgift": af, "Intäkter": ag, "Intäkt män": ah,
-        "Intäkt Känner": ai, "Lön Malin": aj, "Intäkt Företaget": ak, "Vinst": al, "Känner Sammanlagt": u, "Hårdhet": hardhet
-    }
-
-def _calc_row(grund, rad_datum, fod, starttid):
-    """Använd extern beräkning om den finns & returnerar nycklarna, annars fallback."""
-    if callable(ext_calc_row):
-        try:
-            out = ext_calc_row(grund, rad_datum, fod, starttid)
-            # Säkerställ kritiska nycklar – fyll i via fallback om något saknas
-            must_keys = ["Summa tid (sek)","Summa tid","Tid per kille (sek)","Tid per kille","Totalt Män","Klockan",
-                         "Summa S","Summa D","Summa TP","Summa Vila","Känner"]
-            if any(k not in out for k in must_keys):
-                fb = _fallback_calc(grund, rad_datum, fod, starttid)
-                out = {**fb, **out}
-            return out
-        except Exception as e:
-            st.warning(f"Extern beräkning kastade fel ({e}). Använder fallback.")
-            return _fallback_calc(grund, rad_datum, fod, starttid)
-    else:
-        return _fallback_calc(grund, rad_datum, fod, starttid)
-
-# ============================== Förhandsberäkning ===============================
+# ============================ Live-förhandsberäkning ===========================
 scen = next_scene_number()
 rad_datum, veckodag = datum_och_veckodag_för_scen(scen)
 
@@ -360,11 +252,18 @@ grund_preview = {
     "Nils vänner": nils_vänner, "Nils familj": nils_familj, "Nils": nils
 }
 
-try:
-    preview = _calc_row(grund_preview, rad_datum, födelsedatum, starttid)
-except Exception as e:
-    st.warning(f"Förhandsberäkning misslyckades: {e}")
-    preview = {}
+def _calc_preview(grund):
+    try:
+        if callable(calc_row_values):
+            return calc_row_values(grund, rad_datum, födelsedatum, starttid)
+        else:
+            st.error("Hittar inte berakningar.py eller berakna_radvarden().")
+            return {}
+    except Exception as e:
+        st.warning(f"Förhandsberäkning misslyckades: {e}")
+        return {}
+
+preview = _calc_preview(grund_preview)
 
 st.markdown("---")
 st.subheader("🔎 Förhandsvisning (innan spar)")
@@ -401,7 +300,7 @@ def _parse_date(d):
 
 def _save_row(grund, rad_datum, veckodag):
     try:
-        ber = _calc_row(grund, rad_datum, födelsedatum, starttid)
+        ber = calc_row_values(grund, rad_datum, födelsedatum, starttid)
     except Exception as e:
         st.error(f"Beräkningen misslyckades vid sparning: {e}")
         return
