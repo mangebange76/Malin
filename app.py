@@ -1,18 +1,24 @@
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
+from datetime import datetime
 
 try:
-    from berakningar import beräkna_radvärden
+    from berakningar import berakna_radvärden
 except Exception:
-    beräkna_radvärden = None  # appen startar även om filen saknas
+    berakna_radvärden = None  # Appen startar även om filen saknas
 
+# ---- Sidinställning ----
 st.set_page_config(page_title="Malin", layout="centered")
 st.title("Malin-produktionsapp")
 
-# ---------- 1) Auth: ENBART Sheets-scope (ingen Drive) ----------
+# ---- Google Sheets Auth ----
 def get_client():
-    SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+    """Skapar gspread-klient med breda scopes (Sheets + Drive)."""
+    SCOPES = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
     creds = Credentials.from_service_account_info(
         dict(st.secrets["GOOGLE_CREDENTIALS"]), scopes=SCOPES
     )
@@ -20,150 +26,158 @@ def get_client():
 
 client = get_client()
 
-# ---------- 2) Öppna arket UTAN Drive API ----------
+# ---- Öppna arket ----
 def resolve_sheet(gc):
-    sheet = None
-    err = None
-
-    # 1) Via full URL (rekommenderas)
-    url = st.secrets.get("SHEET_URL", "").strip()
-    if url:
+    """
+    Försöker öppna arket i prioriterad ordning:
+    SHEET_URL → GOOGLE_SHEET_ID → SHEET_NAME → fallback-namn 'MalinData2'
+    """
+    # 1) Via full URL
+    if "SHEET_URL" in st.secrets:
         try:
-            sheet = gc.open_by_url(url).sheet1
-            st.caption("🔗 Öppnade Google Sheet via SHEET_URL (open_by_url).")
-            return sheet
+            sh = gc.open_by_url(st.secrets["SHEET_URL"])
+            st.caption("🔗 Öppnade Google Sheet via SHEET_URL.")
+            return sh.sheet1
         except Exception as e:
-            err = e
             st.warning(f"Kunde inte öppna via SHEET_URL: {e}")
 
-    # 2) Via ID (om du vill undvika att lagra full URL)
-    sheet_id = st.secrets.get("GOOGLE_SHEET_ID", "").strip()
-    if sheet_id:
+    # 2) Via ID
+    if "GOOGLE_SHEET_ID" in st.secrets:
         try:
-            sheet = gc.open_by_key(sheet_id).sheet1
-            st.caption("🆔 Öppnade Google Sheet via GOOGLE_SHEET_ID (open_by_key).")
-            return sheet
+            sh = gc.open_by_key(st.secrets["GOOGLE_SHEET_ID"])
+            st.caption("🆔 Öppnade Google Sheet via GOOGLE_SHEET_ID.")
+            return sh.sheet1
         except Exception as e:
-            err = e
             st.warning(f"Kunde inte öppna via GOOGLE_SHEET_ID: {e}")
 
-    st.error(
-        "Hittade inget sätt att öppna Google Sheet utan Drive API.\n"
-        "Lägg in antingen SHEET_URL eller GOOGLE_SHEET_ID i Secrets."
-        f"\nSenaste fel: {err}"
-    )
-    st.stop()
+    # 3) Via namn
+    if "SHEET_NAME" in st.secrets:
+        try:
+            sh = gc.open(st.secrets["SHEET_NAME"])
+            st.caption("📄 Öppnade Google Sheet via SHEET_NAME.")
+            return sh.sheet1
+        except Exception as e:
+            st.warning(f"Kunde inte öppna via SHEET_NAME: {e}")
+
+    # 4) Fallback
+    try:
+        sh = gc.open("MalinData2")
+        st.caption("🪪 Öppnade Google Sheet via fallback-namnet 'MalinData2'.")
+        return sh.sheet1
+    except Exception as e:
+        st.error(
+            "Kunde inte öppna något Google Sheet.\n\n"
+            "Testade i ordning: SHEET_URL → GOOGLE_SHEET_ID → SHEET_NAME → 'MalinData2'.\n"
+            f"Fel från Google: {e}"
+        )
+        raise
 
 sheet = resolve_sheet(client)
 
-# ---------- 3) Säkerställ kolumner ----------
-KOLUMNER = [
-    "Veckodag","Scen","Män","Fitta","Rumpa","DP","DPP","DAP","TAP",
-    "Tid S","Tid D","Vila","Summa S","Summa D","Summa TP","Summa Vila","Summa tid",
-    "Klockan","Älskar","Sover med","Känner","Pappans vänner","Grannar",
-    "Nils vänner","Nils familj","Totalt Män","Tid kille","Nils",
-    "Hångel","Suger","Prenumeranter","Avgift","Intäkter","Intäkt män",
-    "Intäkt Känner","Lön Malin","Intäkt Företaget","Vinst","Känner Sammanlagt","Hårdhet"
-]
-try:
-    header = sheet.row_values(1)
-    if header != KOLUMNER:
-        sheet.clear()
-        sheet.insert_row(KOLUMNER, 1)
-        st.caption("🧱 Kolumnrubriker uppdaterade.")
-except Exception as e:
-    st.warning(f"Kunde inte säkerställa kolumner (fortsätter ändå): {e}")
+import pandas as pd
 
-# ---------- 4) Formulär ----------
-with st.form("ny_rad"):
-    st.subheader("Lägg till ny händelse")
+# ---- Säkerställ att alla kolumner finns ----
+def säkerställ_kolumner(df):
+    """Ser till att alla nödvändiga kolumner finns i rätt ordning."""
+    kolumner = [
+        "Datum", "Veckodag", "Typ", "Antal män", "Minuter per kille",
+        "Jobb", "Grannar", "Tjej PojkV", "Nils fam", "Nya män",
+        "Summa tid (h)", "Tid kille (min)", "Kvinnans lön (USD)",
+        "Malins lön (USD)", "Totalt män", "Kommentar"
+    ]
+    for kol in kolumner:
+        if kol not in df.columns:
+            df[kol] = ""
+    return df[kolumner]
 
-    män = st.number_input("Män", min_value=0, step=1, value=0)
-    fitta = st.number_input("Fitta", min_value=0, step=1, value=0)
-    rumpa = st.number_input("Rumpa", min_value=0, step=1, value=0)
-    dp = st.number_input("DP", min_value=0, step=1, value=0)
-    dpp = st.number_input("DPP", min_value=0, step=1, value=0)
-    dap = st.number_input("DAP", min_value=0, step=1, value=0)
-    tap = st.number_input("TAP", min_value=0, step=1, value=0)
-    tid_s = st.number_input("Tid S (sek)", min_value=0, step=1, value=60)
-    tid_d = st.number_input("Tid D (sek)", min_value=0, step=1, value=60)
-    vila = st.number_input("Vila (sek)", min_value=0, step=1, value=7)
-    älskar = st.number_input("Älskar", min_value=0, step=1, value=0)
-    sover_med = st.number_input("Sover med", min_value=0, step=1, value=0)
-    pappans_vänner = st.number_input("Pappans vänner", min_value=0, step=1, value=0)
-    grannar = st.number_input("Grannar", min_value=0, step=1, value=0)
-    nils_vänner = st.number_input("Nils vänner", min_value=0, step=1, value=0)
-    nils_familj = st.number_input("Nils familj", min_value=0, step=1, value=0)
-    nils = st.number_input("Nils", min_value=0, step=1, value=0)
+# ---- Läs in data från Google Sheets ----
+def hamta_data():
+    records = sheet.get_all_records()
+    df = pd.DataFrame(records)
+    df = säkerställ_kolumner(df)
+    return df
 
-    submit = st.form_submit_button("Spara")
+# ---- Spara data till Google Sheets ----
+def spara_data(df):
+    df = säkerställ_kolumner(df)
+    sheet.clear()
+    sheet.update([df.columns.values.tolist()] + df.astype(str).values.tolist())
 
-# ---------- 5) Beräkna + spara ----------
-def fallback_beräkning(rad_in):
-    # Minimal backup om berakningar.py saknas – så appen ALLTID kan spara
-    c = rad_in["Män"]; d=rad_in["Fitta"]; e=rad_in["Rumpa"]
-    f=rad_in["DP"]; g=rad_in["DPP"]; h=rad_in["DAP"]; i=rad_in["TAP"]
-    j=rad_in["Tid S"]; k=rad_in["Tid D"]; l=rad_in["Vila"]
-    m = (c+d+e)*j ; n = (f+g+h)*k ; o = i*k
-    p = (c+d+e+f+g+h+i)*l
-    q = (m+n+o+p)/3600.0
-    r = 7+3+q+1
-    u = rad_in["Pappans vänner"]+rad_in["Grannar"]+rad_in["Nils vänner"]+rad_in["Nils familj"]
-    z = u + c if (u+c)>0 else 1
-    ac = 10800/max(c,1)
-    ad = (n*0.65)/z
-    ae = (c+d+e+f+g+h+i)
-    af = 15
-    ag = ae*af
-    ah = c*120
-    aj = max(150, min(800, ae*0.10))
-    ai = (aj+120)*u
-    ak = ag*0.20
-    al = ag - ah - ai - aj - ak
-    hårdhet = (2 if f>0 else 0)+(3 if g>0 else 0)+(5 if h>0 else 0)+(7 if i>0 else 0)
-    return {
-        **rad_in,
-        "Summa S": m, "Summa D": n, "Summa TP": o, "Summa Vila": p, "Summa tid": q, "Klockan": r,
-        "Känner": u, "Totalt Män": u+c, "Tid kille": ((m/z)+(n/z)+(o/z)+ad)/60,
-        "Hångel": ac, "Suger": ad, "Prenumeranter": ae, "Avgift": af, "Intäkter": ag,
-        "Intäkt män": ah, "Intäkt Känner": ai, "Lön Malin": aj, "Intäkt Företaget": ak,
-        "Vinst": al, "Känner Sammanlagt": u, "Hårdhet": hårdhet
-    }
-
-if submit:
-    # Nästa veckodag + scen
-    try:
-        all_vals = sheet.get_all_values()
-        scen = max(1, len(all_vals))  # nästa radnummer
-        veckodagar = ["Lördag","Söndag","Måndag","Tisdag","Onsdag","Torsdag","Fredag"]
-        veckodag = veckodagar[(scen-1) % 7]
-    except Exception:
-        scen, veckodag = 1, "Lördag"
-
-    grund = {
-        "Veckodag": veckodag, "Scen": scen,
-        "Män": män, "Fitta": fitta, "Rumpa": rumpa, "DP": dp, "DPP": dpp, "DAP": dap, "TAP": tap,
-        "Tid S": tid_s, "Tid D": tid_d, "Vila": vila,
-        "Älskar": älskar, "Sover med": sover_med,
-        "Pappans vänner": pappans_vänner, "Grannar": grannar,
-        "Nils vänner": nils_vänner, "Nils familj": nils_familj, "Nils": nils
-    }
-
-    # Försök med din modul; annars fallback
-    if beräkna_radvärden:
-        try:
-            ber = beräkna_radvärden(grund)
-        except Exception as e:
-            st.warning(f"berakningar.py kastade fel ({e}). Använder fallback-beräkning.")
-            ber = fallback_beräkning(grund)
+# ---- Datum & veckodagslogik ----
+def bestäm_datum(df):
+    """Returnerar nästa datum och veckodag baserat på senaste raden i df."""
+    if df.empty or not df["Datum"].iloc[-1]:
+        startdatum = st.secrets.get("STARTDATUM", datetime.today().strftime("%Y-%m-%d"))
+        dt = datetime.strptime(startdatum, "%Y-%m-%d")
     else:
-        ber = fallback_beräkning(grund)
+        senaste = datetime.strptime(df["Datum"].iloc[-1], "%Y-%m-%d")
+        dt = senaste + pd.Timedelta(days=1)
+    veckodag = dt.strftime("%A")
+    return dt.strftime("%Y-%m-%d"), veckodag
 
-    # Lägg i rätt kolumnordning
-    rad = [ber.get(k, "") for k in KOLUMNER]
+# ---- Formulär för att lägga till rad ----
+def scenformulär(df):
+    st.subheader("➕ Lägg till ny rad")
+    datum, veckodag = bestäm_datum(df)
+    st.info(f"📅 Datum sätts automatiskt: {datum} ({veckodag})")
 
-    try:
-        sheet.append_row(rad)
-        st.success("✅ Rad sparad.")
-    except Exception as e:
-        st.error(f"Kunde inte spara raden: {e}")
+    with st.form("lägg_till_rad", clear_on_submit=True):
+        typ = st.selectbox("Typ", ["Scen", "Vila inspelningsplats", "Vilovecka hemma"])
+        antal_män = st.number_input("Antal män", min_value=0, step=1)
+        minuter_per_kille = st.number_input("Minuter per kille", min_value=0, step=1)
+        jobb = st.number_input("Jobb", min_value=0, step=1)
+        grannar = st.number_input("Grannar", min_value=0, step=1)
+        tjej_pojkv = st.number_input("Tjej PojkV", min_value=0, step=1)
+        nils_fam = st.number_input("Nils fam", min_value=0, step=1)
+        nya_män = st.number_input("Nya män", min_value=0, step=1)
+        kommentar = st.text_input("Kommentar")
+
+        sparaknapp = st.form_submit_button("💾 Spara rad")
+
+    if sparaknapp:
+        ny_rad = {
+            "Datum": datum,
+            "Veckodag": veckodag,
+            "Typ": typ,
+            "Antal män": antal_män,
+            "Minuter per kille": minuter_per_kille,
+            "Jobb": jobb,
+            "Grannar": grannar,
+            "Tjej PojkV": tjej_pojkv,
+            "Nils fam": nils_fam,
+            "Nya män": nya_män,
+            "Kommentar": kommentar
+        }
+        if berakna_radvärden:
+            ny_rad = berakna_radvärden(ny_rad)
+        df = pd.concat([df, pd.DataFrame([ny_rad])], ignore_index=True)
+        spara_data(df)
+        st.success("✅ Raden sparades!")
+    return df
+
+def main():
+    st.title("🎬 Malin Produktionsapp")
+
+    # Hämta befintliga data
+    df = hamta_data()
+
+    # Formulär för ny rad
+    df = scenformulär(df)
+
+    st.subheader("📊 Aktuell data")
+    st.dataframe(df, use_container_width=True)
+
+    # Radera rad
+    st.subheader("🗑 Ta bort rad")
+    if not df.empty:
+        rad_index = st.number_input("Ange radnummer att ta bort", min_value=0, max_value=len(df)-1, step=1)
+        if st.button("Ta bort vald rad"):
+            df = df.drop(index=rad_index).reset_index(drop=True)
+            spara_data(df)
+            st.success(f"✅ Rad {rad_index} togs bort.")
+            st.experimental_rerun()
+    else:
+        st.info("Ingen data att visa eller ta bort.")
+
+if __name__ == "__main__":
+    main()
