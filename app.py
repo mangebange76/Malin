@@ -5,6 +5,12 @@ from datetime import date, time, datetime, timedelta
 import time as _time
 import random
 
+# Försök använda din beräkningsmodul; fallback om den saknas
+try:
+    from berakningar import beräkna_radvärden
+except Exception:
+    beräkna_radvärden = None
+
 # ===================================================================
 #                      Grundinställning för appen
 # ===================================================================
@@ -39,7 +45,7 @@ def _clamp(d: date, lo: date, hi: date):
 # ===================================================================
 @st.cache_resource(show_spinner=False)
 def get_client():
-    # ENDAST Sheets-scope – funkar med open_by_key/open_by_url
+    # Endast Sheets-scope (vi undviker Drive via namn-open)
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(dict(st.secrets["GOOGLE_CREDENTIALS"]), scopes=scopes)
     return gspread.authorize(creds)
@@ -53,7 +59,6 @@ def resolve_sheet():
     1) GOOGLE_SHEET_ID (rekommenderat)
     2) SHEET_URL
     3) ?sheet=<id|url> som query-param
-    OBS: Vi ANVÄNDER INTE gc.open(<name>) för att undvika Drive API.
     """
     sid = st.secrets.get("GOOGLE_SHEET_ID", "").strip() if "GOOGLE_SHEET_ID" in st.secrets else ""
     if sid:
@@ -209,29 +214,27 @@ def datum_och_veckodag_för_scen(scen_nummer: int):
     return d, veckodagar[d.weekday()]
 
 # ===================================================================
-#                           Fallback-beräkning
+#                       Fallback-beräkning (om modul saknas)
 # ===================================================================
 def fallback_beräkning(rad_in, rad_datum, födelsedatum, starttid):
-    # Extrahera
+    # Samma logik som i berakningar.py (synkad)
     c = int(rad_in["Män"]); d=int(rad_in["Fitta"]); e=int(rad_in["Rumpa"])
     f = int(rad_in["DP"]); g=int(rad_in["DPP"]); h=int(rad_in["DAP"]); i=int(rad_in["TAP"])
     j = int(rad_in["Tid S"]); k=int(rad_in["Tid D"]); l=int(rad_in["Vila"])
+    u = int(rad_in["Pappans vänner"]) + int(rad_in["Grannar"]) + int(rad_in["Nils vänner"]) + int(rad_in["Nils familj"])
 
-    # Grundsummor
-    m = (c+d+e)*j
-    n = (f+g+h)*k
-    o = i*k
-    p = (c+d+e+f+g+h+i)*l
+    m = (c + d + e + u) * j
+    n = (f + g + h + u) * k
+    o = (i + u) * k
+    p = (c + d + e + f + g + h + i + u) * l
 
-    q_sec = m+n+o+p
+    q_sec = m + n + o + p
     q_hours = q_sec/3600.0
 
-    # Klockan (7 + 3 + q + 1) → visar HH:MM för tydlighet
     klockan_str = (datetime.combine(rad_datum, starttid)
                    + timedelta(hours=3) + timedelta(hours=q_hours) + timedelta(hours=1)
                    ).strftime("%H:%M")
 
-    # Summa tid: "xh y min"
     h_t = int(q_sec//3600)
     m_t = int(round((q_sec%3600)/60.0))
     if m_t == 60:
@@ -239,23 +242,21 @@ def fallback_beräkning(rad_in, rad_datum, födelsedatum, starttid):
         m_t = 0
     summa_tid_str = f"{h_t}h {m_t} min"
 
-    # Övriga fält
-    u = int(rad_in["Pappans vänner"]) + int(rad_in["Grannar"]) + int(rad_in["Nils vänner"]) + int(rad_in["Nils familj"])
     z = u + c
     z_safe = z if z > 0 else 1
-    ac = 10800/max(c,1)
-    ad = (n*0.65)/z_safe
-    ae = (c+d+e+f+g+h+i)
+    ac = 10800 / max(c, 1)
+    ad = (n * 0.65) / z_safe
+    ae = (c + d + e + f + g + h + i + u)  # MED U
     af = 15
-    ag = ae*af
-    ah = c*120
+    ag = ae * af
+    ah = c * 120
 
-    # Lön Malin – åldersfaktor
-    ålder = rad_datum.year - födelsedatum.year - ((rad_datum.month,rad_datum.day)<(födelsedatum.month,födelsedatum.day))
+    ålder = rad_datum.year - födelsedatum.year - ((rad_datum.month,rad_datum.day) < (födelsedatum.month,födelsedatum.day))
     if ålder < 18:
         raise ValueError("Ålder < 18 — spärrad rad.")
     faktor = 1.20 if 18<=ålder<=25 else 1.10 if 26<=ålder<=30 else 1.00 if 31<=ålder<=40 else 0.90
-    aj = max(150, min(800, max(150, min(800, ae*0.10)) * faktor))
+    aj_base = max(150, min(800, ae * 0.10))
+    aj = max(150, min(800, aj_base * faktor))
 
     ai = (aj + 120) * u
     ak = ag * 0.20
@@ -267,7 +268,7 @@ def fallback_beräkning(rad_in, rad_datum, födelsedatum, starttid):
         "Summa S": m, "Summa D": n, "Summa TP": o, "Summa Vila": p,
         "Summa tid": summa_tid_str, "Summa tid (sek)": q_sec,
         "Klockan": klockan_str, "Känner": u, "Totalt Män": z,
-        "Tid kille": ((m/z_safe)+(n/z_safe)+(o/z_safe)+ad)/60,
+        "Tid kille": ((m / z_safe) + (n / z_safe) + (o / z_safe) + ad) / 60,
         "Hångel": ac, "Suger": ad, "Prenumeranter": ae, "Avgift": af, "Intäkter": ag,
         "Intäkt män": ah, "Intäkt Känner": ai, "Lön Malin": aj, "Intäkt Företaget": ak,
         "Vinst": al, "Känner Sammanlagt": u, "Hårdhet": hårdhet
@@ -294,7 +295,6 @@ with st.form("ny_rad"):
     älskar    = st.number_input("Älskar",     min_value=0, step=1, value=0)
     sover_med = st.number_input("Sover med",  min_value=0, step=1, value=0)
 
-    # Etiketter med aktuella max (från session_state)
     lbl_p  = f"Pappans vänner (max {st.session_state.MAX_PAPPAN})"
     lbl_g  = f"Grannar (max {st.session_state.MAX_GRANNAR})"
     lbl_nv = f"Nils vänner (max {st.session_state.MAX_NILS_VANNER})"
@@ -336,11 +336,15 @@ def _parse_date(d):
     return d if isinstance(d, date) else datetime.strptime(d, "%Y-%m-%d").date()
 
 def _save_row(grund, rad_datum, veckodag):
+    # Använd berakningar.py om den finns, annars fallback
     try:
-        ber = fallback_beräkning(grund, rad_datum, födelsedatum, starttid)
+        if callable(beräkna_radvärden):
+            ber = beräkna_radvärden(grund, rad_datum, födelsedatum, starttid)
+        else:
+            ber = fallback_beräkning(grund, rad_datum, födelsedatum, starttid)
     except Exception as e:
-        st.error(f"Beräkning stoppad: {e}")
-        return
+        st.warning(f"Beräkningsfel ({e}). Använder fallback.")
+        ber = fallback_beräkning(grund, rad_datum, födelsedatum, starttid)
 
     rad = [ber.get(k, "") for k in KOLUMNER]
     _retry_call(sheet.append_row, rad)
@@ -350,12 +354,11 @@ def _save_row(grund, rad_datum, veckodag):
     st.success(f"✅ Rad sparad. Datum {rad_datum} ({veckodag}), Ålder {ålder} år, Klockan {ber['Klockan']}")
 
 def _apply_auto_max_and_save(pending):
-    # 1) uppdatera max i session_state OCH CFG så sidopanelen visar nytt direkt
+    # 1) Uppdatera max i session_state OCH CFG (så sidopanelen visar nytt direkt)
     cfg = st.session_state.get("CFG", {})
     for _, info in pending["over_max"].items():
         new_val = int(info["new_value"])
         st.session_state[info["max_key"]] = new_val
-        # spegla till CFG-nycklar
         if info["max_key"] == "MAX_PAPPAN":
             cfg["MAX_PAPPAN"] = new_val
         elif info["max_key"] == "MAX_GRANNAR":
@@ -366,7 +369,7 @@ def _apply_auto_max_and_save(pending):
             cfg["MAX_NILS_FAMILJ"] = new_val
     st.session_state["CFG"] = cfg
 
-    # 2) spara exakt de inskrivna värdena
+    # 2) Spara värdena
     grund = pending["grund"]
     rad_datum = _parse_date(pending["rad_datum"])
     veckodag = pending["veckodag"]
