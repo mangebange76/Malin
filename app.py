@@ -6,7 +6,6 @@ import time as _time
 import random
 
 # ===================== Import av extern beräkning =====================
-# I berakningar.py ska funktionen heta: berakna_radvarden(rad_in, rad_datum, födelsedatum, starttid)
 try:
     from berakningar import berakna_radvarden as calc_row_values
 except Exception:
@@ -18,7 +17,6 @@ st.title("Malin-produktionsapp")
 
 # =============================== Hjälpfunktioner ================================
 def _retry_call(fn, *args, **kwargs):
-    """Exponential backoff för 429/RESOURCE_EXHAUSTED."""
     delay = 0.5
     for _ in range(6):
         try:
@@ -61,7 +59,6 @@ client = get_client()
 
 @st.cache_resource(show_spinner=False)
 def resolve_sheet():
-    """Öppna arket via ID eller URL (ingen Drive-API krävs)."""
     sid = st.secrets.get("GOOGLE_SHEET_ID", "").strip() if "GOOGLE_SHEET_ID" in st.secrets else ""
     if sid:
         st.caption("🆔 Öppnar via GOOGLE_SHEET_ID…")
@@ -72,7 +69,6 @@ def resolve_sheet():
         st.caption("🔗 Öppnar via SHEET_URL…")
         return _retry_call(client.open_by_url, url).sheet1
 
-    # Fallback via query param ?sheet=<id|url>
     qp = ""
     try:
         qp = st.experimental_get_query_params().get("sheet", [""])[0]
@@ -99,7 +95,12 @@ DEFAULT_COLUMNS = [
     "Tid per kille (sek)","Tid per kille",
     "Klockan","Älskar","Sover med","Känner","Pappans vänner","Grannar",
     "Nils vänner","Nils familj","Totalt Män","Tid kille","Nils",
-    "Hångel","Suger","Suger per kille (sek)","Prenumeranter","Avgift","Intäkter","Intäkt män",
+    # Hångel: ny sparning i sek/kille och m:s/kille (båda för statistik)
+    "Hångel (sek/kille)","Hångel (m:s/kille)",
+    # Suger (total) + per kille
+    "Hångel",  # legacy fält om du redan har data – fylls också med sek/kille
+    "Suger","Suger per kille (sek)",
+    "Prenumeranter","Avgift","Intäkter","Intäkt män",
     "Intäkt Känner","Lön Malin","Intäkt Företaget","Vinst","Känner Sammanlagt","Hårdhet"
 ]
 
@@ -185,7 +186,7 @@ st.session_state.setdefault("MAX_NILS_FAMILJ", int(CFG["MAX_NILS_FAMILJ"]))
 def _init_row_count():
     if "ROW_COUNT" not in st.session_state:
         try:
-            vals = _retry_call(sheet.col_values, 1)  # kolumn A
+            vals = _retry_call(sheet.col_values, 1)
             st.session_state.ROW_COUNT = max(0, len(vals) - 1) if (vals and vals[0] == "Veckodag") else len(vals)
         except Exception:
             st.session_state.ROW_COUNT = 0
@@ -272,6 +273,7 @@ with col1:
     st.metric("Datum / veckodag", f"{rad_datum} / {veckodag}")
     st.metric("Summa tid", preview.get("Summa tid", "-"))
     st.metric("Summa tid (sek)", int(preview.get("Summa tid (sek)", 0)))
+    st.metric("Hångel (m:s/kille)", preview.get("Hångel (m:s/kille)", "-"))
 with col2:
     st.metric("Totalt män (raden)", int(preview.get("Totalt Män", 0)))
     st.metric("Tid per kille", preview.get("Tid per kille", "-"))  # min:sek
