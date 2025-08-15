@@ -55,8 +55,9 @@ def berakna_radvarden(rad_in: dict, rad_datum: date, födelsedatum: date, startt
     - Suger per kille (sek) = Suger_total / Z.
     - Tid per kille (sek) = (S/Z) + 2*(D/Z) + 3*(TP/Z) + (Suger_total/Z), Z = Män + Känner.
     - 'Tid kille' (min) = 'Tid per kille (sek)' / 60.
+    - Hångel = 3h totalt (10 800 s) dividerat på Män → sparas som sek/kille och m:s/kille.
     - Summa tid returneras i sek och 'xh y min'. Klockan formateras HH:MM från starttid + (3h + q + 1h).
-    - Ekonomi enligt tidigare överenskommelser (Hångel, Prenumeranter, Lön, Vinst m.m.).
+    - Ekonomi enligt tidigare överenskommelser (Hångel separeras, påverkar ej summeerad tid).
     """
 
     # Indata (säkerställ int)
@@ -123,8 +124,16 @@ def berakna_radvarden(rad_in: dict, rad_datum: date, födelsedatum: date, startt
 
     tid_per_kille_str = _ms_str_from_seconds(tid_per_kille_sec)
 
-    # ----- Ekonomi -----
-    ac = 10800 / max(c, 1)   # Hångel (sek/kille)
+    # ===== HÅNGEL =====
+    # 3 timmar = 10 800 sek totalt. Dividera på MÄN (C).
+    hangel_total_sec = 10800
+    if c > 0:
+        hangel_per_kille_sec = int(round(hangel_total_sec / c))
+    else:
+        hangel_per_kille_sec = 0
+    hangel_per_kille_str = _ms_str_from_seconds(hangel_per_kille_sec)
+
+    # ----- Ekonomi (Hångel separerat, påverkar ej q) -----
     ae = (c + d + e + f + g + h + i + u)  # Prenumeranter (med U)
     af = 15
     ag = ae * af
@@ -170,8 +179,10 @@ def berakna_radvarden(rad_in: dict, rad_datum: date, födelsedatum: date, startt
         "Tid per kille (sek)": tid_per_kille_sec,
         "Tid per kille": tid_per_kille_str,  # min:sek
         "Tid kille": tid_per_kille_sec / 60,
+        # Hångel (per kille)
+        "Hångel (sek/kille)": hangel_per_kille_sec,
+        "Hångel (m:s/kille)": hangel_per_kille_str,
         # Ekonomi
-        "Hångel": ac,
         "Prenumeranter": ae,
         "Avgift": af,
         "Intäkter": ag,
