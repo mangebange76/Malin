@@ -42,7 +42,7 @@ def _age_on_date(d: date, birth: date) -> int:
 # =========================================
 # Huvudfunktion (används av app.py)
 # =========================================
-def beräkna_radvärden(rad_in: dict, rad_datum: date, födelsedatum: date, starttid: time) -> dict:
+def berakna_radvarden(rad_in: dict, rad_datum: date, födelsedatum: date, starttid: time) -> dict:
     """
     - U (Känner) ingår i M, N, O, P.
     - Älskar → +30 min per enhet (1800 s)
@@ -171,3 +171,6 @@ def beräkna_radvärden(rad_in: dict, rad_datum: date, födelsedatum: date, star
         "Känner Sammanlagt": u,
         "Hårdhet": hårdhet
     }
+
+# Alias med prickar (om någon importerar det namnet).
+beräkna_radvärden = berakna_radvarden
