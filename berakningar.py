@@ -1,148 +1,47 @@
-from datetime import datetime, timedelta, date, time
+import pandas as pd
 
-# =========================
-# Hjälpfunktioner (rena)
-# =========================
-def _safe_int(x, default=0):
-    try:
-        return int(x)
-    except Exception:
-        return default
+def format_h_m(seconds):
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    return f"{hours}h {minutes}m"
 
-def _calc_u(rad_in: dict) -> int:
-    """
-    U = Känner = Pappans vänner + Grannar + Nils vänner + Nils familj.
-    (Dessa fält förväntas redan finnas i rad_in.)
-    """
-    return (
-        _safe_int(rad_in.get("Pappans vänner", 0)) +
-        _safe_int(rad_in.get("Grannar", 0)) +
-        _safe_int(rad_in.get("Nils vänner", 0)) +
-        _safe_int(rad_in.get("Nils familj", 0))
-    )
+def format_m_s(seconds):
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes}m {secs}s"
 
-def _hm_str_from_seconds(q_sec: int) -> str:
-    """Returnera t.ex. '4h 49 min' från ett heltal sekunder."""
-    h = q_sec // 3600
-    m = round((q_sec % 3600) / 60)
-    if m == 60:
-        h += 1
-        m = 0
-    return f"{int(h)}h {int(m)} min"
+def berakna_radvarden(row):
+    # Hämta indata (0 om ej angivet)
+    summa_s = pd.to_numeric(row.get("Summa S (sek)", 0), errors="coerce") or 0
+    summa_d = pd.to_numeric(row.get("Summa D (sek)", 0), errors="coerce") or 0
+    summa_t = pd.to_numeric(row.get("Summa T (sek)", 0), errors="coerce") or 0
+    känner = pd.to_numeric(row.get("Känner", 0), errors="coerce") or 0
+    män = pd.to_numeric(row.get("Män", 0), errors="coerce") or 0
+    älskar = pd.to_numeric(row.get("Älskar", 0), errors="coerce") or 0
+    sover_med = pd.to_numeric(row.get("Sover med", 0), errors="coerce") or 0
 
-def _age_on_date(d: date, birth: date) -> int:
-    return d.year - birth.year - ((d.month, d.day) < (birth.month, birth.day))
+    # Totalt antal män för tid per kille (män + känner, ej älskar/sover med)
+    totalt_män = män + känner
 
+    # Tid från älskar (30 min per älskar)
+    tid_alskar = älskar * 30 * 60
 
-# =========================================
-# Huvudfunktion (används av app.py)
-# =========================================
-def beräkna_radvärden(rad_in: dict, rad_datum: date, födelsedatum: date, starttid: time) -> dict:
-    """
-    Beräknar alla radfält enligt överenskommen logik.
+    # Tid från sover med (1h per rad med värde 1)
+    tid_sover = sover_med * 60 * 60
 
-    - U (Känner) ingår i M, N, O, P.
-    - Älskar bidrar med extra tid: Älskar × 30 minuter (1800 s per enhet) till totalen.
-    - Sover med bidrar med extra tid: Sover med × 60 minuter (3600 s per enhet) till totalen.
-    - AE (Prenumeranter) inkluderar U.
-    - Summa tid returneras i både sekunder och som 'xh y min'.
-    - Klockan beräknas som 7 + 3 + q + 1 (q i timmar) och presenteras HH:MM.
-    """
+    # Summa total tid (sek)
+    total_tid_sec = summa_s + summa_d + summa_t + tid_alskar + tid_sover
 
-    # Indata (säkra int)
-    c = _safe_int(rad_in.get("Män", 0))
-    d = _safe_int(rad_in.get("Fitta", 0))
-    e = _safe_int(rad_in.get("Rumpa", 0))
-    f = _safe_int(rad_in.get("DP", 0))
-    g = _safe_int(rad_in.get("DPP", 0))
-    h = _safe_int(rad_in.get("DAP", 0))
-    i = _safe_int(rad_in.get("TAP", 0))
+    # Tid per kille (sek)
+    tid_per_kille_sec = 0
+    if totalt_män > 0:
+        tid_per_kille_sec = (summa_s / totalt_män) + (summa_d / (totalt_män * 2)) + (summa_t / (totalt_män * 3))
 
-    j = _safe_int(rad_in.get("Tid S", 0))  # sek
-    k = _safe_int(rad_in.get("Tid D", 0))  # sek
-    l = _safe_int(rad_in.get("Vila", 0))   # sek
+    # Spara beräknade fält
+    row["Totalt Män"] = totalt_män
+    row["Summa tid (sek)"] = total_tid_sec
+    row["Summa tid"] = format_h_m(total_tid_sec)
+    row["Tid per kille (sek)"] = tid_per_kille_sec
+    row["Tid per kille"] = format_m_s(tid_per_kille_sec)
 
-    alskar     = _safe_int(rad_in.get("Älskar", 0))      # antal → 30 min/st
-    sover_med  = _safe_int(rad_in.get("Sover med", 0))   # antal → 60 min/st
-
-    # U = Känner (summa av relationsfälten)
-    u = _calc_u(rad_in)
-
-    # Summor – inkluderar U
-    m = (c + d + e + u) * j                 # Summa S (sek)
-    n = (f + g + h + u) * k                 # Summa D (sek)
-    o = (i + u) * k                         # Summa TP (sek)
-    p = (c + d + e + f + g + h + i + u) * l # Summa Vila (sek)
-
-    # Extra tid från Älskar & Sover med
-    extra_alskar_sec   = alskar * 1800      # 30 min/st
-    extra_sover_med_sec= sover_med * 3600   # 60 min/st
-
-    # Total tid i sekunder (inkluderar Älskar & Sover med)
-    q_sec = m + n + o + p + extra_alskar_sec + extra_sover_med_sec
-    q_hours = q_sec / 3600.0
-
-    # Klockan (7 + 3 + q + 1) → presenteras HH:MM
-    klockan_str = (
-        datetime.combine(rad_datum, starttid)
-        + timedelta(hours=3)
-        + timedelta(hours=q_hours)
-        + timedelta(hours=1)
-    ).strftime("%H:%M")
-
-    # Summa tid som text
-    summa_tid_str = _hm_str_from_seconds(q_sec)
-
-    # Övrigt
-    z = u + c
-    z_safe = z if z > 0 else 1
-
-    ac = 10800 / max(c, 1)   # Hångel
-    ad = (n * 0.65) / z_safe # Suger (obs: bygger på uppdaterat N)
-    ae = (c + d + e + f + g + h + i + u)  # Prenumeranter (MED U)
-    af = 15
-    ag = ae * af
-    ah = c * 120
-
-    # Lön Malin – ålder & faktor
-    ålder = _age_on_date(rad_datum, födelsedatum)
-    if ålder < 18:
-        raise ValueError("Ålder < 18 — spärrad rad.")
-    if   18 <= ålder <= 25: faktor = 1.20
-    elif 26 <= ålder <= 30: faktor = 1.10
-    elif 31 <= ålder <= 40: faktor = 1.00
-    else:                    faktor = 0.90
-
-    aj_base = max(150, min(800, ae * 0.10))
-    aj = max(150, min(800, aj_base * faktor))  # Lön Malin
-
-    ai = (aj + 120) * u        # Intäkt Känner
-    ak = ag * 0.20             # Intäkt Företaget
-    al = ag - ah - ai - aj - ak# Vinst
-    hårdhet = (2 if f > 0 else 0) + (3 if g > 0 else 0) + (5 if h > 0 else 0) + (7 if i > 0 else 0)
-
-    return {
-        **rad_in,
-        "Summa S": m,
-        "Summa D": n,
-        "Summa TP": o,
-        "Summa Vila": p,
-        "Summa tid (sek)": q_sec,
-        "Summa tid": summa_tid_str,
-        "Klockan": klockan_str,
-        "Känner": u,
-        "Totalt Män": z,
-        "Tid kille": ((m / z_safe) + (n / z_safe) + (o / z_safe) + ad) / 60,
-        "Hångel": ac,
-        "Suger": ad,
-        "Prenumeranter": ae,
-        "Avgift": af,
-        "Intäkter": ag,
-        "Intäkt män": ah,
-        "Intäkt Känner": ai,
-        "Lön Malin": aj,
-        "Intäkt Företaget": ak,
-        "Vinst": al,
-        "Känner Sammanlagt": u,
-        "Hårdhet": hårdhet
-    }
+    return row
