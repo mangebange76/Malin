@@ -5,28 +5,28 @@ from datetime import datetime
 try:
     from berakningar import beräkna_radvärden
 except Exception:
-    beräkna_radvärden = None  # appen startar även om filen saknas
+    berakna_radvärden = None  # appen startar även om filen saknas
 
 st.set_page_config(page_title="Malin", layout="centered")
 st.title("Malin-produktionsapp")
 
-# ---------- 1) Auth: använd samma upplägg som dina fungerande appar ----------
+# ---------- 1) Auth: breda scopes (Sheets + Drive) ----------
 def get_client():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    try:
-        creds = Credentials.from_service_account_info(
-            dict(st.secrets["GOOGLE_CREDENTIALS"]), scopes=scopes
-        )
-    except KeyError as e:
-        st.error("GOOGLE_CREDENTIALS saknas i secrets. Öppna Settings → Secrets och klistra in blocket.")
-        raise
+    # Viktigt: Drive-scope behövs för open() via namn och vissa gspread-anrop.
+    SCOPES = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = Credentials.from_service_account_info(
+        dict(st.secrets["GOOGLE_CREDENTIALS"]), scopes=SCOPES
+    )
     return gspread.authorize(creds)
 
 client = get_client()
 
-# ---------- 2) Hitta arket på flera sätt (robust) ----------
+# ---------- 2) Hitta arket på flera sätt (oförändrad logik, nu med rätt scopes) ----------
 def resolve_sheet(gc):
-    # Prioritet 1: FULL URL
+    # 1) Full URL
     if "SHEET_URL" in st.secrets:
         try:
             sh = gc.open_by_url(st.secrets["SHEET_URL"])
@@ -35,7 +35,7 @@ def resolve_sheet(gc):
         except Exception as e:
             st.warning(f"Kunde inte öppna via SHEET_URL: {e}")
 
-    # Prioritet 2: BARA ID
+    # 2) Bara ID
     if "GOOGLE_SHEET_ID" in st.secrets:
         try:
             sh = gc.open_by_key(st.secrets["GOOGLE_SHEET_ID"])
@@ -44,7 +44,7 @@ def resolve_sheet(gc):
         except Exception as e:
             st.warning(f"Kunde inte öppna via GOOGLE_SHEET_ID: {e}")
 
-    # Prioritet 3: NAMN
+    # 3) Namn
     if "SHEET_NAME" in st.secrets:
         try:
             sh = gc.open(st.secrets["SHEET_NAME"])
@@ -53,7 +53,7 @@ def resolve_sheet(gc):
         except Exception as e:
             st.warning(f"Kunde inte öppna via SHEET_NAME: {e}")
 
-    # Prioritet 4: Fallback på titeln du sa att du använder
+    # 4) Fallback på det namn du använder
     try:
         sh = gc.open("MalinData2")
         st.caption("🪪 Öppnade Google Sheet via fallback-namnet 'MalinData2'.")
@@ -68,7 +68,7 @@ def resolve_sheet(gc):
 
 sheet = resolve_sheet(client)
 
-# ---------- 3) Säkerställ kolumner (utan att stoppa appen) ----------
+# ---------- 3) Säkerställ kolumner ----------
 KOLUMNER = [
     "Veckodag","Scen","Män","Fitta","Rumpa","DP","DPP","DAP","TAP",
     "Tid S","Tid D","Vila","Summa S","Summa D","Summa TP","Summa Vila","Summa tid",
@@ -77,7 +77,6 @@ KOLUMNER = [
     "Hångel","Suger","Prenumeranter","Avgift","Intäkter","Intäkt män",
     "Intäkt Känner","Lön Malin","Intäkt Företaget","Vinst","Känner Sammanlagt","Hårdhet"
 ]
-
 try:
     header = sheet.row_values(1)
     if header != KOLUMNER:
@@ -87,9 +86,10 @@ try:
 except Exception as e:
     st.warning(f"Kunde inte säkerställa kolumner (fortsätter ändå): {e}")
 
-# ---------- 4) Formulär (minsta möjliga för att spara en rad) ----------
+# ---------- 4) Formulär ----------
 with st.form("ny_rad"):
     st.subheader("Lägg till ny händelse")
+
     män = st.number_input("Män", min_value=0, step=1, value=0)
     fitta = st.number_input("Fitta", min_value=0, step=1, value=0)
     rumpa = st.number_input("Rumpa", min_value=0, step=1, value=0)
@@ -143,10 +143,9 @@ def fallback_beräkning(rad_in):
     }
 
 if submit:
-    # Ta reda på nästa veckodag + scen baserat på antal rader i arket
+    # Nästa veckodag + scen
     try:
         all_vals = sheet.get_all_values()
-        # rad 1 = header
         scen = max(1, len(all_vals))  # nästa radnummer
         veckodagar = ["Lördag","Söndag","Måndag","Tisdag","Onsdag","Torsdag","Fredag"]
         veckodag = veckodagar[(scen-1) % 7]
@@ -157,14 +156,15 @@ if submit:
         "Veckodag": veckodag, "Scen": scen,
         "Män": män, "Fitta": fitta, "Rumpa": rumpa, "DP": dp, "DPP": dpp, "DAP": dap, "TAP": tap,
         "Tid S": tid_s, "Tid D": tid_d, "Vila": vila,
-        "Älskar": älskar, "Sover med": sover_med, "Pappans vänner": pappans_vänner,
-        "Grannar": grannar, "Nils vänner": nils_vänner, "Nils familj": nils_familj, "Nils": nils
+        "Älskar": älskar, "Sover med": sover_med,
+        "Pappans vänner": pappans_vänner, "Grannar": grannar,
+        "Nils vänner": nils_vänner, "Nils familj": nils_familj, "Nils": nils
     }
 
-    # Beräkna med din modul om den finns – annars fallback
-    if beräkna_radvärden:
+    # Försök med din modul; annars fallback
+    if berakna_radvärden:
         try:
-            ber = beräkna_radvärden(grund)
+            ber = berakna_radvärden(grund)
         except Exception as e:
             st.warning(f"berakningar.py kastade fel ({e}). Använder fallback-beräkning.")
             ber = fallback_beräkning(grund)
@@ -179,3 +179,24 @@ if submit:
         st.success("✅ Rad sparad.")
     except Exception as e:
         st.error(f"Kunde inte spara raden: {e}")
+
+def main():
+    st.title("Malin-produktionsapp")
+
+    # Visa datan från arket
+    try:
+        data = sheet.get_all_records()
+        if data:
+            st.subheader("📊 Nuvarande data i arket")
+            st.dataframe(data)
+        else:
+            st.info("Inga rader sparade ännu.")
+    except Exception as e:
+        st.error(f"Kunde inte läsa från Google Sheet: {e}")
+        return
+
+    # Formuläret är redan definierat ovan och körs automatiskt
+    st.caption("Använd formuläret ovan för att lägga till en ny rad.")
+
+if __name__ == "__main__":
+    main()
