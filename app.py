@@ -11,7 +11,7 @@ except Exception:
 st.set_page_config(page_title="Malin", layout="centered")
 st.title("Malin-produktionsapp")
 
-# ---------- 1) Auth: ENDAST Sheets-scope (ingen Drive) ----------
+# ---------- Auth: ENDAST Sheets-scope ----------
 def get_client():
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(dict(st.secrets["GOOGLE_CREDENTIALS"]), scopes=scopes)
@@ -19,7 +19,7 @@ def get_client():
 
 client = get_client()
 
-# ---------- 2) Öppna arket via URL/ID (ingen Drive-listning) ----------
+# ---------- Öppna arket via URL/ID (ingen Drive-listning) ----------
 def _get_query_param(name, default=""):
     if hasattr(st, "query_params"):
         return st.query_params.get(name, [""])[0] if st.query_params.get(name) else default
@@ -62,10 +62,11 @@ def resolve_sheet(gc):
 
 sheet = resolve_sheet(client)
 
-# ---------- 3) Kolumnsäkring ----------
+# ---------- Kolumnsäkring ----------
 KOLUMNER = [
     "Veckodag","Scen","Män","Fitta","Rumpa","DP","DPP","DAP","TAP",
-    "Tid S","Tid D","Vila","Summa S","Summa D","Summa TP","Summa Vila","Summa tid",
+    "Tid S","Tid D","Vila","Summa S","Summa D","Summa TP","Summa Vila",
+    "Summa tid","Summa tid (sek)",
     "Klockan","Älskar","Sover med","Känner","Pappans vänner","Grannar",
     "Nils vänner","Nils familj","Totalt Män","Tid kille","Nils",
     "Hångel","Suger","Prenumeranter","Avgift","Intäkter","Intäkt män",
@@ -80,18 +81,33 @@ try:
 except Exception as e:
     st.warning(f"Kunde inte säkerställa kolumner (fortsätter ändå): {e}")
 
-# ---------- 4) Sidopanelinställningar ----------
+# ---------- Sidopanel ----------
 st.sidebar.header("Inställningar")
 startdatum = st.sidebar.date_input("Historiskt startdatum", value=date.today())
 starttid   = st.sidebar.time_input("Starttid", value=time(7, 0))
 födelsedatum = st.sidebar.date_input("Malins födelsedatum", value=date(1999,1,1))
+
+# Max-regler i session_state (för Auto-Max)
+def _init_max(key, default_val=10):
+    if key not in st.session_state:
+        st.session_state[key] = default_val
+_init_max("MAX_PAPPAN", 10)
+_init_max("MAX_GRANNAR", 10)
+_init_max("MAX_NILS_VANNER", 10)
+_init_max("MAX_NILS_FAMILJ", 10)
+
+st.sidebar.subheader("Maxvärden (Auto-Max med varning)")
+st.session_state.MAX_PAPPAN      = st.sidebar.number_input("Max Pappans vänner", min_value=0, step=1, value=st.session_state.MAX_PAPPAN)
+st.session_state.MAX_GRANNAR     = st.sidebar.number_input("Max Grannar",        min_value=0, step=1, value=st.session_state.MAX_GRANNAR)
+st.session_state.MAX_NILS_VANNER = st.sidebar.number_input("Max Nils vänner",    min_value=0, step=1, value=st.session_state.MAX_NILS_VANNER)
+st.session_state.MAX_NILS_FAMILJ = st.sidebar.number_input("Max Nils familj",    min_value=0, step=1, value=st.session_state.MAX_NILS_FAMILJ)
 
 def datum_och_veckodag_för_scen(scen_nummer: int):
     rad_datum = startdatum + timedelta(days=scen_nummer - 1)
     veckodagar = ["Måndag","Tisdag","Onsdag","Torsdag","Fredag","Lördag","Söndag"]
     return rad_datum, veckodagar[rad_datum.weekday()]
 
-# ---------- 5) Formulär ----------
+# ---------- Formulär ----------
 with st.form("ny_rad"):
     st.subheader("➕ Lägg till ny händelse")
 
@@ -110,25 +126,47 @@ with st.form("ny_rad"):
     älskar    = st.number_input("Älskar", min_value=0, step=1, value=0)
     sover_med = st.number_input("Sover med", min_value=0, step=1, value=0)
 
-    pappans_vänner = st.number_input("Pappans vänner", min_value=0, step=1, value=0)
-    grannar        = st.number_input("Grannar", min_value=0, step=1, value=0)
-    nils_vänner    = st.number_input("Nils vänner", min_value=0, step=1, value=0)
-    nils_familj    = st.number_input("Nils familj", min_value=0, step=1, value=0)
+    # Max-etiketter
+    lbl_p = f"Pappans vänner (max {st.session_state.MAX_PAPPAN})"
+    lbl_g = f"Grannar (max {st.session_state.MAX_GRANNAR})"
+    lbl_nv = f"Nils vänner (max {st.session_state.MAX_NILS_VANNER})"
+    lbl_nf = f"Nils familj (max {st.session_state.MAX_NILS_FAMILJ})"
+
+    pappans_vänner = st.number_input(lbl_p, min_value=0, step=1, value=0, key="input_pappan")
+    if pappans_vänner > st.session_state.MAX_PAPPAN:
+        st.markdown(f"<span style='color:#d00'>⚠️ {pappans_vänner} överskrider max {st.session_state.MAX_PAPPAN}</span>", unsafe_allow_html=True)
+
+    grannar = st.number_input(lbl_g, min_value=0, step=1, value=0, key="input_grannar")
+    if grannar > st.session_state.MAX_GRANNAR:
+        st.markdown(f"<span style='color:#d00'>⚠️ {grannar} överskrider max {st.session_state.MAX_GRANNAR}</span>", unsafe_allow_html=True)
+
+    nils_vänner = st.number_input(lbl_nv, min_value=0, step=1, value=0, key="input_nils_vanner")
+    if nils_vänner > st.session_state.MAX_NILS_VANNER:
+        st.markdown(f"<span style='color:#d00'>⚠️ {nils_vänner} överskrider max {st.session_state.MAX_NILS_VANNER}</span>", unsafe_allow_html=True)
+
+    nils_familj = st.number_input(lbl_nf, min_value=0, step=1, value=0, key="input_nils_familj")
+    if nils_familj > st.session_state.MAX_NILS_FAMILJ:
+        st.markdown(f"<span style='color:#d00'>⚠️ {nils_familj} överskrider max {st.session_state.MAX_NILS_FAMILJ}</span>", unsafe_allow_html=True)
 
     nils = st.number_input("Nils", min_value=0, step=1, value=0)
 
     submit = st.form_submit_button("💾 Spara")
 
-# ---------- 6) Fallback-beräkning (om modulen saknas) ----------
+# ---------- Fallback-beräkning om modulen saknas ----------
 def fallback_beräkning(rad_in, rad_datum, födelsedatum, starttid):
     c = rad_in["Män"]; d=rad_in["Fitta"]; e=rad_in["Rumpa"]
     f=rad_in["DP"]; g=rad_in["DPP"]; h=rad_in["DAP"]; i=rad_in["TAP"]
     j=rad_in["Tid S"]; k=rad_in["Tid D"]; l=rad_in["Vila"]
 
     m = (c+d+e)*j; n=(f+g+h)*k; o=i*k; p=(c+d+e+f+g+h+i)*l
-    q_hours = round((m+n+o+p)/3600.0, 1)
-    start_dt = datetime.combine(rad_datum, starttid)
-    klockan_str = (start_dt + timedelta(hours=3+q_hours+1)).strftime("%H:%M")
+    q_sec = m+n+o+p
+    q_hours = q_sec/3600.0
+    klockan_str = (datetime.combine(rad_datum, starttid) + timedelta(hours=3) + timedelta(hours=q_hours) + timedelta(hours=1)).strftime("%H:%M")
+
+    # format 'xh yy min'
+    h_t = int(q_sec//3600); m_t = int(round((q_sec%3600)/60.0))
+    if m_t == 60: h_t += 1; m_t = 0
+    summa_tid_str = f"{h_t}h {m_t} min"
 
     u = rad_in["Pappans vänner"]+rad_in["Grannar"]+rad_in["Nils vänner"]+rad_in["Nils familj"]
     z = u + c; z_safe = z if z>0 else 1
@@ -146,18 +184,68 @@ def fallback_beräkning(rad_in, rad_datum, födelsedatum, starttid):
     return {
         **rad_in,
         "Summa S": m,"Summa D": n,"Summa TP": o,"Summa Vila": p,
-        "Summa tid": q_hours,"Klockan": klockan_str,"Känner": u,"Totalt Män": z,
+        "Summa tid": summa_tid_str,
+        "Summa tid (sek)": q_sec,
+        "Klockan": klockan_str,"Känner": u,"Totalt Män": z,
         "Tid kille": ((m/z_safe)+(n/z_safe)+(o/z_safe)+ad)/60,
         "Hångel": ac,"Suger": ad,"Prenumeranter": ae,"Avgift": af,"Intäkter": ag,
         "Intäkt män": ah,"Intäkt Känner": ai,"Lön Malin": aj,"Intäkt Företaget": ak,
         "Vinst": al,"Känner Sammanlagt": u,"Hårdhet": hårdhet
     }
 
-# ---------- 7) Spara ----------
+# ---------- Auto-Max: tvåstegssparning med varning ----------
+def _store_pending(grund_dict, scen, rad_datum, veckodag, over_max_dict):
+    st.session_state["PENDING_SAVE"] = {
+        "grund": grund_dict,
+        "scen": scen,
+        "rad_datum": str(rad_datum),
+        "veckodag": veckodag,
+        "over_max": over_max_dict
+    }
+
+def _clear_pending():
+    if "PENDING_SAVE" in st.session_state:
+        del st.session_state["PENDING_SAVE"]
+
+def _parse_date(d):
+    # d kan vara date eller str
+    if isinstance(d, date):
+        return d
+    return datetime.strptime(d, "%Y-%m-%d").date()
+
+def _apply_auto_max_and_save(pending):
+    # Höj max till det nya värdet för alla övertramp
+    for key, info in pending["over_max"].items():
+        st.session_state[info["max_key"]] = info["new_value"]
+
+    # Kör beräkning & spara
+    grund = pending["grund"]
+    scen = pending["scen"]
+    rad_datum = _parse_date(pending["rad_datum"])
+    veckodag = pending["veckodag"]
+
+    # Beräkna
+    try:
+        if callable(beräkna_radvärden):
+            ber = beräkna_radvärden(grund, rad_datum, födelsedatum, starttid)
+        else:
+            ber = fallback_beräkning(grund, rad_datum, födelsedatum, starttid)
+    except Exception as e:
+        st.warning(f"Beräkning fel: {e}. Använder fallback.")
+        ber = fallback_beräkning(grund, rad_datum, födelsedatum, starttid)
+
+    # I med rätt ordning
+    rad = [ber.get(k, "") for k in KOLUMNER]
+    sheet.append_row(rad)
+
+    ålder = rad_datum.year - födelsedatum.year - ((rad_datum.month,rad_datum.day)<(födelsedatum.month,födelsedatum.day))
+    st.success(f"✅ Max uppdaterades och rad sparades. Datum {rad_datum} ({veckodag}), Ålder {ålder} år, Klockan {ber['Klockan']}")
+
+# ---------- Spara (med Auto-Max) ----------
 if submit:
     try:
         all_vals = sheet.get_all_values()
-        scen = max(1, len(all_vals))  # nästa datarad
+        scen = max(1, len(all_vals))  # nästa datarad (rad 1 = header)
     except Exception:
         scen = 1
 
@@ -172,28 +260,73 @@ if submit:
         "Nils vänner": nils_vänner, "Nils familj": nils_familj, "Nils": nils
     }
 
-    try:
-        if callable(beräkna_radvärden):
-            ber = beräkna_radvärden(grund, rad_datum, födelsedatum, starttid)
-        else:
+    # Kolla Auto-Max för de fyra fälten
+    over_max = {}
+    if pappans_vänner > st.session_state.MAX_PAPPAN:
+        over_max["Pappans vänner"] = {"current_max": st.session_state.MAX_PAPPAN, "new_value": pappans_vänner, "max_key": "MAX_PAPPAN"}
+    if grannar > st.session_state.MAX_GRANNAR:
+        over_max["Grannar"] = {"current_max": st.session_state.MAX_GRANNAR, "new_value": grannar, "max_key": "MAX_GRANNAR"}
+    if nils_vänner > st.session_state.MAX_NILS_VANNER:
+        over_max["Nils vänner"] = {"current_max": st.session_state.MAX_NILS_VANNER, "new_value": nils_vänner, "max_key": "MAX_NILS_VANNER"}
+    if nils_familj > st.session_state.MAX_NILS_FAMILJ:
+        over_max["Nils familj"] = {"current_max": st.session_state.MAX_NILS_FAMILJ, "new_value": nils_familj, "max_key": "MAX_NILS_FAMILJ"}
+
+    if over_max:
+        # Steg 1: Sätt pending och visa varning med knappar
+        _store_pending(grund, scen, rad_datum, veckodag, over_max)
+    else:
+        # Ingen överträdelse → spara direkt
+        try:
+            if callable(beräkna_radvärden):
+                ber = beräkna_radvärden(grund, rad_datum, födelsedatum, starttid)
+            else:
+                ber = fallback_beräkning(grund, rad_datum, födelsedatum, starttid)
+        except Exception as e:
+            st.warning(f"Beräkning fel: {e}. Använder fallback.")
             ber = fallback_beräkning(grund, rad_datum, födelsedatum, starttid)
-    except Exception as e:
-        st.warning(f"Beräkning fel: {e}. Använder fallback.")
-        ber = fallback_beräkning(grund, rad_datum, födelsedatum, starttid)
 
-    rad = [ber.get(k, "") for k in KOLUMNER]
-    try:
-        sheet.append_row(rad)
-        ålder = rad_datum.year - födelsedatum.year - ((rad_datum.month,rad_datum.day)<(födelsedatum.month,födelsedatum.day))
-        st.success(f"✅ Rad sparad. Datum {rad_datum} ({veckodag}), Ålder {ålder} år, Klockan {ber['Klockan']}")
-    except Exception as e:
-        st.error(f"Kunde inte spara raden: {e}")
+        rad = [ber.get(k, "") for k in KOLUMNER]
+        try:
+            sheet.append_row(rad)
+            ålder = rad_datum.year - födelsedatum.year - ((rad_datum.month,rad_datum.day)<(födelsedatum.month,födelsedatum.day))
+            st.success(f"✅ Rad sparad. Datum {rad_datum} ({veckodag}), Ålder {ålder} år, Klockan {ber['Klockan']}")
+        except Exception as e:
+            st.error(f"Kunde inte spara raden: {e}")
 
-# ---------- 8) Visa & radera ----------
+# Visa ev. Auto-Max-varning efter submit
+if "PENDING_SAVE" in st.session_state:
+    pending = st.session_state["PENDING_SAVE"]
+    lst = []
+    for f, info in pending["over_max"].items():
+        lst.append(f"- **{f}**: nuvarande max {info['current_max']}, nytt värde {info['new_value']}")
+    st.warning(
+        "Du har angivit värden som överstiger nuvarande max.\n\n"
+        + "\n".join(lst) +
+        "\n\nVill du uppdatera maxvärdena till dessa nya värden och spara raden?"
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("✅ Ja, uppdatera och spara"):
+            try:
+                _apply_auto_max_and_save(pending)
+            except Exception as e:
+                st.error(f"Kunde inte spara: {e}")
+            finally:
+                _clear_pending()
+                st.experimental_rerun()
+    with c2:
+        if st.button("✋ Nej, avbryt"):
+            _clear_pending()
+            st.info("Sparning avbröts. Justera värden eller max i sidopanelen.")
+
+# ---------- Visa & radera ----------
 st.subheader("📊 Aktuella data")
 try:
     rows = sheet.get_all_records()
     if rows:
+        show_secs = st.checkbox("Visa även 'Summa tid (sek)'", value=False)
+        if not show_secs:
+            rows = [{k: v for k, v in r.items() if k != "Summa tid (sek)"} for r in rows]
         st.dataframe(rows, use_container_width=True)
     else:
         st.info("Inga datarader ännu.")
