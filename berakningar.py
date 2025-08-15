@@ -43,6 +43,7 @@ def beräkna_radvärden(rad_in: dict, rad_datum: date, födelsedatum: date, star
 
     - U (Känner) ingår i M, N, O, P.
     - Älskar bidrar med extra tid: Älskar × 30 minuter (1800 s per enhet) till totalen.
+    - Sover med bidrar med extra tid: Sover med × 60 minuter (3600 s per enhet) till totalen.
     - AE (Prenumeranter) inkluderar U.
     - Summa tid returneras i både sekunder och som 'xh y min'.
     - Klockan beräknas som 7 + 3 + q + 1 (q i timmar) och presenteras HH:MM.
@@ -61,7 +62,8 @@ def beräkna_radvärden(rad_in: dict, rad_datum: date, födelsedatum: date, star
     k = _safe_int(rad_in.get("Tid D", 0))  # sek
     l = _safe_int(rad_in.get("Vila", 0))   # sek
 
-    alskar = _safe_int(rad_in.get("Älskar", 0))  # antal (ger tidsbonus)
+    alskar     = _safe_int(rad_in.get("Älskar", 0))      # antal → 30 min/st
+    sover_med  = _safe_int(rad_in.get("Sover med", 0))   # antal → 60 min/st
 
     # U = Känner (summa av relationsfälten)
     u = _calc_u(rad_in)
@@ -72,11 +74,12 @@ def beräkna_radvärden(rad_in: dict, rad_datum: date, födelsedatum: date, star
     o = (i + u) * k                         # Summa TP (sek)
     p = (c + d + e + f + g + h + i + u) * l # Summa Vila (sek)
 
-    # Extra tid från Älskar: 30 min per enhet = 1800 sek
-    extra_alskar_sec = alskar * 1800
+    # Extra tid från Älskar & Sover med
+    extra_alskar_sec   = alskar * 1800      # 30 min/st
+    extra_sover_med_sec= sover_med * 3600   # 60 min/st
 
-    # Total tid i sekunder (inkluderar Älskar)
-    q_sec = m + n + o + p + extra_alskar_sec
+    # Total tid i sekunder (inkluderar Älskar & Sover med)
+    q_sec = m + n + o + p + extra_alskar_sec + extra_sover_med_sec
     q_hours = q_sec / 3600.0
 
     # Klockan (7 + 3 + q + 1) → presenteras HH:MM
