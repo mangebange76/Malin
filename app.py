@@ -81,14 +81,12 @@ def _usd(x):
 # =============================== Google Sheets =================================
 @st.cache_resource(show_spinner=False)
 def get_client():
-    # Endast Sheets-scope (öppnar via ID/URL)
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(dict(st.secrets["GOOGLE_CREDENTIALS"]), scopes=scopes)
     return gspread.authorize(creds)
 
 client = get_client()
-
-WORKSHEET_TITLE = "Data"  # <<<<< Viktigt: ditt blad heter Data
+WORKSHEET_TITLE = "Data"
 
 @st.cache_resource(show_spinner=False)
 def resolve_sheet():
@@ -177,45 +175,48 @@ if view == "Statistik":
         st.warning(f"Kunde inte läsa data: {e}")
         st.stop()
 
-    # --- Basmetrik: scener, privat GB, totalt män, snitt scener, snitt privat GB ---
+    # --- Basmetrik: scener, privat GB, totalt män (män+eskilstuna), snitt scener, snitt privat GB ---
     antal_scener = 0
     privat_gb_cnt = 0
-    totalt_man = 0
+    totalt_man = 0  # summerar Män + Eskilstuna killar
     summa_for_snitt_scener = 0
     summa_privat_gb_kanner = 0
 
+    total_svarta_sum = 0
+    total_men_like_sum = 0  # män + eskilstuna + svarta (för andel svarta)
+
     for r in rows:
         man = _safe_int(r.get("Män", 0), 0)
+        esk = _safe_int(r.get("Eskilstuna killar", 0), 0)
         kanner = _safe_int(r.get("Känner", 0), 0)
+        svarta = _safe_int(r.get("Svarta", 0), 0)
 
-        if man > 0:
+        men_like = man + esk  # för scener och totals
+        men_like_plus_black = man + esk + svarta
+
+        if men_like > 0:
             antal_scener += 1
-            totalt_man += man
-            summa_for_snitt_scener += (man + kanner)
+            totalt_man += men_like
+            summa_for_snitt_scener += (men_like + kanner)
 
-        if man == 0 and kanner > 0:
+        if men_like == 0 and kanner > 0:
             privat_gb_cnt += 1
             summa_privat_gb_kanner += kanner
 
+        total_svarta_sum += svarta
+        total_men_like_sum += men_like_plus_black
+
     snitt_scener = round(summa_for_snitt_scener / antal_scener, 2) if antal_scener > 0 else 0.0
     snitt_privat_gb = round(summa_privat_gb_kanner / privat_gb_cnt, 2) if privat_gb_cnt > 0 else 0.0
+    andel_svarta_pct = round((total_svarta_sum / total_men_like_sum) * 100, 2) if total_men_like_sum > 0 else 0.0
 
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1: st.metric("Antal scener", antal_scener)
     with c2: st.metric("Privat GB", privat_gb_cnt)
-    with c3: st.metric("Totalt antal män", totalt_man)
+    with c3: st.metric("Totalt antal män", totalt_man)  # män + eskilstuna
     with c4: st.metric("Snitt scener", snitt_scener)
     with c5: st.metric("Snitt Privat GB", snitt_privat_gb)
-
-    # --- EXTRA: scener (svarta) & andel svarta ---
-    antal_scener_svarta = sum(1 for r in rows if _safe_int(r.get("Män",0))==0 and _safe_int(r.get("Svarta",0))>0)
-    total_m_plus_s = sum(_safe_int(r.get("Män",0))+_safe_int(r.get("Svarta",0)) for r in rows)
-    sum_svarta     = sum(_safe_int(r.get("Svarta",0)) for r in rows)
-    andel_svarta = (sum_svarta/total_m_plus_s*100.0) if total_m_plus_s>0 else 0.0
-
-    c6, c7 = st.columns(2)
-    with c6: st.metric("Antal scener (svarta)", antal_scener_svarta)
-    with c7: st.metric("Svarta andel av män (%)", f"{andel_svarta:.1f}%")
+    st.metric("Andel svarta av män (%)", andel_svarta_pct)
 
     # --- Snitt relativt max per källa + Totalt antal tillfällen (rel. snitt + älskar [+ sover]) ---
     max_p  = int(st.session_state.get("MAX_PAPPAN", 0))
@@ -233,7 +234,6 @@ if view == "Statistik":
     nv_avg_rel = round(nv_sum / max_nv, 2) if max_nv > 0 else 0.0
     nf_avg_rel = round(nf_sum / max_nf, 2) if max_nf > 0 else 0.0
 
-    # Snitt Älskar & Snitt Sover med (behövs för "totalt antal tillfällen")
     alskar_sum_stat = sum(_safe_int(r.get("Älskar", 0), 0) for r in rows)
     sover_sum_stat  = sum(_safe_int(r.get("Sover med", 0), 0) for r in rows)
 
@@ -307,12 +307,12 @@ if view == "Statistik":
     with ec3: st.metric("Vinst (totalt)", f"{round(total_vinst, 2)} USD")
     with ec4: st.metric("Lön Malin (totalt)", f"{round(total_lon_malin, 2)} USD")
 
-    # Snitt intäkt känner enligt din definition
+    # Snitt intäkt känner (enligt tidigare överenskommelse)
     sum_max = max_p + max_g + max_nv + max_nf
     snitt_intakt_kanner = (total_intakt_kanner + total_intakt_foretag + total_vinst) / sum_max if sum_max > 0 else 0.0
     st.metric("Snitt intäkt känner", f"{snitt_intakt_kanner:.2f} USD")
 
-    # Snitt lön = (Intäkt känner + Intäkt företag + Vinst) / (Totalt män + Älskar + Sover med)
+    # Snitt lön = (intäkt_känner + intäkt_företag + vinst) / (totalt_män (män+esk) + älskar + sover med)
     alskar_sum_all = sum(_safe_int(r.get("Älskar", 0), 0) for r in rows)
     sover_sum_all  = sum(_safe_int(r.get("Sover med", 0), 0) for r in rows)
     divisor_snitt_lon = (totalt_man + alskar_sum_all + sover_sum_all)
@@ -354,8 +354,7 @@ if view == "Statistik":
 
     denom_alskar2 = (max_p + max_g + max_nv + max_nf)
     snitt_alskar2 = round(alskar_sum / denom_alskar2, 2) if denom_alskar2 > 0 else 0.0
-    max_nf2       = max_nf
-    snitt_sover2  = round(sover_sum / max_nf2, 2) if max_nf2 > 0 else 0.0
+    snitt_sover2  = round(sover_sum / max_nf, 2) if max_nf > 0 else 0.0
 
     c_als1, c_als2, c_sov1, c_sov2 = st.columns(4)
     with c_als1: st.metric("Summa Älskar", alskar_sum)
@@ -375,7 +374,7 @@ if view == "Statistik":
     # --- Snitt tid kille / scen ---
     st.markdown("---")
     st.subheader("⏱️ Tid per kille / scen")
-    tpk_total_sec = sum(_safe_int(r.get("Tid per kille (sek)", 0)) for r in rows if _safe_int(r.get("Män", 0)) > 0)
+    tpk_total_sec = sum(_safe_int(r.get("Tid per kille (sek)", 0)) for r in rows if (_safe_int(r.get("Män", 0)) + _safe_int(r.get("Eskilstuna killar", 0))) > 0)
     tpk_avg_sec = int(round(tpk_total_sec / denom_scen)) if antal_scener > 0 else 0
     tpk_avg_label = _ms_str_from_seconds(tpk_avg_sec)
     st.metric("Snitt tid kille / scen", tpk_avg_label)
@@ -383,27 +382,20 @@ if view == "Statistik":
     # --- Snitt tid (h) per scen exkl. älskar & sover med ---
     total_sec_scen = sum(
         _safe_int(r.get("Summa tid (sek)", 0), 0)
-        for r in rows if _safe_int(r.get("Män", 0)) > 0
+        for r in rows if (_safe_int(r.get("Män", 0)) + _safe_int(r.get("Eskilstuna killar", 0))) > 0
     )
     alskar_sec_scen = sum(
         _safe_int(r.get("Tid Älskar (sek)", 0), 0)
-        for r in rows if _safe_int(r.get("Män", 0)) > 0
+        for r in rows if (_safe_int(r.get("Män", 0)) + _safe_int(r.get("Eskilstuna killar", 0))) > 0
     )
     sover_sec_scen = sum(
         _safe_int(r.get("Tid Sover med (sek)", 0), 0)
-        for r in rows if _safe_int(r.get("Män", 0)) > 0
+        for r in rows if (_safe_int(r.get("Män", 0)) + _safe_int(r.get("Eskilstuna killar", 0))) > 0
     )
     justerad_sec = max(0, total_sec_scen - alskar_sec_scen - sover_sec_scen)
     snitt_tid_h_utan_extra = (justerad_sec / 3600.0 / antal_scener) if antal_scener > 0 else 0.0
     st.session_state["SNITT_TID_H_UTAN_ALSKAR_SOVER"] = snitt_tid_h_utan_extra
     st.metric("Snitt tid (h) per scen – exkl. älskar & sover med", f"{snitt_tid_h_utan_extra:.2f} h")
-
-    # --- Extra totalsummor för Bekanta och Eskilstuna killar ---
-    sum_bekanta = sum(_safe_int(r.get("Bekanta", 0), 0) for r in rows)
-    sum_esk     = sum(_safe_int(r.get("Eskilstuna killar", 0), 0) for r in rows)
-    e1, e2 = st.columns(2)
-    with e1: st.metric("Bekanta (summa)", sum_bekanta)
-    with e2: st.metric("Eskilstuna killar (summa)", sum_esk)
 
     st.stop()
 
@@ -549,11 +541,11 @@ nils_vänner    = st.number_input(lbl_nv, min_value=0, step=1, value=0, key="inp
 nils_familj    = st.number_input(lbl_nf, min_value=0, step=1, value=0, key="input_nils_familj")
 bekanta        = st.number_input(lbl_bk, min_value=0, step=1, value=0, key="input_bekanta")
 
-eskilstuna_killar = st.number_input("Eskilstuna killar", min_value=0, step=1, value=0)
+eskilstuna_killar = st.number_input("Eskilstuna killar", min_value=0, step=1, value=0, key="input_eskilstuna")
 
 nils = st.number_input("Nils", min_value=0, step=1, value=0)
 
-# Varningsflaggor vid överskridna max
+# Varningsflaggor vid överskridna max (gäller inte Eskilstuna killar)
 if pappans_vänner > st.session_state.MAX_PAPPAN:
     st.markdown(f"<span style='color:#d00'>⚠️ {pappans_vänner} > max {st.session_state.MAX_PAPPAN}</span>", unsafe_allow_html=True)
 if grannar > st.session_state.MAX_GRANNAR:
@@ -577,8 +569,7 @@ grund_preview = {
     "DT tid (sek/kille)": dt_tid, "DT vila (sek/kille)": dt_vila,
     "Älskar": älskar, "Sover med": sover_med,
     "Pappans vänner": pappans_vänner, "Grannar": grannar,
-    "Nils vänner": nils_vänner, "Nils familj": nils_familj, "Bekanta": bekanta,
-    "Eskilstuna killar": eskilstuna_killar,
+    "Nils vänner": nils_vänner, "Nils familj": nils_familj, "Bekanta": bekanta, "Eskilstuna killar": eskilstuna_killar,
     "Nils": nils,
     "Avgift": float(CFG["avgift_usd"]),
 }
@@ -705,7 +696,7 @@ if "PENDING_SAVE" in st.session_state:
             try:
                 _apply_auto_max_and_save(pending)
             except Exception as e:
-                st.error(f"Kunde inte spara: {e}")
+                st.error(f"Kun­de inte spara: {e}")
             finally:
                 st.session_state.pop("PENDING_SAVE", None)
                 st.rerun()
@@ -719,6 +710,7 @@ st.markdown("---")
 st.subheader("🛠️ Snabbåtgärder")
 
 def _rand_40_60_of_max(mx: int) -> int:
+    """Ny range: 40–60% av max (använd om du byter policy)."""
     try:
         mx = int(mx)
     except Exception:
@@ -730,13 +722,28 @@ def _rand_40_60_of_max(mx: int) -> int:
     import random as _r
     return _r.randint(lo, hi)
 
+def _rand_30_50_of_max(mx: int) -> int:
+    """Behåller tidigare 30–50 om du vill använda den istället."""
+    try:
+        mx = int(mx)
+    except Exception:
+        mx = 0
+    if mx <= 0:
+        return 0
+    lo = max(0, int(round(mx * 0.30)))
+    hi = max(lo, int(round(mx * 0.50)))
+    import random as _r
+    return _r.randint(lo, hi)
+
 def _rand_eskilstuna_20_40() -> int:
-    """20–40 där 70% chans att värdet är >30 (31–40), annars 20–30."""
+    """20–40; 70% chans >30, 30% chans ≤30."""
     r = random.random()
-    if r < 0.70:
-        return random.randint(31, 40)
-    else:
+    if r < 0.30:
+        # 30% chans: 20–30
         return random.randint(20, 30)
+    else:
+        # 70% chans: 31–40
+        return random.randint(31, 40)
 
 # --- Vila på jobbet ---
 if st.button("➕ Skapa 'Vila på jobbet'-rad"):
@@ -744,6 +751,7 @@ if st.button("➕ Skapa 'Vila på jobbet'-rad"):
         scen_num = next_scene_number()
         rad_datum2, veckodag2 = datum_och_veckodag_för_scen(scen_num)
 
+        # Byt till _rand_40_60_of_max(...) om du vill använda 40–60 istället för 30–50:
         pv = _rand_40_60_of_max(st.session_state.get("MAX_PAPPAN", 0))
         gr = _rand_40_60_of_max(st.session_state.get("MAX_GRANNAR", 0))
         nv = _rand_40_60_of_max(st.session_state.get("MAX_NILS_VANNER", 0))
@@ -758,8 +766,8 @@ if st.button("➕ Skapa 'Vila på jobbet'-rad"):
             "Tid S": 0, "Tid D": 0, "Vila": 0,
             "DT tid (sek/kille)": 60, "DT vila (sek/kille)": 3,
             "Älskar": 12, "Sover med": 1,
-            "Pappans vänner": pv, "Grannar": gr, "Nils vänner": nv, "Nils familj": nf,
-            "Bekanta": bk, "Eskilstuna killar": esk,
+            "Pappans vänner": pv, "Grannar": gr,
+            "Nils vänner": nv, "Nils familj": nf, "Bekanta": bk, "Eskilstuna killar": esk,
             "Nils": 0,
             "Avgift": float(CFG.get("avgift_usd", 30.0)),
         }
@@ -796,7 +804,7 @@ if st.button("🏠 Skapa 'Vila i hemmet' (7 dagar)"):
                 esk = _rand_eskilstuna_20_40()
             else:
                 pv = gr = nv = nf = bk = 0
-                esk = 0
+                esk = _rand_eskilstuna_20_40()  # även dag6–7 får ett antal enligt regeln
 
             sv = 1 if offset == 6 else 0  # dag7 sover med
 
@@ -813,8 +821,8 @@ if st.button("🏠 Skapa 'Vila i hemmet' (7 dagar)"):
                 "Tid S": 0, "Tid D": 0, "Vila": 0,
                 "DT tid (sek/kille)": 60, "DT vila (sek/kille)": 3,
                 "Älskar": 6, "Sover med": sv,
-                "Pappans vänner": pv, "Grannar": gr, "Nils vänner": nv, "Nils familj": nf,
-                "Bekanta": bk, "Eskilstuna killar": esk,
+                "Pappans vänner": pv, "Grannar": gr,
+                "Nils vänner": nv, "Nils familj": nf, "Bekanta": bk, "Eskilstuna killar": esk,
                 "Nils": nils_val,
                 "Avgift": float(CFG.get("avgift_usd", 30.0)),
             }
