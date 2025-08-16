@@ -14,7 +14,7 @@ except Exception:
 
 # ============================== App-inställningar ===============================
 st.set_page_config(page_title="Malin", layout="centered")
-st.title("produktionsapp")
+st.title("Malin – produktionsapp")
 
 # =============================== Hjälpfunktioner ================================
 def _retry_call(fn, *args, **kwargs):
@@ -73,28 +73,38 @@ def _safe_int(x, default=0):
     except Exception:
         return default
 
+def _usd(x):
+    try:
+        return f"${float(x):,.2f}"
+    except Exception:
+        return "-"
+
 # =============================== Google Sheets =================================
 @st.cache_resource(show_spinner=False)
 def get_client():
-    # Bara Sheets-scope (vi öppnar via URL/ID)
+    # Endast Sheets-scope (öppnar via ID/URL)
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(dict(st.secrets["GOOGLE_CREDENTIALS"]), scopes=scopes)
     return gspread.authorize(creds)
 
 client = get_client()
 
+WORKSHEET_TITLE = "Data"  # <<<<< Viktigt: ditt blad heter Data
+
 @st.cache_resource(show_spinner=False)
 def resolve_sheet():
-    """Öppna arket via ID eller URL (ingen Drive-API krävs)."""
+    """Öppna arket via ID eller URL och hämta bladet 'Data'."""
     sid = st.secrets.get("GOOGLE_SHEET_ID", "").strip() if "GOOGLE_SHEET_ID" in st.secrets else ""
     if sid:
         st.caption("🔗 Öppnar via GOOGLE_SHEET_ID…")
-        return _retry_call(client.open_by_key, sid).sheet1
+        sh = _retry_call(client.open_by_key, sid)
+        return sh.worksheet(WORKSHEET_TITLE)
 
     url = st.secrets.get("SHEET_URL", "").strip() if "SHEET_URL" in st.secrets else ""
     if url:
         st.caption("🔗 Öppnar via SHEET_URL…")
-        return _retry_call(client.open_by_url, url).sheet1
+        sh = _retry_call(client.open_by_url, url)
+        return sh.worksheet(WORKSHEET_TITLE)
 
     qp = ""
     try:
@@ -103,9 +113,8 @@ def resolve_sheet():
         pass
     if qp:
         st.caption("🔎 Öppnar via query-param 'sheet'…")
-        return (_retry_call(client.open_by_url, qp).sheet1
-                if qp.startswith("http")
-                else _retry_call(client.open_by_key, qp).sheet1)
+        sh = _retry_call(client.open_by_url, qp) if qp.startswith("http") else _retry_call(client.open_by_key, qp)
+        return sh.worksheet(WORKSHEET_TITLE)
 
     st.error("Lägg in GOOGLE_SHEET_ID eller SHEET_URL i Secrets (eller ?sheet=<url|id>).")
     st.stop()
@@ -214,6 +223,7 @@ if view == "Statistik":
     nv_avg_rel = round(nv_sum / max_nv, 2) if max_nv > 0 else 0.0
     nf_avg_rel = round(nf_sum / max_nf, 2) if max_nf > 0 else 0.0
 
+    # Snitt Älskar & Snitt Sover med (behövs för "totalt antal tillfällen")
     alskar_sum_stat = sum(_safe_int(r.get("Älskar", 0), 0) for r in rows)
     sover_sum_stat  = sum(_safe_int(r.get("Sover med", 0), 0) for r in rows)
 
@@ -287,6 +297,18 @@ if view == "Statistik":
     with ec3: st.metric("Vinst (totalt)", f"{round(total_vinst, 2)} USD")
     with ec4: st.metric("Lön Malin (totalt)", f"{round(total_lon_malin, 2)} USD")
 
+    # ---- NY: Snitt intäkt känner (under 'Intäkt känner totalt') ----
+    sum_max = max_p + max_g + max_nv + max_nf
+    snitt_intakt_kanner = (total_intakt_kanner + total_intakt_foretag + total_vinst) / sum_max if sum_max > 0 else 0.0
+    st.metric("Snitt intäkt känner", f"{snitt_intakt_kanner:.2f} USD")
+
+    # ---- NY: Snitt lön (under 'Lön Malin (totalt)') ----
+    alskar_sum_all = sum(_safe_int(r.get("Älskar", 0), 0) for r in rows)
+    sover_sum_all  = sum(_safe_int(r.get("Sover med", 0), 0) for r in rows)
+    divisor_snitt_lon = (totalt_man + alskar_sum_all + sover_sum_all)
+    snitt_lon = (total_intakt_kanner + total_intakt_foretag + total_vinst) / divisor_snitt_lon if divisor_snitt_lon > 0 else 0.0
+    st.metric("Snitt lön", f"{snitt_lon:.2f} USD")
+
     # --- DP/DPP/DAP/TAP ---
     st.markdown("---")
     st.subheader("🔩 DP / DPP / DAP / TAP — summa & snitt")
@@ -316,16 +338,13 @@ if view == "Statistik":
     # --- Älskar / Sover med + Nils-summa + per dag ---
     st.markdown("---")
     st.subheader("💗 Älskar / 😴 Sover med — summa & snitt (plus Nils-summa)")
-    alskar_sum = sum(_safe_int(r.get("Älskar", 0)) for r in rows)
-    sover_sum  = sum(_safe_int(r.get("Sover med", 0)) for r in rows)
+    alskar_sum = alskar_sum_all
+    sover_sum  = sover_sum_all
     nils_sum   = sum(_safe_int(r.get("Nils", 0)) for r in rows)
 
-    denom_alskar2 = (int(st.session_state.get("MAX_PAPPAN", 0)) +
-                     int(st.session_state.get("MAX_GRANNAR", 0)) +
-                     int(st.session_state.get("MAX_NILS_VANNER", 0)) +
-                     int(st.session_state.get("MAX_NILS_FAMILJ", 0)))
+    denom_alskar2 = (max_p + max_g + max_nv + max_nf)
     snitt_alskar2 = round(alskar_sum / denom_alskar2, 2) if denom_alskar2 > 0 else 0.0
-    max_nf2       = int(st.session_state.get("MAX_NILS_FAMILJ", 0))
+    max_nf2       = max_nf
     snitt_sover2  = round(sover_sum / max_nf2, 2) if max_nf2 > 0 else 0.0
 
     c_als1, c_als2, c_sov1, c_sov2 = st.columns(4)
@@ -335,6 +354,7 @@ if view == "Statistik":
     with c_sov2: st.metric("Snitt Sover med", snitt_sover2)
     st.metric("Nils (summa)", nils_sum)
 
+    # ---- NY: Älskar / dag och Sover med / dag (under Snitt älskar) ----
     total_rows = len(rows)
     alskar_per_dag = (alskar_sum / total_rows) if total_rows > 0 else 0.0
     sover_per_dag  = (sover_sum / total_rows) if total_rows > 0 else 0.0
@@ -350,7 +370,7 @@ if view == "Statistik":
     tpk_avg_label = _ms_str_from_seconds(tpk_avg_sec)
     st.metric("Snitt tid kille / scen", tpk_avg_label)
 
-    # --- Snitt tid (h) per scen exkl. älskar & sover med ---
+    # --- Snitt tid (h) per scen exkl. älskar & sover med (UNDER 'Snitt tid kille / scen') ---
     total_sec_scen = sum(
         _safe_int(r.get("Summa tid (sek)", 0), 0)
         for r in rows if _safe_int(r.get("Män", 0)) > 0
@@ -363,7 +383,6 @@ if view == "Statistik":
         _safe_int(r.get("Tid Sover med (sek)", 0), 0)
         for r in rows if _safe_int(r.get("Män", 0)) > 0
     )
-
     justerad_sec = max(0, total_sec_scen - alskar_sec_scen - sover_sec_scen)
     snitt_tid_h_utan_extra = (justerad_sec / 3600.0 / antal_scener) if antal_scener > 0 else 0.0
     st.session_state["SNITT_TID_H_UTAN_ALSKAR_SOVER"] = snitt_tid_h_utan_extra
@@ -544,12 +563,6 @@ preview = _calc_preview(grund_preview)
 
 st.markdown("---")
 st.subheader("🔎 Förhandsvisning (innan spar)")
-
-def _usd(x):
-    try:
-        return f"${float(x):,.2f}"
-    except Exception:
-        return "-"
 
 col1, col2 = st.columns(2)
 with col1:
