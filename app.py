@@ -168,6 +168,7 @@ if view == "Statistik":
         st.warning(f"Kunde inte läsa data: {e}")
         st.stop()
 
+    # --- Basmetrik: scener, privat GB, totalt män, snitt scener, snitt privat GB ---
     antal_scener = 0
     privat_gb_cnt = 0
     totalt_man = 0
@@ -196,6 +197,67 @@ if view == "Statistik":
     with c3: st.metric("Totalt antal män", totalt_man)
     with c4: st.metric("Snitt scener", snitt_scener)
     with c5: st.metric("Snitt Privat GB", snitt_privat_gb)
+
+    st.markdown("---")
+    st.subheader("🔩 DP / DPP / DAP / TAP — summa & snitt")
+
+    dp_sum  = sum(_safe_int(r.get("DP", 0))  for r in rows if _safe_int(r.get("DP", 0))  > 0)
+    dpp_sum = sum(_safe_int(r.get("DPP", 0)) for r in rows if _safe_int(r.get("DPP", 0)) > 0)
+    dap_sum = sum(_safe_int(r.get("DAP", 0)) for r in rows if _safe_int(r.get("DAP", 0)) > 0)
+    tap_sum = sum(_safe_int(r.get("TAP", 0)) for r in rows if _safe_int(r.get("TAP", 0)) > 0)
+
+    denom_scen = antal_scener if antal_scener > 0 else 1
+    dp_avg  = round(dp_sum  / denom_scen, 2) if antal_scener > 0 else 0.0
+    dpp_avg = round(dpp_sum / denom_scen, 2) if antal_scener > 0 else 0.0
+    dap_avg = round(dap_sum / denom_scen, 2) if antal_scener > 0 else 0.0
+    tap_avg = round(tap_sum / denom_scen, 2) if antal_scener > 0 else 0.0
+
+    s1, s2, s3, s4 = st.columns(4)
+    with s1: st.metric("Summa DP (>0)", dp_sum)
+    with s2: st.metric("Summa DPP (>0)", dpp_sum)
+    with s3: st.metric("Summa DAP (>0)", dap_sum)
+    with s4: st.metric("Summa TAP (>0)", tap_sum)
+
+    a1, a2, a3, a4 = st.columns(4)
+    with a1: st.metric("Snitt DP / scen", dp_avg)
+    with a2: st.metric("Snitt DPP / scen", dpp_avg)
+    with a3: st.metric("Snitt DAP / scen", dap_avg)
+    with a4: st.metric("Snitt TAP / scen", tap_avg)
+
+    st.markdown("---")
+    st.subheader("💗 Älskar / 😴 Sover med — summa & snitt")
+
+    alskar_sum = sum(_safe_int(r.get("Älskar", 0)) for r in rows)
+    sover_sum  = sum(_safe_int(r.get("Sover med", 0)) for r in rows)
+
+    # Snitt Älskar: sum(Älskar) / (summa max från sidopanel: p+g+nv+nf)
+    max_p  = int(st.session_state.get("MAX_PAPPAN", 0))
+    max_g  = int(st.session_state.get("MAX_GRANNAR", 0))
+    max_nv = int(st.session_state.get("MAX_NILS_VANNER", 0))
+    max_nf = int(st.session_state.get("MAX_NILS_FAMILJ", 0))
+
+    denom_alskar = max_p + max_g + max_nv + max_nf
+    snitt_alskar = round(alskar_sum / denom_alskar, 2) if denom_alskar > 0 else 0.0
+
+    # Snitt Sover med: sum(Sover) / MAX_NILS_FAMILJ
+    denom_sover = max_nf
+    snitt_sover = round(sover_sum / denom_sover, 2) if denom_sover > 0 else 0.0
+
+    c_als1, c_als2, c_sov1, c_sov2 = st.columns(4)
+    with c_als1: st.metric("Summa Älskar", alskar_sum)
+    with c_als2: st.metric("Snitt Älskar", snitt_alskar)
+    with c_sov1: st.metric("Summa Sover med", sover_sum)
+    with c_sov2: st.metric("Snitt Sover med", snitt_sover)
+
+    st.markdown("---")
+    st.subheader("⏱️ Snitt tid kille per scen")
+
+    # Snitt tid per kille (sek) över scener (Män > 0)
+    tpk_total_sec = sum(_safe_int(r.get("Tid per kille (sek)", 0)) for r in rows if _safe_int(r.get("Män", 0)) > 0)
+    tpk_avg_sec = int(round(tpk_total_sec / denom_scen)) if antal_scener > 0 else 0
+    tpk_avg_label = _ms_str_from_seconds(tpk_avg_sec)
+
+    st.metric("Snitt tid kille / scen", tpk_avg_label)
 
     st.stop()
 
@@ -538,7 +600,7 @@ if st.button("🏠 Skapa 'Vila i hemmet' (7 dagar)"):
     try:
         start_scene = next_scene_number()
 
-        # Bestäm antal ettor för dag 1–6
+        # Bestäm antal ettor för dag 1–6 (50%:0, 45%:1, 5%:2)
         r = random.random()
         if r < 0.50:
             ones_count = 0
