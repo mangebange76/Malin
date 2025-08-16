@@ -124,7 +124,7 @@ sheet = resolve_sheet()
 DEFAULT_COLUMNS = [
     "Datum",
     "Typ",
-    "Veckodag","Scen","Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",  # << Svarta in efter Män
+    "Veckodag","Scen","Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
     "Tid S","Tid D","Vila",
     "Summa S","Summa D","Summa TP","Summa Vila",
     "Tid Älskar (sek)","Tid Älskar",
@@ -217,6 +217,7 @@ if view == "Statistik":
     max_g  = int(st.session_state.get("MAX_GRANNAR", 0))
     max_nv = int(st.session_state.get("MAX_NILS_VANNER", 0))
     max_nf = int(st.session_state.get("MAX_NILS_FAMILJ", 0))
+    sum_max = max_p + max_g + max_nv + max_nf
 
     pv_sum = sum(_safe_int(r.get("Pappans vänner", 0), 0) for r in rows)
     gr_sum = sum(_safe_int(r.get("Grannar", 0), 0) for r in rows)
@@ -232,8 +233,7 @@ if view == "Statistik":
     alskar_sum_stat = sum(_safe_int(r.get("Älskar", 0), 0) for r in rows)
     sover_sum_stat  = sum(_safe_int(r.get("Sover med", 0), 0) for r in rows)
 
-    denom_alskar = max_p + max_g + max_nv + max_nf
-    snitt_alskar = round(alskar_sum_stat / denom_alskar, 2) if denom_alskar > 0 else 0.0
+    snitt_alskar = round(alskar_sum_stat / sum_max, 2) if sum_max > 0 else 0.0
     snitt_sover  = round(sover_sum_stat / max_nf, 2) if max_nf > 0 else 0.0
 
     pv_tot_tillf = round(pv_avg_rel + snitt_alskar, 2)
@@ -303,16 +303,17 @@ if view == "Statistik":
     with ec4: st.metric("Lön Malin (totalt)", f"{round(total_lon_malin, 2)} USD")
 
     # ---- Snitt intäkt känner ----
-    sum_max = int(st.session_state.get("MAX_PAPPAN", 0)) + int(st.session_state.get("MAX_GRANNAR", 0)) + int(st.session_state.get("MAX_NILS_VANNER", 0)) + int(st.session_state.get("MAX_NILS_FAMILJ", 0))
     snitt_intakt_kanner = (total_intakt_kanner + total_intakt_foretag + total_vinst) / sum_max if sum_max > 0 else 0.0
     st.metric("Snitt intäkt känner", f"{snitt_intakt_kanner:.2f} USD")
 
-    # ---- Snitt lön ----
+    # ---- Snitt lön Malin (KORRIGERAD) ----
     alskar_sum_all = sum(_safe_int(r.get("Älskar", 0), 0) for r in rows)
     sover_sum_all  = sum(_safe_int(r.get("Sover med", 0), 0) for r in rows)
-    divisor_snitt_lon = (totalt_man + alskar_sum_all + sover_sum_all)
-    snitt_lon = (total_intakt_kanner + total_intakt_foretag + total_vinst) / divisor_snitt_lon if divisor_snitt_lon > 0 else 0.0
-    st.metric("Snitt lön", f"{snitt_lon:.2f} USD")
+    # Totalt män = Män + Svarta (över alla rader)
+    totalt_man_for_lon = sum((_safe_int(r.get("Män", 0), 0) + _safe_int(r.get("Svarta", 0), 0)) for r in rows)
+    divider_snitt_lon = (totalt_man_for_lon + alskar_sum_all + sover_sum_all)
+    snitt_lon_malin = (total_lon_malin / divider_snitt_lon) if divider_snitt_lon > 0 else 0.0
+    st.metric("Snitt lön Malin", f"{snitt_lon_malin:.2f} USD")
 
     # --- DP/DPP/DAP/TAP ---
     st.markdown("---")
@@ -347,10 +348,8 @@ if view == "Statistik":
     sover_sum  = sover_sum_all
     nils_sum   = sum(_safe_int(r.get("Nils", 0)) for r in rows)
 
-    denom_alskar2 = sum_max
-    snitt_alskar2 = round(alskar_sum / denom_alskar2, 2) if denom_alskar2 > 0 else 0.0
-    max_nf2       = int(st.session_state.get("MAX_NILS_FAMILJ", 0))
-    snitt_sover2  = round(sover_sum / max_nf2, 2) if max_nf2 > 0 else 0.0
+    snitt_alskar2 = round(alskar_sum / sum_max, 2) if sum_max > 0 else 0.0
+    snitt_sover2  = round(sover_sum / max_nf, 2) if max_nf > 0 else 0.0
 
     c_als1, c_als2, c_sov1, c_sov2 = st.columns(4)
     with c_als1: st.metric("Summa Älskar", alskar_sum)
@@ -502,7 +501,7 @@ def datum_och_veckodag_för_scen(scen_nummer: int):
 st.subheader("➕ Lägg till ny händelse")
 
 män     = st.number_input("Män",     min_value=0, step=1, value=0)
-svarta  = st.number_input("Svarta",  min_value=0, step=1, value=0)  # << NYTT fält
+svarta  = st.number_input("Svarta",  min_value=0, step=1, value=0)  # NYTT fält
 fitta   = st.number_input("Fitta",   min_value=0, step=1, value=0)
 rumpa   = st.number_input("Rumpa",   min_value=0, step=1, value=0)
 dp      = st.number_input("DP",      min_value=0, step=1, value=0)
@@ -546,7 +545,7 @@ rad_datum, veckodag = datum_och_veckodag_för_scen(scen)
 grund_preview = {
     "Typ": "",
     "Veckodag": veckodag, "Scen": scen,
-    "Män": män, "Svarta": svarta,  # << SVARTA skickas vidare till beräkning
+    "Män": män, "Svarta": svarta,
     "Fitta": fitta, "Rumpa": rumpa, "DP": dp, "DPP": dpp, "DAP": dap, "TAP": tap,
     "Tid S": tid_s, "Tid D": tid_d, "Vila": vila,
     "Älskar": älskar, "Sover med": sover_med,
@@ -714,7 +713,7 @@ if st.button("➕ Skapa 'Vila på jobbet'-rad"):
         grund_vila = {
             "Typ": "Vila på jobbet",
             "Veckodag": veckodag2, "Scen": scen_num,
-            "Män": 0, "Svarta": 0,  # << med i raden för kompatibilitet
+            "Män": 0, "Svarta": 0,
             "Fitta": 0, "Rumpa": 0, "DP": 0, "DPP": 0, "DAP": 0, "TAP": 0,
             "Tid S": 0, "Tid D": 0, "Vila": 0,
             "Älskar": 12, "Sover med": 1,
@@ -765,7 +764,7 @@ if st.button("🏠 Skapa 'Vila i hemmet' (7 dagar)"):
             grund_home = {
                 "Typ": "Vila i hemmet",
                 "Veckodag": veckod, "Scen": scen_num,
-                "Män": 0, "Svarta": 0,  # << med i raden för kompatibilitet
+                "Män": 0, "Svarta": 0,
                 "Fitta": 0, "Rumpa": 0, "DP": 0, "DPP": 0, "DAP": 0, "TAP": 0,
                 "Tid S": 0, "Tid D": 0, "Vila": 0,
                 "Älskar": 6, "Sover med": sv,
