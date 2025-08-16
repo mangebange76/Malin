@@ -198,6 +198,54 @@ if view == "Statistik":
     with c4: st.metric("Snitt scener", snitt_scener)
     with c5: st.metric("Snitt Privat GB", snitt_privat_gb)
 
+    # --- Snitt relativt max per källa + Totalt antal tillfällen (rel. snitt + älskar [+ sover]) ---
+    max_p  = int(st.session_state.get("MAX_PAPPAN", 0))
+    max_g  = int(st.session_state.get("MAX_GRANNAR", 0))
+    max_nv = int(st.session_state.get("MAX_NILS_VANNER", 0))
+    max_nf = int(st.session_state.get("MAX_NILS_FAMILJ", 0))
+
+    pv_sum = sum(_safe_int(r.get("Pappans vänner", 0), 0) for r in rows)
+    gr_sum = sum(_safe_int(r.get("Grannar", 0), 0) for r in rows)
+    nv_sum = sum(_safe_int(r.get("Nils vänner", 0), 0) for r in rows)
+    nf_sum = sum(_safe_int(r.get("Nils familj", 0), 0) for r in rows)
+
+    pv_avg_rel = round(pv_sum / max_p, 2) if max_p > 0 else 0.0
+    gr_avg_rel = round(gr_sum / max_g, 2) if max_g > 0 else 0.0
+    nv_avg_rel = round(nv_sum / max_nv, 2) if max_nv > 0 else 0.0
+    nf_avg_rel = round(nf_sum / max_nf, 2) if max_nf > 0 else 0.0
+
+    alskar_sum_stat = sum(_safe_int(r.get("Älskar", 0), 0) for r in rows)
+    sover_sum_stat  = sum(_safe_int(r.get("Sover med", 0), 0) for r in rows)
+
+    denom_alskar = max_p + max_g + max_nv + max_nf
+    snitt_alskar = round(alskar_sum_stat / denom_alskar, 2) if denom_alskar > 0 else 0.0
+    snitt_sover  = round(sover_sum_stat / max_nf, 2) if max_nf > 0 else 0.0
+
+    pv_tot_tillf = round(pv_avg_rel + snitt_alskar, 2)
+    gr_tot_tillf = round(gr_avg_rel + snitt_alskar, 2)
+    nv_tot_tillf = round(nv_avg_rel + snitt_alskar, 2)
+    nf_tot_tillf = round(nf_avg_rel + snitt_alskar + snitt_sover, 2)
+
+    st.markdown("---")
+    st.subheader("📐 Snitt (rel. max) + Totalt antal tillfällen")
+    cA, cB = st.columns(2)
+    with cA:
+        st.markdown("**Pappans vänner**")
+        st.metric("Snitt (rel. max)", pv_avg_rel)
+        st.metric("Totalt antal tillfällen", pv_tot_tillf)
+
+        st.markdown("**Grannar**")
+        st.metric("Snitt (rel. max)", gr_avg_rel)
+        st.metric("Totalt antal tillfällen", gr_tot_tillf)
+    with cB:
+        st.markdown("**Nils vänner**")
+        st.metric("Snitt (rel. max)", nv_avg_rel)
+        st.metric("Totalt antal tillfällen", nv_tot_tillf)
+
+        st.markdown("**Nils familj**")
+        st.metric("Snitt (rel. max)", nf_avg_rel)
+        st.metric("Totalt antal tillfällen", nf_tot_tillf)
+
     # --- Prenumeranter: total + aktiva 30 dagar ---
     from datetime import timedelta as _td
     total_pren = 0
@@ -239,9 +287,9 @@ if view == "Statistik":
     with ec3: st.metric("Vinst (totalt)", f"{round(total_vinst, 2)} USD")
     with ec4: st.metric("Lön Malin (totalt)", f"{round(total_lon_malin, 2)} USD")
 
+    # --- DP/DPP/DAP/TAP ---
     st.markdown("---")
     st.subheader("🔩 DP / DPP / DAP / TAP — summa & snitt")
-
     dp_sum  = sum(_safe_int(r.get("DP", 0))  for r in rows if _safe_int(r.get("DP", 0))  > 0)
     dpp_sum = sum(_safe_int(r.get("DPP", 0)) for r in rows if _safe_int(r.get("DPP", 0)) > 0)
     dap_sum = sum(_safe_int(r.get("DAP", 0)) for r in rows if _safe_int(r.get("DAP", 0)) > 0)
@@ -265,40 +313,61 @@ if view == "Statistik":
     with a3: st.metric("Snitt DAP / scen", dap_avg)
     with a4: st.metric("Snitt TAP / scen", tap_avg)
 
+    # --- Älskar / Sover med + Nils-summa + per dag ---
     st.markdown("---")
     st.subheader("💗 Älskar / 😴 Sover med — summa & snitt (plus Nils-summa)")
-
     alskar_sum = sum(_safe_int(r.get("Älskar", 0)) for r in rows)
     sover_sum  = sum(_safe_int(r.get("Sover med", 0)) for r in rows)
     nils_sum   = sum(_safe_int(r.get("Nils", 0)) for r in rows)
 
-    # Snitt Älskar: sum(Älskar) / (summa max från sidopanel: p+g+nv+nf)
-    max_p  = int(st.session_state.get("MAX_PAPPAN", 0))
-    max_g  = int(st.session_state.get("MAX_GRANNAR", 0))
-    max_nv = int(st.session_state.get("MAX_NILS_VANNER", 0))
-    max_nf = int(st.session_state.get("MAX_NILS_FAMILJ", 0))
-
-    denom_alskar = max_p + max_g + max_nv + max_nf
-    snitt_alskar = round(alskar_sum / denom_alskar, 2) if denom_alskar > 0 else 0.0
-
-    # Snitt Sover med: sum(Sover) / MAX_NILS_FAMILJ
-    denom_sover = max_nf
-    snitt_sover = round(sover_sum / denom_sover, 2) if denom_sover > 0 else 0.0
+    denom_alskar2 = (int(st.session_state.get("MAX_PAPPAN", 0)) +
+                     int(st.session_state.get("MAX_GRANNAR", 0)) +
+                     int(st.session_state.get("MAX_NILS_VANNER", 0)) +
+                     int(st.session_state.get("MAX_NILS_FAMILJ", 0)))
+    snitt_alskar2 = round(alskar_sum / denom_alskar2, 2) if denom_alskar2 > 0 else 0.0
+    max_nf2       = int(st.session_state.get("MAX_NILS_FAMILJ", 0))
+    snitt_sover2  = round(sover_sum / max_nf2, 2) if max_nf2 > 0 else 0.0
 
     c_als1, c_als2, c_sov1, c_sov2 = st.columns(4)
     with c_als1: st.metric("Summa Älskar", alskar_sum)
-    with c_als2: st.metric("Snitt Älskar", snitt_alskar)
+    with c_als2: st.metric("Snitt Älskar", snitt_alskar2)
     with c_sov1: st.metric("Summa Sover med", sover_sum)
-    with c_sov2: st.metric("Snitt Sover med", snitt_sover)
-
+    with c_sov2: st.metric("Snitt Sover med", snitt_sover2)
     st.metric("Nils (summa)", nils_sum)
 
+    total_rows = len(rows)
+    alskar_per_dag = (alskar_sum / total_rows) if total_rows > 0 else 0.0
+    sover_per_dag  = (sover_sum / total_rows) if total_rows > 0 else 0.0
+    d1, d2 = st.columns(2)
+    with d1: st.metric("Älskar / dag", f"{alskar_per_dag:.2f}")
+    with d2: st.metric("Sover med / dag", f"{sover_per_dag:.2f}")
+
+    # --- Snitt tid kille / scen ---
     st.markdown("---")
-    st.subheader("⏱️ Snitt tid kille per scen")
+    st.subheader("⏱️ Tid per kille / scen")
     tpk_total_sec = sum(_safe_int(r.get("Tid per kille (sek)", 0)) for r in rows if _safe_int(r.get("Män", 0)) > 0)
     tpk_avg_sec = int(round(tpk_total_sec / denom_scen)) if antal_scener > 0 else 0
     tpk_avg_label = _ms_str_from_seconds(tpk_avg_sec)
     st.metric("Snitt tid kille / scen", tpk_avg_label)
+
+    # --- Snitt tid (h) per scen exkl. älskar & sover med ---
+    total_sec_scen = sum(
+        _safe_int(r.get("Summa tid (sek)", 0), 0)
+        for r in rows if _safe_int(r.get("Män", 0)) > 0
+    )
+    alskar_sec_scen = sum(
+        _safe_int(r.get("Tid Älskar (sek)", 0), 0)
+        for r in rows if _safe_int(r.get("Män", 0)) > 0
+    )
+    sover_sec_scen = sum(
+        _safe_int(r.get("Tid Sover med (sek)", 0), 0)
+        for r in rows if _safe_int(r.get("Män", 0)) > 0
+    )
+
+    justerad_sec = max(0, total_sec_scen - alskar_sec_scen - sover_sec_scen)
+    snitt_tid_h_utan_extra = (justerad_sec / 3600.0 / antal_scener) if antal_scener > 0 else 0.0
+    st.session_state["SNITT_TID_H_UTAN_ALSKAR_SOVER"] = snitt_tid_h_utan_extra
+    st.metric("Snitt tid (h) per scen – exkl. älskar & sover med", f"{snitt_tid_h_utan_extra:.2f} h")
 
     st.stop()
 
