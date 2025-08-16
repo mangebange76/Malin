@@ -1,261 +1,126 @@
-# berakningar.py
-from datetime import datetime, timedelta
+import pandas as pd
+import random
 
-def _safe_int(x, default=0):
-    try:
-        if x is None:
-            return default
-        if isinstance(x, str) and x.strip() == "":
-            return default
-        return int(float(x))
-    except Exception:
-        return default
+# ---------------------------------------------------------
+# Hjälpfunktioner
+# ---------------------------------------------------------
 
-def _hm_str_from_seconds(q_sec: int) -> str:
-    h = q_sec // 3600
-    m = round((q_sec % 3600) / 60)
-    if m == 60:
-        h += 1
-        m = 0
-    return f"{int(h)}h {int(m)} min"
-
-def _ms_str_from_seconds(sec: int) -> str:
-    m = sec // 60
-    s = sec % 60
-    return f"{int(m)}m {int(s)}s"
-
-def _klockan_label(starttid, total_seconds_plus_rest_and_hang):
-    """Returnera HH:MM utifrån starttid + (3h hångel) + (summa tid) + (1h vila efter scen)."""
-    # starttid är datetime.time
-    base = datetime(2000,1,1, starttid.hour, starttid.minute, 0)
-    t = base + timedelta(seconds=total_seconds_plus_rest_and_hang)
-    return t.strftime("%H:%M")
-
-def berakna_radvarden(grund: dict, rad_datum, fodelsedatum, starttid):
+def slumpa_vilovecka_nils(rad_index: int) -> int:
+    """Slumpar värde för Nils vid vilovecka hemma.
+    Dag 7 = alltid 0.
+    Dag 1–6: 50% chans för 0, 45% chans för 1, 5% chans för totalt två ettor under veckan.
     """
-    Beräknar alla kolumnvärden för en rad.
-    - Svarta behandlas som Män i alla beräkningar (totalt_män = män + svarta)
-    - Prenumeranter: Svarta räknas dubbelt (1 Svart => +2 i prenumerantbas)
-    - Hårdhet: +3 om Svarta > 0
-    - Summa S/D/TP inkluderar också 'Känner' (Pappans vänner + Grannar + Nils vänner + Nils familj)
-    - Älskar adderar 30 min per styck, Sover med adderar 60 min per styck till total tid
-    - Suger = 60% av (Summa D + Summa TP). Suger per kille = Suger / totalt_män
-    - Tid per kille = (S/alla) + (D/alla)*2 + (TP/alla)*3 + (Suger/alla)  (i sekunder)
-      (Obs: Hångel ingår inte i “Tid per kille”)
-    - Hångel = 3h / totalt_män (sparas både sek/kille och "m:s/kille")
-    - Ekonomi: Intäkter = Prenumeranter * Avgift; Intäkt män = (män + svarta)*120 (kostnad),
-      Intäkt Känner = (Lön Malin + 120) * Känner; Intäkt Företaget = 20% av Intäkter (kostnad);
-      Vinst = Intäkter - Intäkt män - Intäkt Känner - Lön Malin - Intäkt Företaget
-    - Typ "Vila på jobbet" / "Vila i hemmet" ger 0 i Prenumeranter & intäkter/kostnader.
-    """
-    # ---- Läs in värden, säkra int ----
-    typ = (grund.get("Typ") or "").strip()
+    if rad_index == 6:  # dag 7
+        return 0
+    slump = random.random()
+    if slump < 0.5:
+        return 0
+    elif slump < 0.95:
+        return 1
+    else:
+        return 2
 
-    man     = _safe_int(grund.get("Män", 0), 0)
-    svarta  = _safe_int(grund.get("Svarta", 0), 0)
-    fitta   = _safe_int(grund.get("Fitta", 0), 0)
-    rumpa   = _safe_int(grund.get("Rumpa", 0), 0)
-    dp      = _safe_int(grund.get("DP", 0), 0)
-    dpp     = _safe_int(grund.get("DPP", 0), 0)
-    dap     = _safe_int(grund.get("DAP", 0), 0)
-    tap     = _safe_int(grund.get("TAP", 0), 0)
+# ---------------------------------------------------------
+# Beräkningar på radnivå
+# ---------------------------------------------------------
 
-    tid_s   = _safe_int(grund.get("Tid S", 0), 0)
-    tid_d   = _safe_int(grund.get("Tid D", 0), 0)
-    vila    = _safe_int(grund.get("Vila", 0), 0)
+def beräkna_radvärden(rad, sidopanel):
+    """Beräknar automatiska värden för en rad i databasen."""
+    
+    män = int(rad.get("Män", 0) or 0)
+    svarta = int(rad.get("Svarta", 0) or 0)
+    totalt_män = män + svarta
 
-    alskar  = _safe_int(grund.get("Älskar", 0), 0)
-    sover   = _safe_int(grund.get("Sover med", 0), 0)
+    # Prenumeranter (svarta räknas dubbelt)
+    rad["Prenumeranter"] = män + (svarta * 2)
 
-    pv      = _safe_int(grund.get("Pappans vänner", 0), 0)
-    gr      = _safe_int(grund.get("Grannar", 0), 0)
-    nv      = _safe_int(grund.get("Nils vänner", 0), 0)
-    nf      = _safe_int(grund.get("Nils familj", 0), 0)
-    nils    = _safe_int(grund.get("Nils", 0), 0)
+    # Hårdhet (svarta ger +3)
+    hårdhet = int(rad.get("Hårdhet", 0) or 0)
+    if svarta > 0:
+        hårdhet += 3
+    rad["Hårdhet"] = hårdhet
 
-    avgift  = float(grund.get("Avgift", 30.0))
+    # Tid kille (per minut)
+    minuter_per_kille = int(rad.get("Minuter per kille", 0) or 0)
+    rad["Tid kille"] = totalt_män * minuter_per_kille
 
-    veckodag = grund.get("Veckodag", "")
-    scen     = grund.get("Scen", "")
+    # Intäkter/kostnader
+    intäkt_känner = float(rad.get("Intäkt känner", 0) or 0)
+    kostnad_företag = float(rad.get("Kostnad företag", 0) or 0)
+    rad["Vinst"] = intäkt_känner - kostnad_företag
 
-    # ---- Känner och totalt antal "män" (alla deltagare av "män-typ") ----
-    kanner_sum = pv + gr + nv + nf
-    totalt_man = man + svarta + kanner_sum  # Totalt Män = U + Män (+Svarta)
-    # Men "alla killar" för tid per kille ska vara "män + svarta" (inte inkluderar Känner)
-    alla_killar = max(1, man + svarta)
+    # Malins lön: 10% av prenumeranter, minst 150, max 800
+    pren = rad.get("Prenumeranter", 0)
+    malins_lön = max(150, min(800, pren * 0.10))
+    rad["Lön Malin"] = malins_lön
 
-    # ---- Summa S / D / TP / Vila (sek) — inkluderar Känner i respektive kategori ----
-    # S-kategori: (Män + Fitta + Rumpa + Känner) * Tid S
-    summa_s = (man + svarta + fitta + rumpa + kanner_sum) * tid_s
-    # D-kategori: (DP + DPP + DAP + Känner) * Tid D
-    summa_d = (dp + dpp + dap + kanner_sum) * tid_d
-    # TP-kategori: (TAP + Känner) * Tid D  (enligt tidigare logik använde TP också Tid D)
-    summa_tp = (tap + kanner_sum) * tid_d
-    # Vila: (alla "aktivitetsdeltagare") * vila
-    vila_sec = (man + svarta + fitta + rumpa + dp + dpp + dap + tap + kanner_sum) * vila
+    return rad
 
-    # ---- Extra tid: Älskar (30 min vardera) och Sover med (60 min vardera) ----
-    tid_alskar_sec = alskar * 30 * 60
-    tid_sover_sec  = sover  * 60 * 60
+# ---------------------------------------------------------
+# Statistiska sammanställningar
+# ---------------------------------------------------------
 
-    # ---- Total tid (sek) ----
-    total_tid_sec = summa_s + summa_d + summa_tp + vila_sec + tid_alskar_sec + tid_sover_sec
+def beräkna_statistik(df: pd.DataFrame, sidopanel: dict):
+    """Beräknar statistik för hela databasen."""
+    stats = {}
 
-    # ---- Hångel: 3h / (män + svarta)  (ingår inte i "tid per kille") ----
-    hangel_total_sec = 3 * 60 * 60  # 10800
-    hangel_per_kille_sec = int(round(hangel_total_sec / max(1, man + svarta)))
-    hangel_label_ms = _ms_str_from_seconds(hangel_per_kille_sec)
+    # Antal scener (män > 0)
+    scener_df = df[(df["Män"] > 0) | (df["Svarta"] > 0)]
+    antal_scener = len(scener_df)
+    stats["Antal scener"] = antal_scener
 
-    # ---- Suger: 60% av (Summa D + Summa TP) ----
-    suger_sec = int(round(0.60 * (summa_d + summa_tp)))
-    suger_per_kille_sec = int(round(suger_sec / max(1, man + svarta)))
+    # Privat GB (män = 0, känner > 0)
+    privat_gb_df = df[(df["Män"] == 0) & (df["Svarta"] == 0) & (df["Känner"] > 0)]
+    stats["Privat GB"] = len(privat_gb_df)
 
-    # ---- Tid per kille (sek) enligt reglerna ----
-    # (S/alla) + (D/alla)*2 + (TP/alla)*3 + (Suger/alla)
-    tpk_sec = 0
-    if man + svarta > 0:
-        tpk_sec = int(round(
-            (summa_s / (man + svarta))
-            + (summa_d / (man + svarta)) * 2
-            + (summa_tp / (man + svarta)) * 3
-            + (suger_sec / (man + svarta))
-        ))
-    tpk_label = _ms_str_from_seconds(tpk_sec)
+    # Totalt antal män
+    stats["Totalt antal män"] = (df["Män"].sum() + df["Svarta"].sum())
 
-    # ---- Summa tid som timmar/minuter-sträng ----
-    summa_tid_label = _hm_str_from_seconds(total_tid_sec)
+    # Andel svarta (% av män)
+    tot_män = df["Män"].sum() + df["Svarta"].sum()
+    stats["Andel svarta (%)"] = (df["Svarta"].sum() / tot_män * 100) if tot_män > 0 else 0
 
-    # ---- Klockan (starttid + 3h hångel + total tid + 1h vila efter scen) ----
-    plus_allt_sec = hangel_total_sec + total_tid_sec + 3600
-    klockan_label = _klockan_label(starttid, plus_allt_sec)
+    # Summeringar
+    stats["Summa älskar"] = df["Älskar"].sum()
+    stats["Summa sover med"] = df["Sover med"].sum()
+    stats["Summa Nils"] = df["Nils"].sum()
 
-    # ---- Hårdhet ----
-    hardhet = 0
-    if dp > 0:  hardhet += 3
-    if dpp > 0: hardhet += 4
-    if dap > 0: hardhet += 6
-    if tap > 0: hardhet += 8
-    if svarta > 0: hardhet += 3  # +3 om Svarta > 0
+    # Snitt älskar (delat med maxvärden i sidopanel)
+    max_älskar = sidopanel.get("Nils familj", 1) + sidopanel.get("Nils vänner", 1) + sidopanel.get("Grannar", 1) + sidopanel.get("Pappans vänner", 1)
+    stats["Snitt älskar"] = df["Älskar"].sum() / max_älskar if max_älskar > 0 else 0
 
-    # ---- Prenumeranter ----
-    # Bas = (Män + Fitta + Rumpa + DP + DPP + DAP + TAP + Känner) 
-    # MEN: Svarta räknas dubbelt (läggs på utöver Män).
-    pren_bas = (man + fitta + rumpa + dp + dpp + dap + tap + kanner_sum)
-    pren_bas += (svarta * 2)  # svarta dubblas
-    prenumeranter = pren_bas * hardhet
+    # Snitt sover med
+    max_sov = sidopanel.get("Nils familj", 1)
+    stats["Snitt sover med"] = df["Sover med"].sum() / max_sov if max_sov > 0 else 0
 
-    # Exkludera vila-typer från pren & ekonomi
-    if typ in ("Vila på jobbet", "Vila i hemmet"):
-        prenumeranter = 0
+    # Snitt tid per scen (exkl älskar/sover med-tid)
+    if antal_scener > 0:
+        stats["Snitt tid kille per scen (min)"] = scener_df["Tid kille"].sum() / antal_scener
+        stats["Snitt tid timmar per scen"] = (scener_df["Tid kille"].sum() / 60) / antal_scener
+    else:
+        stats["Snitt tid kille per scen (min)"] = 0
+        stats["Snitt tid timmar per scen"] = 0
 
-    # ---- Ekonomi ----
-    # Intäkter = Prenumeranter * Avgift
-    intakter = float(prenumeranter) * float(avgift)
+    # Summeringar av intäkter/kostnader
+    stats["Totalt intäkt känner"] = df["Intäkt känner"].sum()
+    stats["Totalt kostnad företag"] = df["Kostnad företag"].sum()
+    stats["Totalt vinst"] = df["Vinst"].sum()
+    stats["Totalt lön Malin"] = df["Lön Malin"].sum()
 
-    # Intäkt män (kostnad): (män + svarta) * 120
-    intakt_man = (man + svarta) * 120.0
+    # Snitt intäkt per maxvärden
+    max_sum = sum(sidopanel.values())
+    if max_sum > 0:
+        stats["Snitt intäkt/känner+företag+vinst"] = (
+            df["Intäkt känner"].sum() + df["Kostnad företag"].sum() + df["Vinst"].sum()
+        ) / max_sum
+    else:
+        stats["Snitt intäkt/känner+företag+vinst"] = 0
 
-    # Lön Malin: 10% av prenumeranter med min 150 max 800
-    lon_malin = float(prenumeranter) * 0.10
-    if lon_malin < 150:
-        lon_malin = 150.0
-    if lon_malin > 800:
-        lon_malin = 800.0
+    # Snitt Malins lön (delat på totalt antal män + älskar + sover med)
+    total_divisor = stats["Totalt antal män"] + stats["Summa älskar"] + stats["Summa sover med"]
+    if total_divisor > 0:
+        stats["Snitt lön Malin"] = stats["Totalt lön Malin"] / total_divisor
+    else:
+        stats["Snitt lön Malin"] = 0
 
-    # Intäkt Känner (kostnad): (Lön Malin + 120) * Känner
-    intakt_kanner = (lon_malin + 120.0) * kanner_sum
-
-    # Intäkt Företaget (kostnad): 20% av Intäkter
-    intakt_foretaget = intakter * 0.20
-
-    # För vila-typer nollställ ekonomin:
-    if typ in ("Vila på jobbet", "Vila i hemmet"):
-        intakter = 0.0
-        intakt_man = 0.0
-        intakt_kanner = 0.0
-        lon_malin = 0.0
-        intakt_foretaget = 0.0
-
-    # Vinst = Intäkter - Intäkt män - Intäkt Känner - Lön Malin - Intäkt Företaget
-    vinst = float(intakter) - float(intakt_man) - float(intakt_kanner) - float(lon_malin) - float(intakt_foretaget)
-
-    # ---- Ålder / Känner Sammanlagt ----
-    # (Ålder används bara i notisen i appen, inget fält)
-    kannersammanlagt = kanner_sum
-
-    # ---- Returnera dictionary i samma nyckelstruktur som appen förväntar sig ----
-    out = {
-        "Datum": rad_datum.isoformat() if hasattr(rad_datum, "isoformat") else str(rad_datum),
-        "Typ": typ,
-        "Veckodag": veckodag,
-        "Scen": grund.get("Scen", ""),
-        "Män": man,
-        "Svarta": svarta,
-        "Fitta": fitta,
-        "Rumpa": rumpa,
-        "DP": dp,
-        "DPP": dpp,
-        "DAP": dap,
-        "TAP": tap,
-
-        "Tid S": tid_s,
-        "Tid D": tid_d,
-        "Vila": vila,
-
-        "Summa S": int(summa_s),
-        "Summa D": int(summa_d),
-        "Summa TP": int(summa_tp),
-        "Summa Vila": int(vila_sec),
-
-        "Tid Älskar (sek)": int(tid_alskar_sec),
-        "Tid Älskar": _hm_str_from_seconds(tid_alskar_sec),
-
-        "Tid Sover med (sek)": int(tid_sover_sec),
-        "Tid Sover med": _hm_str_from_seconds(tid_sover_sec),
-
-        "Summa tid (sek)": int(total_tid_sec),
-        "Summa tid": summa_tid_label,
-
-        "Tid per kille (sek)": int(tpk_sec),
-        "Tid per kille": tpk_label,
-
-        "Klockan": klockan_label,
-
-        "Älskar": alskar,
-        "Sover med": sover,
-        "Känner": kanner_sum,
-
-        "Pappans vänner": pv,
-        "Grannar": gr,
-        "Nils vänner": nv,
-        "Nils familj": nf,
-
-        "Totalt Män": int(totalt_man),  # U + Män + Svarta
-
-        # Historiskt fält i basen; behåller kompatibilitet genom att spegla "Tid per kille"
-        "Tid kille": tpk_label,
-
-        "Nils": nils,
-
-        "Hångel (sek/kille)": int(hangel_per_kille_sec),
-        "Hångel (m:s/kille)": hangel_label_ms,
-
-        "Suger": int(suger_sec),
-        "Suger per kille (sek)": int(suger_per_kille_sec),
-
-        "Hårdhet": int(hardhet),
-
-        "Prenumeranter": int(prenumeranter),
-        "Avgift": float(avgift),
-        "Intäkter": float(intakter),
-
-        "Intäkt män": float(intakt_man),
-        "Intäkt Känner": float(intakt_kanner),
-        "Lön Malin": float(lon_malin),
-        "Intäkt Företaget": float(intakt_foretaget),
-        "Vinst": float(vinst),
-
-        "Känner Sammanlagt": int(kannersammanlagt),
-    }
-
-    return out
+    return stats
