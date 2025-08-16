@@ -1,119 +1,107 @@
-import pandas as pd
+import random
 
-# Hjälpfunktioner för tidshantering
+# Hjälpfunktion för att konvertera säkert
+def _safe_int(value, default=0):
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return default
+
+# Konvertera sekunder till "h:mm"-format
 def _hm_str_from_seconds(seconds: int) -> str:
-    h, m = divmod(seconds // 60, 60)
-    return f"{h:02d}:{m:02d}"
+    h = seconds // 3600
+    m = (seconds % 3600) // 60
+    return f"{h}:{m:02d}"
 
-def _ms_from_seconds(seconds: int) -> str:
-    m, s = divmod(seconds, 60)
-    return f"{m:02d}:{s:02d}"
+def beräkna_radvärden(row, inställningar):
+    """Beräknar alla automatiska fält för en rad baserat på inmatningar och inställningar."""
 
-# --------------------------------------------------
-# Beräkna radvärden
-# --------------------------------------------------
-def beräkna_radvärden(rad: dict, sidopanel: dict) -> dict:
-    man = int(rad.get("Män", 0))
-    svarta = int(rad.get("Svarta", 0))
-    bek = int(rad.get("Bekanta", 0))
-    dp = int(rad.get("DP", 0))
-    dpp = int(rad.get("DPP", 0))
-    dap = int(rad.get("DAP", 0))
-    tap = int(rad.get("TAP", 0))
-    alskar = int(rad.get("Älskar", 0))
-    sover_med = int(rad.get("Sover med", 0))
-    dt_tid = int(rad.get("DT tid", 60))   # standard 60 sek
-    dt_vila = int(rad.get("DT vila", 3))  # standard 3 sek
+    män = _safe_int(row.get("Män", 0))
+    svarta = _safe_int(row.get("Svarta", 0))
+    bekanta = _safe_int(row.get("Bekanta", 0))
+    eskilstuna = _safe_int(row.get("Eskilstuna killar", 0))
+    älskar = _safe_int(row.get("Älskar", 0))
+    sover_med = _safe_int(row.get("Sover med", 0))
 
-    # ---- Prenumeranter ----
-    # Svarta ger dubbelt
-    pren = man + (2 * svarta) + bek + dp + dpp + dap + tap
+    # Summor för total män
+    totalt_män = män + svarta + bekanta + eskilstuna
 
-    # ---- Intäkter ----
-    intakt_kanner = pren * 39.99
-    intakt_foretag = 0  # borttaget, används nu bara som kostnad i vinst
-    vinst = intakt_kanner - intakt_foretag
+    # DT tid (per man, default 60s) & DT vila (per man, default 3s)
+    dt_tid = _safe_int(row.get("DT tid", inställningar.get("DT tid standard", 60)))
+    dt_vila = _safe_int(row.get("DT vila", inställningar.get("DT vila standard", 3)))
 
-    # ---- Malins lön ----
-    malins_lon = min(max(vinst * 0.10, 150), 800)
+    # Total tid
+    summa_tid = _safe_int(row.get("Summa tid", 0))
+    summa_tid += totalt_män * dt_tid  # DT tid på tid kille
+    summa_vila = _safe_int(row.get("Summa vila", 0))
+    summa_vila += totalt_män * dt_vila  # DT vila på vila
 
-    # ---- Tid ----
-    tid_sek = 0
-    vila_sek = 0
+    row["Tid kille (min)"] = round((män * dt_tid) / 60, 2)  # män ger kostnad
+    row["Summa tid"] = summa_tid
+    row["Summa vila"] = summa_vila
+    row["Klockan"] = _hm_str_from_seconds(7 * 3600 + summa_tid + summa_vila)
 
-    # DT tid & vila
-    tid_sek += (man + svarta + bek) * dt_tid
-    vila_sek += (man + svarta + bek) * dt_vila
+    # Prenumeranter: Svarta ger dubbel effekt
+    pren = män + bekanta + eskilstuna + (svarta * 2)
+    row["Prenumeranter"] = pren
 
-    # Tid per kille (alla män + svarta + bekanta)
-    total_killar = man + svarta + bek
-    tid_per_kille_sek = (tid_sek // total_killar) if total_killar > 0 else 0
+    # Hårdhet: +3 om det finns svarta
+    hårdhet = _safe_int(row.get("Hårdhet", 0))
+    if svarta > 0:
+        hårdhet += 3
+    row["Hårdhet"] = hårdhet
 
-    # ---- Hångel (3h = 10800 sek, delas nu på män + svarta + bekanta) ----
-    hangel_divisor = max(man + svarta + bek, 1)
-    hangel_sek_per_kille = 10800 // hangel_divisor
-    hangel_ms_per_kille  = _ms_from_seconds(hangel_sek_per_kille)
+    # Hångel påverkas av alla
+    hångel = män + svarta + bekanta + eskilstuna
+    row["Hångel"] = hångel
 
-    # ---- Summera till rad ----
-    rad.update({
-        "Prenumeranter": pren,
-        "Intäkt känner": intakt_kanner,
-        "Intäkt företag": intakt_foretag,
-        "Vinst": vinst,
-        "Lön Malin": malins_lon,
-        "Summa tid": _hm_str_from_seconds(tid_sek),
-        "Summa vila": _hm_str_from_seconds(vila_sek),
-        "Tid kille": _ms_from_seconds(tid_per_kille_sek),
-        "Hångel (sek/kille)": hangel_ms_per_kille
-    })
+    # Intäkter
+    pris = 39.99
+    filmer = män + svarta + bekanta + eskilstuna
+    intakt_filmer = filmer * pris
+    intakt_känner = (män + svarta + bekanta + eskilstuna) * pris
+
+    # Företagets kostnad
+    intakt_företag = - (män * 5)  # ex: kostnad per man
+
+    vinst = intakt_filmer + intakt_känner + intakt_företag
+    row["Intäkt filmer"] = intakt_filmer
+    row["Intäkt känner"] = intakt_känner
+    row["Intäkt företag"] = intakt_företag
+    row["Vinst"] = vinst
+
+    # Malins lön
+    total_intakt = intakt_känner + intakt_företag + vinst
+    divisor_snitt_lon = (
+        totalt_män + älskar + sover_med
+    )
+    snitt_lon = total_intakt / divisor_snitt_lon if divisor_snitt_lon > 0 else 0
+    row["Lön Malin"] = max(150, min(800, snitt_lon))
+
+    return row
+
+
+def slumpa_vila_rad(typ, inställningar):
+    """Genererar slumpvärden för rader vid vila hemma eller vila på inspelningsplatsen."""
+    rad = {}
+
+    # Alla maxvärden slumpas 40–60 %
+    for key in ["Jobb", "Grannar", "Nils vänner", "Nils familj", "Bekanta"]:
+        maxv = inställningar.get(f"Max {key}", 0)
+        if maxv > 0:
+            val = int(random.randint(40, 60) * maxv / 100)
+            rad[key] = val
+        else:
+            rad[key] = 0
+
+    # Eskilstuna killar: 20–40, med viktad chans
+    if random.random() < 0.7:  # 70% chans > 30
+        rad["Eskilstuna killar"] = random.randint(31, 40)
+    else:  # 30% chans <= 30
+        rad["Eskilstuna killar"] = random.randint(20, 30)
+
+    # Män & Svarta slumpas som 0 vid vila
+    rad["Män"] = 0
+    rad["Svarta"] = 0
+
     return rad
-
-# --------------------------------------------------
-# Statistiksammanställning
-# --------------------------------------------------
-def beräkna_statistik(df: pd.DataFrame, sidopanel: dict) -> dict:
-    stats = {}
-
-    # Prenumeranter & intäkter
-    stats["Aktiva prenumeranter"] = df["Prenumeranter"].sum()
-    stats["Intäkt känner totalt"] = df["Intäkt känner"].sum()
-    stats["Vinst totalt"] = df["Vinst"].sum()
-    stats["Lön Malin totalt"] = df["Lön Malin"].sum()
-
-    # Snitt lön Malin = lön / (män + svarta + älskar + sover med)
-    divisor = (df["Män"].sum() + df["Svarta"].sum() +
-               df["Älskar"].sum() + df["Sover med"].sum())
-    stats["Snitt lön Malin"] = df["Lön Malin"].sum() / divisor if divisor > 0 else 0
-
-    # Snitt tid kille per scen (där män + svarta > 0)
-    scener_med_killar = df[(df["Män"] + df["Svarta"]) > 0]
-    if len(scener_med_killar) > 0:
-        stats["Snitt tid kille/scen"] = (
-            pd.to_timedelta(scener_med_killar["Tid kille"] + ":00")
-            .dt.total_seconds().mean() / 60
-        )
-    else:
-        stats["Snitt tid kille/scen"] = 0
-
-    # DP / DPP / DAP / TAP snitt
-    for col in ["DP", "DPP", "DAP", "TAP"]:
-        stats[f"Snitt {col}"] = df[col].sum() / len(df) if len(df) > 0 else 0
-
-    # Älskar / Sover med snitt
-    stats["Snitt Älskar (per max)"] = df["Älskar"].sum() / max(
-        sidopanel.get("Nils familj", 1), 1
-    )
-    stats["Snitt Sover med (per max)"] = df["Sover med"].sum() / max(
-        sidopanel.get("Nils familj", 1), 1
-    )
-    stats["Summa Älskar"] = df["Älskar"].sum()
-    stats["Summa Sover med"] = df["Sover med"].sum()
-
-    # Totalt antal män
-    stats["Totalt män"] = df["Män"].sum() + df["Svarta"].sum()
-    stats["Andel svarta (%)"] = (
-        df["Svarta"].sum() / stats["Totalt män"] * 100
-        if stats["Totalt män"] > 0 else 0
-    )
-
-    return stats
