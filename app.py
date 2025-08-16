@@ -64,6 +64,15 @@ def _parse_iso_date(s: str):
                 continue
     return None
 
+def _safe_int(x, default=0):
+    try:
+        if x is None: return default
+        if isinstance(x, str) and x.strip() == "":
+            return default
+        return int(float(x))
+    except Exception:
+        return default
+
 # =============================== Google Sheets =================================
 @st.cache_resource(show_spinner=False)
 def get_client():
@@ -142,7 +151,62 @@ def ensure_header_and_migrate():
 ensure_header_and_migrate()
 KOLUMNER = st.session_state["COLUMNS"]
 
-# ================================ Sidopanel ====================================
+# ===== Meny =====
+st.sidebar.title("Meny")
+view = st.sidebar.radio("Välj vy", ["Produktion", "Statistik"], index=0)
+
+# =============================== STATISTIKVY ================================
+if view == "Statistik":
+    st.header("📊 Statistik")
+
+    try:
+        rows = _retry_call(sheet.get_all_records)
+    except Exception as e:
+        st.warning(f"Kunde inte läsa data: {e}")
+        st.stop()
+
+    antal_scener = 0
+    privat_gb_cnt = 0
+    totalt_man = 0
+    summa_for_snitt_scener = 0
+    summa_privat_gb_kanner = 0
+
+    for r in rows:
+        man = _safe_int(r.get("Män", 0), 0)
+        kanner = _safe_int(r.get("Känner", 0), 0)
+
+        # Antal scener + summor för snitt (gäller bara rader där Män > 0)
+        if man > 0:
+            antal_scener += 1
+            totalt_man += man
+            summa_for_snitt_scener += (man + kanner)
+
+        # Privat GB-rader (Män = 0 och Känner > 0)
+        if man == 0 and kanner > 0:
+            privat_gb_cnt += 1
+            summa_privat_gb_kanner += kanner
+
+    # Snitt scener
+    snitt_scener = round(summa_for_snitt_scener / antal_scener, 2) if antal_scener > 0 else 0.0
+    # Snitt Privat GB
+    snitt_privat_gb = round(summa_privat_gb_kanner / privat_gb_cnt, 2) if privat_gb_cnt > 0 else 0.0
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    with c1:
+        st.metric("Antal scener", antal_scener)
+    with c2:
+        st.metric("Privat GB", privat_gb_cnt)
+    with c3:
+        st.metric("Totalt antal män", totalt_man)
+    with c4:
+        st.metric("Snitt scener", snitt_scener)
+    with c5:
+        st.metric("Snitt Privat GB", snitt_privat_gb)
+
+    # Stoppa här så inte produktion-UI:t renderas
+    st.stop()
+
+# ================================ Sidopanel (Produktion) ====================================
 st.sidebar.header("Inställningar")
 
 MIN_FOD   = date(1970, 1, 1)
