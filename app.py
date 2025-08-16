@@ -14,7 +14,7 @@ except Exception:
 
 # ============================== App-inställningar ===============================
 st.set_page_config(page_title="Malin", layout="centered")
-st.title("Malin-produktionsapp")
+st.title("produktionsapp")
 
 # =============================== Hjälpfunktioner ================================
 def _retry_call(fn, *args, **kwargs):
@@ -76,6 +76,7 @@ def _safe_int(x, default=0):
 # =============================== Google Sheets =================================
 @st.cache_resource(show_spinner=False)
 def get_client():
+    # Bara Sheets-scope (vi öppnar via URL/ID)
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(dict(st.secrets["GOOGLE_CREDENTIALS"]), scopes=scopes)
     return gspread.authorize(creds)
@@ -87,7 +88,7 @@ def resolve_sheet():
     """Öppna arket via ID eller URL (ingen Drive-API krävs)."""
     sid = st.secrets.get("GOOGLE_SHEET_ID", "").strip() if "GOOGLE_SHEET_ID" in st.secrets else ""
     if sid:
-        st.caption("🆔 Öppnar via GOOGLE_SHEET_ID…")
+        st.caption("🔗 Öppnar via GOOGLE_SHEET_ID…")
         return _retry_call(client.open_by_key, sid).sheet1
 
     url = st.secrets.get("SHEET_URL", "").strip() if "SHEET_URL" in st.secrets else ""
@@ -113,20 +114,22 @@ sheet = resolve_sheet()
 
 # =========================== Header-säkring / migration =========================
 DEFAULT_COLUMNS = [
-    "Datum",               # används för 30-dagars
-    "Typ",                 # "Vila på jobbet", "Vila i hemmet" eller tomt
+    "Datum",
+    "Typ",
     "Veckodag","Scen","Män","Fitta","Rumpa","DP","DPP","DAP","TAP",
-    "Tid S","Tid D","Vila","Summa S","Summa D","Summa TP","Summa Vila",
+    "Tid S","Tid D","Vila",
+    "Summa S","Summa D","Summa TP","Summa Vila",
     "Tid Älskar (sek)","Tid Älskar",
     "Tid Sover med (sek)","Tid Sover med",
     "Summa tid","Summa tid (sek)",
     "Tid per kille (sek)","Tid per kille",
-    "Klockan","Älskar","Sover med","Känner","Pappans vänner","Grannar",
-    "Nils vänner","Nils familj","Totalt Män","Tid kille","Nils",
+    "Klockan","Älskar","Sover med","Känner",
+    "Pappans vänner","Grannar","Nils vänner","Nils familj",
+    "Totalt Män","Tid kille","Nils",
     "Hångel (sek/kille)","Hångel (m:s/kille)",
     "Suger","Suger per kille (sek)",
     "Hårdhet","Prenumeranter","Avgift","Intäkter",
-    "Kostnad män","Intäkt Känner","Lön Malin","Intäkt Företaget","Vinst",
+    "Intäkt män","Intäkt Känner","Lön Malin","Intäkt Företaget","Vinst",
     "Känner Sammanlagt"
 ]
 
@@ -175,35 +178,25 @@ if view == "Statistik":
         man = _safe_int(r.get("Män", 0), 0)
         kanner = _safe_int(r.get("Känner", 0), 0)
 
-        # Antal scener + summor för snitt (gäller bara rader där Män > 0)
         if man > 0:
             antal_scener += 1
             totalt_man += man
             summa_for_snitt_scener += (man + kanner)
 
-        # Privat GB-rader (Män = 0 och Känner > 0)
         if man == 0 and kanner > 0:
             privat_gb_cnt += 1
             summa_privat_gb_kanner += kanner
 
-    # Snitt scener
     snitt_scener = round(summa_for_snitt_scener / antal_scener, 2) if antal_scener > 0 else 0.0
-    # Snitt Privat GB
     snitt_privat_gb = round(summa_privat_gb_kanner / privat_gb_cnt, 2) if privat_gb_cnt > 0 else 0.0
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        st.metric("Antal scener", antal_scener)
-    with c2:
-        st.metric("Privat GB", privat_gb_cnt)
-    with c3:
-        st.metric("Totalt antal män", totalt_man)
-    with c4:
-        st.metric("Snitt scener", snitt_scener)
-    with c5:
-        st.metric("Snitt Privat GB", snitt_privat_gb)
+    with c1: st.metric("Antal scener", antal_scener)
+    with c2: st.metric("Privat GB", privat_gb_cnt)
+    with c3: st.metric("Totalt antal män", totalt_man)
+    with c4: st.metric("Snitt scener", snitt_scener)
+    with c5: st.metric("Snitt Privat GB", snitt_privat_gb)
 
-    # Stoppa här så inte produktion-UI:t renderas
     st.stop()
 
 # ================================ Sidopanel (Produktion) ====================================
@@ -283,7 +276,7 @@ try:
         if not d or d < cutoff:
             continue
         subs = float(r.get("Prenumeranter", 0) or 0)
-        fee  = float(r.get("Avgift", 30) or 0)
+        fee  = float(r.get("Avgift", CFG["avgift_usd"]) or 0)
         active_subs += subs
         active_rev  += subs * fee
     st.sidebar.metric("Aktiva prenumeranter", int(active_subs))
@@ -354,7 +347,7 @@ scen = next_scene_number()
 rad_datum, veckodag = datum_och_veckodag_för_scen(scen)
 
 grund_preview = {
-    "Typ": "",  # vanlig händelse
+    "Typ": "",
     "Veckodag": veckodag, "Scen": scen,
     "Män": män, "Fitta": fitta, "Rumpa": rumpa, "DP": dp, "DPP": dpp, "DAP": dap, "TAP": tap,
     "Tid S": tid_s, "Tid D": tid_d, "Vila": vila,
@@ -435,8 +428,6 @@ def _save_row(grund, rad_datum, veckodag):
         base.setdefault("Avgift", float(CFG["avgift_usd"]))
         ber = calc_row_values(base, rad_datum, födelsedatum, starttid)
         ber["Datum"] = rad_datum.isoformat()
-        if "Intäkt män" in ber:
-            ber["Kostnad män"] = ber["Intäkt män"]
     except Exception as e:
         st.error(f"Beräkningen misslyckades vid sparning: {e}")
         return
@@ -506,7 +497,6 @@ st.markdown("---")
 st.subheader("🛠️ Snabbåtgärder")
 
 def _rand_30_50_of_max(mx: int) -> int:
-    """Slumpa 30–50% av mx (heltal). Om mx <= 0 -> 0."""
     try:
         mx = int(mx)
     except Exception:
@@ -543,15 +533,26 @@ if st.button("➕ Skapa 'Vila på jobbet'-rad"):
     except Exception as e:
         st.error(f"Misslyckades att skapa 'Vila på jobbet'-rad: {e}")
 
-# --- Vila i hemmet (7 rader) ---
+# --- Vila i hemmet (7 rader) — med Nils-fördelning 50/45/5 ---
 if st.button("🏠 Skapa 'Vila i hemmet' (7 dagar)"):
     try:
         start_scene = next_scene_number()
+
+        # Bestäm antal ettor för dag 1–6
+        r = random.random()
+        if r < 0.50:
+            ones_count = 0
+        elif r < 0.95:
+            ones_count = 1
+        else:
+            ones_count = 2
+        nils_one_offsets = set(random.sample(range(6), ones_count)) if ones_count > 0 else set()
+
         for offset in range(7):
             scen_num = start_scene + offset
             rad_d, veckod = datum_och_veckodag_för_scen(scen_num)
 
-            # Dag 1–5 slump, dag 6–7 ingen känner
+            # Dag 1–5 slump, dag 6–7 noll
             if offset <= 4:
                 pv = _rand_30_50_of_max(st.session_state.get("MAX_PAPPAN", 0))
                 gr = _rand_30_50_of_max(st.session_state.get("MAX_GRANNAR", 0))
@@ -562,6 +563,12 @@ if st.button("🏠 Skapa 'Vila i hemmet' (7 dagar)"):
 
             sv = 1 if offset == 6 else 0  # dag7 sover med
 
+            # Nils: dag7 = 0, dag1–6: enligt fördelning
+            if offset == 6:
+                nils_val = 0
+            else:
+                nils_val = 1 if offset in nils_one_offsets else 0
+
             grund_home = {
                 "Typ": "Vila i hemmet",
                 "Veckodag": veckod, "Scen": scen_num,
@@ -569,12 +576,12 @@ if st.button("🏠 Skapa 'Vila i hemmet' (7 dagar)"):
                 "Tid S": 0, "Tid D": 0, "Vila": 0,
                 "Älskar": 6, "Sover med": sv,
                 "Pappans vänner": pv, "Grannar": gr,
-                "Nils vänner": nv, "Nils familj": nf, "Nils": 0,
+                "Nils vänner": nv, "Nils familj": nf, "Nils": nils_val,
                 "Avgift": float(CFG.get("avgift_usd", 30.0)),
             }
             _save_row(grund_home, rad_d, veckod)
 
-        st.success("✅ Skapade 7 'Vila i hemmet'-rader.")
+        st.success("✅ Skapade 7 'Vila i hemmet'-rader (Nils 50/45/5).")
     except Exception as e:
         st.error(f"Misslyckades att skapa 'Vila i hemmet': {e}")
 
