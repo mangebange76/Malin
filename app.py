@@ -198,6 +198,47 @@ if view == "Statistik":
     with c4: st.metric("Snitt scener", snitt_scener)
     with c5: st.metric("Snitt Privat GB", snitt_privat_gb)
 
+    # --- Prenumeranter: total + aktiva 30 dagar ---
+    from datetime import timedelta as _td
+    total_pren = 0
+    for r in rows:
+        typ = (r.get("Typ") or "").strip()
+        if typ in ("Vila på jobbet", "Vila i hemmet"):
+            continue
+        total_pren += _safe_int(r.get("Prenumeranter", 0), 0)
+
+    cutoff = date.today() - _td(days=30)
+    aktiva_pren = 0
+    for r in rows:
+        typ = (r.get("Typ") or "").strip()
+        if typ in ("Vila på jobbet", "Vila i hemmet"):
+            continue
+        d = _parse_iso_date(r.get("Datum", ""))
+        if not d or d < cutoff:
+            continue
+        aktiva_pren += _safe_int(r.get("Prenumeranter", 0), 0)
+
+    st.markdown("---")
+    st.subheader("👥 Prenumeranter")
+    pc1, pc2 = st.columns(2)
+    with pc1: st.metric("Prenumeranter (totalt)", int(total_pren))
+    with pc2: st.metric("Aktiva prenumeranter (30 dagar)", int(aktiva_pren))
+
+    # --- Ekonomi (totalsummor i USD) ---
+    total_intakt_kanner = sum(_safe_int(r.get("Intäkt Känner", 0), 0) for r in rows)
+    total_intakt_foretag = sum(_safe_int(r.get("Intäkt Företaget", 0), 0) for r in rows)
+    total_vinst = sum(_safe_int(r.get("Vinst", 0), 0) for r in rows)
+    total_lon_malin = sum(_safe_int(r.get("Lön Malin", 0), 0) for r in rows)
+
+    st.markdown("---")
+    st.subheader("💰 Ekonomi (totalt)")
+    ec1, ec2 = st.columns(2)
+    with ec1: st.metric("Intäkt känner (totalt)", f"{round(total_intakt_kanner, 2)} USD")
+    with ec2: st.metric("Intäkt företag (totalt)", f"{round(total_intakt_foretag, 2)} USD")
+    ec3, ec4 = st.columns(2)
+    with ec3: st.metric("Vinst (totalt)", f"{round(total_vinst, 2)} USD")
+    with ec4: st.metric("Lön Malin (totalt)", f"{round(total_lon_malin, 2)} USD")
+
     st.markdown("---")
     st.subheader("🔩 DP / DPP / DAP / TAP — summa & snitt")
 
@@ -225,10 +266,11 @@ if view == "Statistik":
     with a4: st.metric("Snitt TAP / scen", tap_avg)
 
     st.markdown("---")
-    st.subheader("💗 Älskar / 😴 Sover med — summa & snitt")
+    st.subheader("💗 Älskar / 😴 Sover med — summa & snitt (plus Nils-summa)")
 
     alskar_sum = sum(_safe_int(r.get("Älskar", 0)) for r in rows)
     sover_sum  = sum(_safe_int(r.get("Sover med", 0)) for r in rows)
+    nils_sum   = sum(_safe_int(r.get("Nils", 0)) for r in rows)
 
     # Snitt Älskar: sum(Älskar) / (summa max från sidopanel: p+g+nv+nf)
     max_p  = int(st.session_state.get("MAX_PAPPAN", 0))
@@ -249,14 +291,13 @@ if view == "Statistik":
     with c_sov1: st.metric("Summa Sover med", sover_sum)
     with c_sov2: st.metric("Snitt Sover med", snitt_sover)
 
+    st.metric("Nils (summa)", nils_sum)
+
     st.markdown("---")
     st.subheader("⏱️ Snitt tid kille per scen")
-
-    # Snitt tid per kille (sek) över scener (Män > 0)
     tpk_total_sec = sum(_safe_int(r.get("Tid per kille (sek)", 0)) for r in rows if _safe_int(r.get("Män", 0)) > 0)
     tpk_avg_sec = int(round(tpk_total_sec / denom_scen)) if antal_scener > 0 else 0
     tpk_avg_label = _ms_str_from_seconds(tpk_avg_sec)
-
     st.metric("Snitt tid kille / scen", tpk_avg_label)
 
     st.stop()
