@@ -184,12 +184,14 @@ if view == "Statistik":
 
     total_svarta_sum = 0
     total_men_like_sum = 0  # män + eskilstuna + svarta (för andel svarta)
+    bekanta_total_for_snittlon = 0
 
     for r in rows:
         man = _safe_int(r.get("Män", 0), 0)
         esk = _safe_int(r.get("Eskilstuna killar", 0), 0)
         kanner = _safe_int(r.get("Känner", 0), 0)
         svarta = _safe_int(r.get("Svarta", 0), 0)
+        bekanta_val = _safe_int(r.get("Bekanta", 0), 0)
 
         men_like = man + esk  # för scener och totals
         men_like_plus_black = man + esk + svarta
@@ -205,6 +207,7 @@ if view == "Statistik":
 
         total_svarta_sum += svarta
         total_men_like_sum += men_like_plus_black
+        bekanta_total_for_snittlon += bekanta_val
 
     snitt_scener = round(summa_for_snitt_scener / antal_scener, 2) if antal_scener > 0 else 0.0
     snitt_privat_gb = round(summa_privat_gb_kanner / privat_gb_cnt, 2) if privat_gb_cnt > 0 else 0.0
@@ -312,10 +315,14 @@ if view == "Statistik":
     snitt_intakt_kanner = (total_intakt_kanner + total_intakt_foretag + total_vinst) / sum_max if sum_max > 0 else 0.0
     st.metric("Snitt intäkt känner", f"{snitt_intakt_kanner:.2f} USD")
 
-    # Snitt lön = (intäkt_känner + intäkt_företag + vinst) / (totalt_män (män+esk) + älskar + sover med)
+    # Snitt lön = (intäkt_känner + intäkt_företag + vinst) / (totalt män + svarta + bekanta + eskilstuna + älskar + sover med)
     alskar_sum_all = sum(_safe_int(r.get("Älskar", 0), 0) for r in rows)
     sover_sum_all  = sum(_safe_int(r.get("Sover med", 0), 0) for r in rows)
-    divisor_snitt_lon = (totalt_man + alskar_sum_all + sover_sum_all)
+    man_sum_all    = sum(_safe_int(r.get("Män", 0), 0) for r in rows)
+    esk_sum_all    = sum(_safe_int(r.get("Eskilstuna killar", 0), 0) for r in rows)
+    svart_sum_all  = sum(_safe_int(r.get("Svarta", 0), 0) for r in rows)
+    bek_sum_all    = sum(_safe_int(r.get("Bekanta", 0), 0) for r in rows)
+    divisor_snitt_lon = (man_sum_all + esk_sum_all + svart_sum_all + bek_sum_all + alskar_sum_all + sover_sum_all)
     snitt_lon = (total_intakt_kanner + total_intakt_foretag + total_vinst) / divisor_snitt_lon if divisor_snitt_lon > 0 else 0.0
     st.metric("Snitt lön", f"{snitt_lon:.2f} USD")
 
@@ -696,7 +703,7 @@ if "PENDING_SAVE" in st.session_state:
             try:
                 _apply_auto_max_and_save(pending)
             except Exception as e:
-                st.error(f"Kun­de inte spara: {e}")
+                st.error(f"Kunde inte spara: {e}")
             finally:
                 st.session_state.pop("PENDING_SAVE", None)
                 st.rerun()
@@ -710,7 +717,7 @@ st.markdown("---")
 st.subheader("🛠️ Snabbåtgärder")
 
 def _rand_40_60_of_max(mx: int) -> int:
-    """Ny range: 40–60% av max (använd om du byter policy)."""
+    """40–60% av max."""
     try:
         mx = int(mx)
     except Exception:
@@ -722,27 +729,12 @@ def _rand_40_60_of_max(mx: int) -> int:
     import random as _r
     return _r.randint(lo, hi)
 
-def _rand_30_50_of_max(mx: int) -> int:
-    """Behåller tidigare 30–50 om du vill använda den istället."""
-    try:
-        mx = int(mx)
-    except Exception:
-        mx = 0
-    if mx <= 0:
-        return 0
-    lo = max(0, int(round(mx * 0.30)))
-    hi = max(lo, int(round(mx * 0.50)))
-    import random as _r
-    return _r.randint(lo, hi)
-
 def _rand_eskilstuna_20_40() -> int:
     """20–40; 70% chans >30, 30% chans ≤30."""
     r = random.random()
     if r < 0.30:
-        # 30% chans: 20–30
         return random.randint(20, 30)
     else:
-        # 70% chans: 31–40
         return random.randint(31, 40)
 
 # --- Vila på jobbet ---
@@ -751,7 +743,6 @@ if st.button("➕ Skapa 'Vila på jobbet'-rad"):
         scen_num = next_scene_number()
         rad_datum2, veckodag2 = datum_och_veckodag_för_scen(scen_num)
 
-        # Byt till _rand_40_60_of_max(...) om du vill använda 40–60 istället för 30–50:
         pv = _rand_40_60_of_max(st.session_state.get("MAX_PAPPAN", 0))
         gr = _rand_40_60_of_max(st.session_state.get("MAX_GRANNAR", 0))
         nv = _rand_40_60_of_max(st.session_state.get("MAX_NILS_VANNER", 0))
