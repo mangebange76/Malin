@@ -1,476 +1,326 @@
+# app.py — stabil bas (ingen Sheets), uppdaterad enligt dina punkter
 import streamlit as st
 import pandas as pd
 from datetime import date, time, datetime, timedelta
 import random
 
-# =========================================================
-# App-inställningar (offline, inga Sheets-anrop alls)
-# =========================================================
+from berakningar import berakna_radvarden as calc_row_values
+
+# ================== Grund ==================
 st.set_page_config(page_title="Malin – produktionsapp", layout="wide")
-st.title("Malin – produktionsapp (offline)")
+st.title("Malin – produktionsapp (stabil bas)")
 
-# (valfri) beräkningar – om filen saknas kör appen ändå, men utan live-beräkning
-try:
-    from berakningar import berakna_radvarden as calc_row_values
-except Exception:
-    calc_row_values = None
+CFG_KEY = "CFG"
+DATA_KEY = "ROWS"
+ROWNO_KEY = "ROW_NO"
+HIST_KEY = "HIST_MINMAX"
 
-# =========================================================
-# Session keys & defaults
-# =========================================================
-CFG_KEY         = "CFG"
-DATA_KEY        = "LOCAL_ROWS"          # lokalt arkiv (lista av dicts)
-ROWCOUNT_KEY    = "ROWCOUNT_LOCAL"      # lokalt scennummer (bara för datum/veckodag)
-SCENE_INFO_KEY  = "CURRENT_SCENE_INFO"  # (scen, datum, veckodag)
-HIST_MINMAX_KEY = "HIST_MINMAX"         # cache för slump (min/max per kolumn)
-
-# Alla inputfält i exakt ordning du begärt
-INPUT_ORDER = [
-    ("in_man", "Män"),
-    ("in_svarta", "Svarta"),
-    ("in_fitta", "Fitta"),
-    ("in_rumpa", "Rumpa"),
-    ("in_dp", "DP"),
-    ("in_dpp", "DPP"),
-    ("in_dap", "DAP"),
-    ("in_tap", "TAP"),
-    ("in_pappan", "Pappans vänner"),
-    ("in_grannar", "Grannar"),
-    ("in_nils_vanner", "Nils vänner"),
-    ("in_nils_familj", "Nils familj"),
-    ("in_bekanta", "Bekanta"),
-    ("in_eskilstuna", "Eskilstuna killar"),
-    ("in_bonus_deltagit", "Bonus deltagit"),
-    ("in_personal_deltagit", "Personal deltagit"),
-    ("in_alskar", "Älskar"),
-    ("in_sover", "Sover med"),
-    ("in_tid_s", "Tid S (sek)"),
-    ("in_tid_d", "Tid D (sek)"),
-    ("in_vila", "Vila (sek)"),
-    ("in_dt_tid", "DT tid (sek/kille)"),
-    ("in_dt_vila", "DT vila (sek/kille)"),
-]
-
-# extra (används av beräkningar/metadata)
-AUX_KEYS = ["in_nils", "in_typ", "in_avgift"]
-
-def _init_defaults():
+def _init_state():
     if CFG_KEY not in st.session_state:
         st.session_state[CFG_KEY] = {
             "startdatum": date.today(),
             "starttid": time(7, 0),
-            "fodelsedatum": date(1995, 1, 1),   # OBS: utan åäö i nyckeln
+            "fodelsedatum": date(1995, 1, 1),
             "avgift_usd": 30.0,
-
-            # Viktigt: ALL personal får lön, inte bara “deltagit”
-            "PROD_STAFF": 800,
-
-            # Bonuskillar tillgängliga (du minskar själv via "Bonus deltagit" när du sparar)
+            "PROD_STAFF": 800,    # all personal får lön (inte bara deltagit)
             "BONUS_AVAILABLE": 500,
-
-            # Slumpintervall för Eskilstuna
             "ESK_MIN": 20,
             "ESK_MAX": 40,
-
-            # Maxvärden för källor (för t.ex. "Vila i hemmet" 40–60 %)
-            "MAX_PAPPAN": 10,
-            "MAX_GRANNAR": 10,
-            "MAX_NILS_VANNER": 10,
-            "MAX_NILS_FAMILJ": 10,
-            "MAX_BEKANTA": 10,
         }
     if DATA_KEY not in st.session_state:
-        st.session_state[DATA_KEY] = []   # lista av dictar (offline databas)
-    if ROWCOUNT_KEY not in st.session_state:
-        st.session_state[ROWCOUNT_KEY] = 0
-    if HIST_MINMAX_KEY not in st.session_state:
-        st.session_state[HIST_MINMAX_KEY] = {}
-
-    for k, _ in INPUT_ORDER:
-        st.session_state.setdefault(k, 0)
-    for k in AUX_KEYS:
-        st.session_state.setdefault(k, 0)
-
-_init_defaults()
+        st.session_state[DATA_KEY] = []  # sparas lokalt i sessionen
+    if ROWNO_KEY not in st.session_state:
+        st.session_state[ROWNO_KEY] = 0
+    if HIST_KEY not in st.session_state:
+        st.session_state[HIST_KEY] = {}
+_init_state()
 CFG = st.session_state[CFG_KEY]
 
-# =========================================================
-# Hjälp
-# =========================================================
-_VECKODAGAR = ["Måndag","Tisdag","Onsdag","Torsdag","Fredag","Lördag","Söndag"]
+def _next_scene_no() -> int:
+    return st.session_state[ROWNO_KEY] + 1
 
-def _scene_info():
-    """Helt offline: scennummer = lokalt sparade + 1, datum = start + (scen-1)."""
-    scen = st.session_state[ROWCOUNT_KEY] + 1
-    d = CFG["startdatum"] + timedelta(days=scen - 1)
-    return scen, d, _VECKODAGAR[d.weekday()]
+def _scene_date_and_wd(scene_no: int):
+    d = CFG["startdatum"] + timedelta(days=scene_no - 1)
+    wd = ["Måndag","Tisdag","Onsdag","Torsdag","Fredag","Lördag","Söndag"][d.weekday()]
+    return d, wd
 
-def _ensure_scene_info(force=False):
-    if force or (SCENE_INFO_KEY not in st.session_state):
-        st.session_state[SCENE_INFO_KEY] = _scene_info()
-
-def _hist_minmax(colname: str):
-    """Min/max baserat på lokalt arkiv."""
-    rows = st.session_state[DATA_KEY]
-    vals = []
-    for r in rows:
-        try:
-            v = int(r.get(colname, 0) or 0)
-            vals.append(v)
-        except Exception:
-            pass
-    return (min(vals), max(vals)) if vals else (0, 0)
-
-def _refresh_hist_minmax():
+def _rebuild_hist_minmax():
+    """Bygg min/max för slump från de lokalt sparade raderna."""
     cols = ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
             "Pappans vänner","Grannar","Nils vänner","Nils familj","Bekanta","Eskilstuna killar"]
-    cache = {}
-    for c in cols:
-        cache[c] = _hist_minmax(c)
-    st.session_state[HIST_MINMAX_KEY] = cache
+    mm = {c:[None,None] for c in cols}
+    for r in st.session_state[DATA_KEY]:
+        for c in cols:
+            try:
+                v = int(r.get(c, 0) or 0)
+            except Exception:
+                v = 0
+            if mm[c][0] is None or v < mm[c][0]: mm[c][0] = v
+            if mm[c][1] is None or v > mm[c][1]: mm[c][1] = v
+    st.session_state[HIST_KEY] = {c:(mm[c][0] or 0, mm[c][1] or 0) for c in cols}
 
-def _age_on(d: date, born: date) -> int:
-    return d.year - born.year - ((d.month, d.day) < (born.month, born.day))
-
-# =========================================================
-# Sidopanel – inställningar
-# =========================================================
+# ================ Sidopanel (inställningar + scenario) ================
 with st.sidebar:
-    st.header("Inställningar (offline)")
-    CFG["startdatum"] = st.date_input("Startdatum", value=CFG["startdatum"])
-    CFG["starttid"]   = st.time_input("Starttid", value=CFG["starttid"])
+    st.header("Inställningar")
+    CFG["startdatum"]   = st.date_input("Startdatum", value=CFG["startdatum"])
+    CFG["starttid"]     = st.time_input("Starttid", value=CFG["starttid"])
     CFG["fodelsedatum"] = st.date_input("Födelsedatum", value=CFG["fodelsedatum"])
+    CFG["avgift_usd"]   = st.number_input("Avgift (USD)", min_value=0.0, step=1.0, value=float(CFG["avgift_usd"]))
+    CFG["PROD_STAFF"]   = st.number_input("Totalt personal (får alltid lön)", min_value=0, step=1, value=int(CFG["PROD_STAFF"]))
+    st.caption(f"Bonus killar tillgängliga: **{CFG['BONUS_AVAILABLE']}**")
 
     st.markdown("---")
-    st.subheader("Ekonomi/Personal")
-    CFG["avgift_usd"]  = st.number_input("Avgift (USD per prenumerant)", min_value=0.0, step=1.0, value=float(CFG["avgift_usd"]))
-    CFG["PROD_STAFF"]  = st.number_input("Totalt antal personal (ALLA får lön)", min_value=0, step=1, value=int(CFG["PROD_STAFF"]))
-    st.caption("Personalens lön baseras alltid på hela personalstyrkan – inte 'deltagit'.")
-
-    st.markdown("---")
-    st.subheader("Bonus & Eskilstuna")
-    CFG["BONUS_AVAILABLE"] = st.number_input("Bonus killar tillgängliga (kan ändras manuellt)", min_value=0, step=1,
-                                             value=int(CFG["BONUS_AVAILABLE"]))
+    st.subheader("Eskilstuna-intervall")
     CFG["ESK_MIN"] = st.number_input("Eskilstuna min", min_value=0, step=1, value=int(CFG["ESK_MIN"]))
-    CFG["ESK_MAX"] = st.number_input("Eskilstuna max", min_value=CFG["ESK_MIN"], step=1, value=int(CFG["ESK_MAX"]))
+    CFG["ESK_MAX"] = st.number_input("Eskilstuna max", min_value=int(CFG["ESK_MIN"]), step=1, value=int(CFG["ESK_MAX"]))
 
-# =========================================================
-# Input – exakt ordning
-# =========================================================
-st.markdown("### 🎛️ Input (i rätt ordning)")
-cols = st.columns(4)
-for idx, (key, label) in enumerate(INPUT_ORDER):
-    col = cols[idx % 4]
-    with col:
-        if key == "in_sover":
-            st.session_state[key] = st.number_input(label, min_value=0, max_value=1, step=1, value=int(st.session_state[key]))
-        elif key == "in_bonus_deltagit":
-            st.session_state[key] = st.number_input(f"{label} (tillgängligt: {CFG['BONUS_AVAILABLE']})",
-                                                    min_value=0, step=1, value=int(st.session_state[key]))
-        else:
-            st.session_state[key] = st.number_input(label, min_value=0, step=1, value=int(st.session_state[key]))
-
-# Extra valfria fält
-st.session_state["in_nils"]   = st.number_input("Nils (valfritt)", min_value=0, step=1, value=int(st.session_state["in_nils"]))
-st.session_state["in_avgift"] = st.number_input("Avgift (USD, lämna 0 för standard)", min_value=0.0, step=1.0,
-                                                value=float(st.session_state["in_avgift"]))
-
-# =========================================================
-# Hämta/Slumpa inmatning (skriver bara till inputs)
-# =========================================================
-st.markdown("---")
-st.subheader("⚙️ Hämta/Slumpa scenvärden (påverkar endast input ovan)")
-
-_ensure_scene_info()
-scen, rad_datum, veckodag = st.session_state[SCENE_INFO_KEY]
-st.caption(f"Scen #{scen} — {rad_datum} ({veckodag})")
-
-action = st.selectbox(
-    "Välj åtgärd",
-    ["—", "Ny scen", "Slumpa scen vit", "Slumpa scen svart", "Vila på jobbet", "Vila i hemmet (dag 1–7)"],
-    index=0
-)
-
-colA, colB = st.columns([1, 3])
-with colA:
-    if st.button("📥 Hämta/Slumpa till input", use_container_width=True):
-        # hjälp-funktion
-        def _rand_from_hist(col):
-            lo, hi = st.session_state[HIST_MINMAX_KEY].get(col, (0, 0))
-            hi = max(hi, lo)
-            return random.randint(lo, hi) if hi > lo else lo
-
-        # kör scenario
-        if action == "Ny scen":
-            for k, _ in INPUT_ORDER:
-                st.session_state[k] = 0
-            st.session_state["in_typ"] = "Ny scen"
-
-        elif action == "Slumpa scen vit":
-            st.session_state["in_man"]    = _rand_from_hist("Män")
-            st.session_state["in_svarta"] = _rand_from_hist("Svarta")
-            st.session_state["in_fitta"]  = _rand_from_hist("Fitta")
-            st.session_state["in_rumpa"]  = _rand_from_hist("Rumpa")
-            st.session_state["in_dp"]     = _rand_from_hist("DP")
-            st.session_state["in_dpp"]    = _rand_from_hist("DPP")
-            st.session_state["in_dap"]    = _rand_from_hist("DAP")
-            st.session_state["in_tap"]    = _rand_from_hist("TAP")
-            st.session_state["in_pappan"]      = _rand_from_hist("Pappans vänner")
-            st.session_state["in_grannar"]     = _rand_from_hist("Grannar")
-            st.session_state["in_nils_vanner"] = _rand_from_hist("Nils vänner")
-            st.session_state["in_nils_familj"] = _rand_from_hist("Nils familj")
-            st.session_state["in_bekanta"]     = _rand_from_hist("Bekanta")
-            lo, hi = int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"])
-            hi = max(hi, lo)
-            st.session_state["in_eskilstuna"] = random.randint(lo, hi)
-            st.session_state["in_alskar"] = 8
-            st.session_state["in_sover"]  = 1
-            st.session_state["in_personal_deltagit"] = st.session_state["in_personal_deltagit"]
-            st.session_state["in_bonus_deltagit"]    = st.session_state["in_bonus_deltagit"]
-            st.session_state["in_typ"] = "Ny scen"
-
-        elif action == "Slumpa scen svart":
-            st.session_state["in_fitta"]  = _rand_from_hist("Fitta")
-            st.session_state["in_rumpa"]  = _rand_from_hist("Rumpa")
-            st.session_state["in_dp"]     = _rand_from_hist("DP")
-            st.session_state["in_dpp"]    = _rand_from_hist("DPP")
-            st.session_state["in_dap"]    = _rand_from_hist("DAP")
-            st.session_state["in_tap"]    = _rand_from_hist("TAP")
-            st.session_state["in_svarta"] = _rand_from_hist("Svarta")
-            for k in ["in_man","in_pappan","in_grannar","in_nils_vanner","in_nils_familj","in_bekanta","in_eskilstuna"]:
-                st.session_state[k] = 0
-            st.session_state["in_personal_deltagit"] = 0
-            st.session_state["in_alskar"] = 8
-            st.session_state["in_sover"]  = 1
-            st.session_state["in_typ"] = "Ny scen (svart)"
-
-        elif action == "Vila på jobbet":
-            # slumpa sex aktionsfält utifrån historik
-            for col, key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
-                             ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
-                st.session_state[key] = _rand_from_hist(col)
-            # övrigt noll/du anger själv
-            for k in ["in_man","in_svarta","in_pappan","in_grannar","in_nils_vanner","in_nils_familj","in_bekanta","in_eskilstuna"]:
-                st.session_state[k] = 0
-            st.session_state["in_personal_deltagit"] = st.session_state["in_personal_deltagit"]
-            st.session_state["in_alskar"] = 12
-            st.session_state["in_sover"]  = 1
-            st.session_state["in_typ"] = "Vila på jobbet"
-
-        elif action == "Vila i hemmet (dag 1–7)":
-            # Dagindex i separat selectbox till höger
-            pass
-
+    st.markdown("---")
+    scenval = st.selectbox(
+        "Scenario",
+        ["Ny scen", "Slumpa scen vit", "Slumpa scen svart", "Vila på jobbet", "Vila i hemmet"],
+        index=0
+    )
+    if st.button("⬇️ Hämta värden till formuläret"):
+        st.session_state["SCEN_TO_APPLY"] = scenval
         st.rerun()
 
-with colB:
-    if action == "Vila i hemmet (dag 1–7)":
-        day_idx = st.number_input("Vilken dag (1–7)?", min_value=1, max_value=7, step=1, value=1)
-        if st.button("📥 Hämta 'Vila i hemmet' för vald dag", use_container_width=True):
-            # Dag 1–5: 40–60 % av max; Dag 6–7: källor=0
-            offset = int(day_idx - 1)
+# ================ Input-fält (EXAKT ordning i EN kolumn) ================
+st.markdown("### Inmatning (exakt ordning)")
 
-            def _pct_of_max(key, lo=0.40, hi=0.60):
-                mx = int(CFG.get(key, 0))
-                if mx <= 0:
-                    return 0
-                a = int(round(mx * lo))
-                b = int(round(mx * hi))
-                return random.randint(a, b) if b >= a else a
+def _ni(label, key, min_value=0, value=0, step=1, help=None, max_value=None):
+    args = dict(label=label, min_value=min_value, step=step, key=key, help=help)
+    if max_value is not None:
+        args["max_value"] = max_value
+    if key not in st.session_state:
+        st.session_state[key] = value
+    return st.number_input(**args, value=st.session_state[key])
 
-            if offset <= 4:
-                st.session_state["in_pappan"]      = _pct_of_max("MAX_PAPPAN")
-                st.session_state["in_grannar"]     = _pct_of_max("MAX_GRANNAR")
-                st.session_state["in_nils_vanner"] = _pct_of_max("MAX_NILS_VANNER")
-                st.session_state["in_nils_familj"] = _pct_of_max("MAX_NILS_FAMILJ")
-                st.session_state["in_bekanta"]     = _pct_of_max("MAX_BEKANTA")
-                lo, hi = int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"])
-                hi = max(hi, lo)
-                st.session_state["in_eskilstuna"] = random.randint(lo, hi)
-            else:
-                for k in ["in_pappan","in_grannar","in_nils_vanner","in_nils_familj","in_bekanta"]:
-                    st.session_state[k] = 0
-                st.session_state["in_eskilstuna"] = 0
+# Ordningen du specificerade:
+in_man     = _ni("Män", "in_män", value=0)
+in_svarta  = _ni("Svarta", "in_svarta", value=0)
+in_fitta   = _ni("Fitta", "in_fitta", value=0)
+in_rumpa   = _ni("Rumpa", "in_rumpa", value=0)
+in_dp      = _ni("DP", "in_dp", value=0)
+in_dpp     = _ni("DPP", "in_dpp", value=0)
+in_dap     = _ni("DAP", "in_dap", value=0)
+in_tap     = _ni("TAP", "in_tap", value=0)
 
-            # Allt sexuellt 0 på vilodagar
-            for k in ["in_man","in_svarta","in_fitta","in_rumpa","in_dp","in_dpp","in_dap","in_tap"]:
-                st.session_state[k] = 0
+in_pappan  = _ni("Pappans vänner", "in_pappan", value=0)
+in_grannar = _ni("Grannar", "in_grannar", value=0)
+in_nv      = _ni("Nils vänner", "in_nils_vanner", value=0)
+in_nf      = _ni("Nils familj", "in_nils_familj", value=0)
+in_bek     = _ni("Bekanta", "in_bekanta", value=0)
+in_esk     = _ni("Eskilstuna killar", "in_eskilstuna", value=0)
 
-            st.session_state["in_personal_deltagit"] = st.session_state["in_personal_deltagit"]
-            st.session_state["in_alskar"] = 6
-            st.session_state["in_sover"]  = 1 if offset == 6 else 0
-            st.session_state["in_typ"]    = f"Vila i hemmet (dag {day_idx})"
-            st.rerun()
+in_bonus_d = _ni(f"Bonus deltagit (tillgängligt: {CFG['BONUS_AVAILABLE']})", "in_bonus_deltagit", value=0,
+                 max_value=int(CFG["BONUS_AVAILABLE"]))
+in_pers_d  = _ni("Personal deltagit", "in_personal_deltagit", value=0)
 
-# =========================================================
-# Bygg basrad + liveförhandsvisning
-# =========================================================
-def _build_base_row_from_inputs():
-    scen, rad_datum, veckodag = st.session_state[SCENE_INFO_KEY]
-    avgift = float(st.session_state.get("in_avgift") or CFG["avgift_usd"])
-    typ    = st.session_state.get("in_typ") or "Ny scen"
+in_alskar  = _ni("Älskar (antal)", "in_alskar", value=0)
+in_sover   = _ni("Sover med (0/1)", "in_sover", value=0, max_value=1)
 
-    # Hämta inmatningar
-    def gi(k): return int(st.session_state.get(k, 0) or 0)
+in_tid_s   = _ni("Tid S (sek)", "in_tid_s", value=60)
+in_tid_d   = _ni("Tid D (sek)", "in_tid_d", value=60)
+in_vila    = _ni("Vila (sek)", "in_vila", value=7)
+in_dt_tid  = _ni("DT tid (sek/kille)", "in_dt_tid", value=60)
+in_dt_vila = _ni("DT vila (sek/kille)", "in_dt_vila", value=3)
 
-    base = {
-        "_rad_datum": rad_datum,
-        "Datum": rad_datum.isoformat(),
-        "Veckodag": veckodag,
-        "Scen": scen,
-        "Typ": typ,
+# ================ Scenariofyllning (rör BARA inputs) ================
+def _hist_minmax(col):
+    lo, hi = st.session_state[HIST_KEY].get(col, (0, 0))
+    return int(lo), int(hi)
 
-        "Män": gi("in_man"),
-        "Svarta": gi("in_svarta"),
-        "Fitta": gi("in_fitta"),
-        "Rumpa": gi("in_rumpa"),
-        "DP": gi("in_dp"),
-        "DPP": gi("in_dpp"),
-        "DAP": gi("in_dap"),
-        "TAP": gi("in_tap"),
+def _rand_hist(col):
+    lo, hi = _hist_minmax(col)
+    if hi < lo: hi = lo
+    return random.randint(lo, hi) if hi > lo else lo
 
-        "Pappans vänner": gi("in_pappan"),
-        "Grannar": gi("in_grannar"),
-        "Nils vänner": gi("in_nils_vanner"),
-        "Nils familj": gi("in_nils_familj"),
-        "Bekanta": gi("in_bekanta"),
-        "Eskilstuna killar": gi("in_eskilstuna"),
+def _apply_scenario_to_inputs(name: str):
+    def zero_many(keys):
+        for k in keys: st.session_state[k] = 0
 
-        # du anger själv antal som deltar; vi visar tillgängligt separat
-        "Bonus killar": int(CFG["BONUS_AVAILABLE"]),
-        "Bonus deltagit": gi("in_bonus_deltagit"),
-
-        "Personal deltagit": gi("in_personal_deltagit"),
-
-        "Älskar": gi("in_alskar"),
-        "Sover med": gi("in_sover"),
-
-        "Tid S": gi("in_tid_s"),
-        "Tid D": gi("in_tid_d"),
-        "Vila":  gi("in_vila"),
-        "DT tid (sek/kille)":  gi("in_dt_tid"),
-        "DT vila (sek/kille)": gi("in_dt_vila"),
-
-        "Nils": gi("in_nils"),
-        "Avgift": avgift,
-
-        # viktigt: all personal får lön
-        "PROD_STAFF": int(CFG["PROD_STAFF"]),
-    }
-
-    # "Känner" = summan av fyra källor
-    base["Känner"] = base["Pappans vänner"] + base["Grannar"] + base["Nils vänner"] + base["Nils familj"]
-    return base
-
-def _calc_preview_row(base):
-    if not callable(calc_row_values):
-        return {}
-    try:
-        return calc_row_values(grund=base, rad_datum=base["_rad_datum"],
-                               fodelsedatum=CFG["fodelsedatum"], starttid=CFG["starttid"]) or {}
-    except TypeError:
-        # bakåtkompatibel signatur
-        return calc_row_values(base, base["_rad_datum"], CFG["fodelsedatum"], CFG["starttid"]) or {}
-
-def _ms(sec: int) -> str:
-    m = sec // 60; s = sec % 60
-    return f"{m}m {s}s"
-
-def _preview_panel(pre):
-    if not pre:
-        st.info("Ingen förhandsdata – fyll i fält eller hämta scenvärden.")
+    if name == "Ny scen":
+        # gör inget — låt dina manuella värden stå kvar
         return
 
-    # överkant
-    dd = pre.get("Datum", "-")
-    vd = pre.get("Veckodag", "-")
-    try:
-        d = datetime.fromisoformat(dd).date()
-    except Exception:
-        d = date.today()
-    alder = _age_on(d, CFG["fodelsedatum"])
-    st.markdown(f"**Datum/Veckodag:** {dd} / {vd} • **Ålder:** {alder} år")
+    if name == "Slumpa scen vit":
+        # Svarta ska ALLTID vara 0 här
+        st.session_state["in_svarta"] = 0
+        # Slumpa övriga
+        st.session_state["in_män"]    = _rand_hist("Män")
+        st.session_state["in_fitta"]  = _rand_hist("Fitta")
+        st.session_state["in_rumpa"]  = _rand_hist("Rumpa")
+        st.session_state["in_dp"]     = _rand_hist("DP")
+        st.session_state["in_dpp"]    = _rand_hist("DPP")
+        st.session_state["in_dap"]    = _rand_hist("DAP")
+        st.session_state["in_tap"]    = _rand_hist("TAP")
+        st.session_state["in_pappan"] = _rand_hist("Pappans vänner")
+        st.session_state["in_grannar"]= _rand_hist("Grannar")
+        st.session_state["in_nils_vanner"] = _rand_hist("Nils vänner")
+        st.session_state["in_nils_familj"] = _rand_hist("Nils familj")
+        st.session_state["in_bekanta"]     = _rand_hist("Bekanta")
+        st.session_state["in_eskilstuna"]  = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
+        st.session_state["in_personal_deltagit"] = 0
+        st.session_state["in_alskar"] = 8
+        st.session_state["in_sover"]  = 1
+        # Bonus deltagit anger du själv (fältet står kvar)
 
-    # tider
-    c1, c2, c3 = st.columns(3)
+    elif name == "Slumpa scen svart":
+        # Svarta slumpas, alla källor 0, personal 0
+        st.session_state["in_fitta"]  = _rand_hist("Fitta")
+        st.session_state["in_rumpa"]  = _rand_hist("Rumpa")
+        st.session_state["in_dp"]     = _rand_hist("DP")
+        st.session_state["in_dpp"]    = _rand_hist("DPP")
+        st.session_state["in_dap"]    = _rand_hist("DAP")
+        st.session_state["in_tap"]    = _rand_hist("TAP")
+        st.session_state["in_svarta"] = _rand_hist("Svarta")
+        zero_many(["in_män","in_pappan","in_grannar","in_nils_vanner","in_nils_familj","in_bekanta","in_eskilstuna"])
+        st.session_state["in_personal_deltagit"] = 0
+        st.session_state["in_alskar"] = 8
+        st.session_state["in_sover"]  = 1
+
+    elif name == "Vila på jobbet":
+        # Slumpa: Pappans vänner, Grannar, Nils vänner, Nils familj, Bekanta, Eskilstuna killar
+        for col, key in [
+            ("Pappans vänner","in_pappan"),
+            ("Grannar","in_grannar"),
+            ("Nils vänner","in_nils_vanner"),
+            ("Nils familj","in_nils_familj"),
+            ("Bekanta","in_bekanta"),
+        ]:
+            st.session_state[key] = _rand_hist(col)
+        st.session_state["in_eskilstuna"]  = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
+
+        # Sex-aktiviteter kan slumpas lätt från historik (eller nollas – din call).
+        st.session_state["in_fitta"] = _rand_hist("Fitta")
+        st.session_state["in_rumpa"] = _rand_hist("Rumpa")
+        st.session_state["in_dp"]    = _rand_hist("DP")
+        st.session_state["in_dpp"]   = _rand_hist("DPP")
+        st.session_state["in_dap"]   = _rand_hist("DAP")
+        st.session_state["in_tap"]   = _rand_hist("TAP")
+
+        st.session_state["in_män"]    = 0   # enligt tidigare logik
+        st.session_state["in_svarta"] = 0
+        # Bonus/Personal anger du själv
+        st.session_state["in_alskar"] = 12
+        st.session_state["in_sover"]  = 1
+
+    elif name == "Vila i hemmet":
+        # Slumpa: Pappans vänner, Grannar, Nils vänner, Nils familj, Bekanta, Eskilstuna killar
+        for col, key in [
+            ("Pappans vänner","in_pappan"),
+            ("Grannar","in_grannar"),
+            ("Nils vänner","in_nils_vanner"),
+            ("Nils familj","in_nils_familj"),
+            ("Bekanta","in_bekanta"),
+        ]:
+            st.session_state[key] = _rand_hist(col)
+        st.session_state["in_eskilstuna"]  = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
+
+        # Sex-aktiviteter 0 hemma (enligt tidigare önskemål)
+        zero_many(["in_män","in_svarta","in_fitta","in_rumpa","in_dp","in_dpp","in_dap","in_tap"])
+        # Bonus/Personal anger du själv
+        st.session_state["in_alskar"] = 6
+        st.session_state["in_sover"]  = 0  # sätt 1 själv när det är ‘sista dagen’
+
+if "SCEN_TO_APPLY" in st.session_state:
+    _apply_scenario_to_inputs(st.session_state.pop("SCEN_TO_APPLY"))
+
+# ================ Live-förhandsvisning ================
+def _build_base_for_calc():
+    scen_no = _next_scene_no()
+    d, wd = _scene_date_and_wd(scen_no)
+    base = {
+        "Datum": d.isoformat(),
+        "Veckodag": wd,
+        "Scen": scen_no,
+        "Typ": "Händelse",
+
+        # inputs
+        "Män": st.session_state["in_män"],
+        "Svarta": st.session_state["in_svarta"],
+        "Fitta": st.session_state["in_fitta"],
+        "Rumpa": st.session_state["in_rumpa"],
+        "DP": st.session_state["in_dp"],
+        "DPP": st.session_state["in_dpp"],
+        "DAP": st.session_state["in_dap"],
+        "TAP": st.session_state["in_tap"],
+
+        "Pappans vänner": st.session_state["in_pappan"],
+        "Grannar": st.session_state["in_grannar"],
+        "Nils vänner": st.session_state["in_nils_vanner"],
+        "Nils familj": st.session_state["in_nils_familj"],
+        "Bekanta": st.session_state["in_bekanta"],
+        "Eskilstuna killar": st.session_state["in_eskilstuna"],
+
+        "Bonus deltagit": st.session_state["in_bonus_deltagit"],
+        "Personal deltagit": st.session_state["in_personal_deltagit"],
+
+        "Älskar": st.session_state["in_alskar"],
+        "Sover med": st.session_state["in_sover"],
+
+        "Tid S": st.session_state["in_tid_s"],
+        "Tid D": st.session_state["in_tid_d"],
+        "Vila":  st.session_state["in_vila"],
+        "DT tid (sek/kille)":  st.session_state["in_dt_tid"],
+        "DT vila (sek/kille)": st.session_state["in_dt_vila"],
+
+        "Avgift": float(CFG["avgift_usd"]),
+        "PROD_STAFF": int(CFG["PROD_STAFF"]),
+    }
+    # Känner (radnivå) = fyra fält
+    base["Känner"] = int(base["Pappans vänner"]) + int(base["Grannar"]) + int(base["Nils vänner"]) + int(base["Nils familj"])
+    return base, d
+
+base, rad_datum = _build_base_for_calc()
+preview = calc_row_values(base, rad_datum, CFG["fodelsedatum"], CFG["starttid"])
+
+st.markdown("### Live-förhandsvisning")
+if not preview:
+    st.info("Fyll i fält eller hämta scenvärden för att se förhandsvisning.")
+else:
+    c1,c2,c3,c4 = st.columns(4)
     with c1:
-        st.metric("Summa tid", pre.get("Summa tid", "-"))
-        st.metric("Summa tid (sek)", int(pre.get("Summa tid (sek)", 0)))
+        st.metric("Summa tid", preview.get("Summa tid","-"))
+        st.metric("Summa tid (sek)", int(preview.get("Summa tid (sek)", 0)))
     with c2:
-        st.metric("Tid/kille", pre.get("Tid per kille", "-"))
-        st.metric("Tid/kille (sek)", int(pre.get("Tid per kille (sek)", 0)))
+        st.metric("Tid/kille", preview.get("Tid per kille","-"))
+        st.metric("Tid/kille (sek)", int(preview.get("Tid per kille (sek)", 0)))
     with c3:
-        st.metric("Klockan", pre.get("Klockan", "-"))
-        st.metric("Totalt män", int(pre.get("Totalt Män", 0)))
-
-    c4, c5 = st.columns(2)
+        st.metric("Totalt män", int(preview.get("Totalt Män", 0)))
+        st.metric("Klockan", preview.get("Klockan","-"))
     with c4:
-        st.metric("Hångel (m:s/kille)", pre.get("Hångel (m:s/kille)", "-"))
-        st.metric("Hångel (sek/kille)", int(pre.get("Hångel (sek/kille)", 0)))
-    with c5:
-        st.metric("Suger (totalt sek)", int(pre.get("Suger", 0)))
-        st.metric("Suger per kille (sek)", int(pre.get("Suger per kille (sek)", 0)))
-    st.caption("Obs: Älskar/Sover ingår inte i Summa tid, men läggs på klockan.")
+        st.metric("Hårdhet", int(preview.get("Hårdhet", 0)))
+        st.metric("Prenumeranter", int(preview.get("Prenumeranter", 0)))
 
-    st.markdown("**💵 Ekonomi (live)**")
-    e1, e2, e3, e4 = st.columns(4)
+    st.markdown("#### Ekonomi")
+    e1,e2,e3,e4 = st.columns(4)
     with e1:
-        st.metric("Prenumeranter", int(pre.get("Prenumeranter", 0)))
-        st.metric("Hårdhet", int(pre.get("Hårdhet", 0)))
+        st.metric("Intäkter", f"${float(preview.get('Intäkter', 0)):,.2f}")
     with e2:
-        st.metric("Intäkter", f"${float(pre.get('Intäkter', 0)):,.2f}")
-        st.metric("Intäkt Känner", f"${float(pre.get('Intäkt Känner', 0)):,.2f}")
+        st.metric("Utgift män", f"${float(preview.get('Utgift män', 0)):,.2f}")
     with e3:
-        st.metric("Utgift män", f"${float(pre.get('Utgift män', 0)):,.2f}")
-        st.metric("Lön Malin", f"${float(pre.get('Lön Malin', 0)):,.2f}")
+        st.metric("Intäkt Känner", f"${float(preview.get('Intäkt Känner', 0)):,.2f}")
     with e4:
-        st.metric("Vinst", f"${float(pre.get('Vinst', 0)):,.2f}")
-        st.metric("Tid Älskar (sek)", int(pre.get("Tid Älskar (sek)", 0)))
+        st.metric("Lön Malin", f"${float(preview.get('Lön Malin', 0)):,.2f}")
+    st.metric("Vinst", f"${float(preview.get('Vinst', 0)):,.2f}")
 
-# Förhandsvisning
-base = _build_base_row_from_inputs()
-preview = _calc_preview_row(base)
+# ================ Spara lokalt (ingen Sheets här) ================
 st.markdown("---")
-st.subheader("🔎 Förhandsvisning (live, offline)")
-_preview_panel(preview)
-
-# =========================================================
-# Spara (offline – till minnet)
-# =========================================================
-st.markdown("---")
-if st.button("💾 Spara raden (offline)", use_container_width=True):
-    base = _build_base_row_from_inputs()
-    pre = _calc_preview_row(base)
-    if not pre:
-        st.error("Beräkningen saknas eller misslyckades – kan inte spara.")
+if st.button("💾 Spara raden (lokalt i sessionen)"):
+    if not preview:
+        st.error("Inget att spara – fyll i fält eller hämta scenvärden först.")
     else:
-        # spara lokalt
-        st.session_state[DATA_KEY].append(pre)
+        st.session_state[DATA_KEY].append(preview)
+        st.session_state[ROWNO_KEY] += 1
+        # minska tillgängliga bonuskillar med det du angett som deltagit
+        used = int(base.get("Bonus deltagit", 0))
+        CFG["BONUS_AVAILABLE"] = max(0, int(CFG["BONUS_AVAILABLE"]) - used)
+        _rebuild_hist_minmax()
+        st.success("✅ Rad sparad (lokalt).")
 
-        # uppdatera lokalt scennummer & sceninfo
-        st.session_state[ROWCOUNT_KEY] += 1
-        _ensure_scene_info(force=True)
-
-        # minska BONUS_AVAILABLE med "Bonus deltagit"
-        try:
-            used = int(base.get("Bonus deltagit", 0))
-            CFG["BONUS_AVAILABLE"] = max(0, int(CFG["BONUS_AVAILABLE"]) - used)
-        except Exception:
-            pass
-
-        # uppdatera historik för bättre slump framåt
-        _refresh_hist_minmax()
-
-        st.success("✅ Raden sparad (offline).")
-        st.rerun()
-
-# =========================================================
-# Visa lokalt arkiv
-# =========================================================
-st.markdown("---")
-st.subheader("📄 Lokala rader (offline)")
+# Visa sparade rader
 if st.session_state[DATA_KEY]:
+    st.markdown("### Sparade rader (lokalt)")
     df = pd.DataFrame(st.session_state[DATA_KEY])
     st.dataframe(df, use_container_width=True)
-else:
-    st.info("Inga rader sparade ännu.")
