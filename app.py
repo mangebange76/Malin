@@ -6,25 +6,43 @@ import json
 
 # ======== App-inställningar ========
 st.set_page_config(page_title="Malin – produktionsapp", layout="wide")
-st.title("Malin – produktionsapp (lokal, Sheets endast vid Spara)")
+st.title("Malin – produktionsapp (lokal, Sheets på Spara)")
 
 # ======== State-nycklar ========
 CFG_KEY       = "CFG"
 ROWS_KEY      = "ROWS"          # sparade rader (lokalt minne)
-HIST_MM_KEY   = "HIST_MINMAX"   # min/max per fält (byggs när du sparar rader)
+HIST_MM_KEY   = "HIST_MINMAX"   # min/max per fält (bygger vi när du sparar rader)
 SCENEINFO_KEY = "CURRENT_SCENE" # (scen_nr, rad_datum, veckodag)
 SCENARIO_KEY  = "SCENARIO"      # rullist-valet
 
-# Alla inputfält (EXAKT ordning du begärde)
-INPUT_ORDER = [
-    "in_man", "in_svarta",
-    "in_fitta", "in_rumpa", "in_dp", "in_dpp", "in_dap", "in_tap",
-    "in_tid_s", "in_tid_d", "in_vila", "in_dt_tid", "in_dt_vila",
-    "in_alskar", "in_sover",
-    "in_pappan", "in_grannar", "in_nils_vanner", "in_nils_familj", "in_bekanta",
-    "in_eskilstuna",
-    "in_bonus_deltagit", "in_personal_deltagit",
+# ======== Input-ordning (EXAKT som du angav) ========
+ORDERED_FIELDS = [
+    ("in_man", "Män"),
+    ("in_svarta", "Svarta"),
+    ("in_fitta", "Fitta"),
+    ("in_rumpa", "Rumpa"),
+    ("in_dp", "DP"),
+    ("in_dpp", "DPP"),
+    ("in_dap", "DAP"),
+    ("in_tap", "TAP"),
+    ("in_tid_s", "Tid S (sek)"),
+    ("in_tid_d", "Tid D (sek)"),
+    ("in_vila", "Vila (sek)"),
+    ("in_dt_tid", "DT tid (sek/kille)"),
+    ("in_dt_vila", "DT vila (sek/kille)"),
+    ("in_alskar", "Älskar"),
+    ("in_sover", "Sover med (0/1)"),
+    ("in_pappan", "Pappans vänner"),
+    ("in_grannar", "Grannar"),
+    ("in_nils_vanner", "Nils vänner"),
+    ("in_nils_familj", "Nils familj"),
+    ("in_bekanta", "Bekanta"),
+    ("in_eskilstuna", "Eskilstuna killar"),
+    ("in_bonus_deltagit", "Bonus deltagit"),
+    ("in_personal_deltagit", "Personal deltagit"),
 ]
+# Vi behåller "Nils" som eget fält (utanför din strikta ordning) då beräkningar kan använda det
+EXTRA_FIELD_NILS = ("in_nils", "Nils")
 
 # ======== Init ========
 def _current_scene_info():
@@ -50,18 +68,10 @@ def init_state():
         st.session_state[HIST_MM_KEY] = {} # t.ex. {"Fitta": (min,max), ...}
     if SCENARIO_KEY not in st.session_state:
         st.session_state[SCENARIO_KEY] = "Ny scen"
-
-    # Sätt bra startvärden (för att undvika widget/state-krock anger vi dem här, inte i widgets)
-    defaults = {
-        "in_tid_s": 60, "in_tid_d": 60, "in_vila": 7, "in_dt_tid": 60, "in_dt_vila": 3,
-        "in_alskar": 0, "in_sover": 0,
-    }
-    for k in INPUT_ORDER:
-        if k in defaults:
-            st.session_state.setdefault(k, defaults[k])
-        else:
-            st.session_state.setdefault(k, 0)
-
+    # säkra alla inputs med default = 0
+    for key, _ in ORDERED_FIELDS:
+        st.session_state.setdefault(key, 0)
+    st.session_state.setdefault(EXTRA_FIELD_NILS[0], 0)
     # sceninfo
     if SCENEINFO_KEY not in st.session_state:
         st.session_state[SCENEINFO_KEY] = _current_scene_info()
@@ -69,20 +79,10 @@ def init_state():
 init_state()
 
 # ======== Import av beräkning ========
-calc_row_values = None
-_import_err = None
 try:
-    from berakningar import calc_row_values as _crv
-    calc_row_values = _crv
-except Exception:
-    try:
-        from Berakningar import calc_row_values as _crv2
-        calc_row_values = _crv2
-    except Exception as e:
-        _import_err = e
-
-if calc_row_values is None:
-    st.error(f"Kunde inte importera beräkningar: {_import_err}")
+    from berakningar import calc_row_values
+except Exception as e:
+    st.error(f"Kunde inte importera beräkningar: {e}")
     st.stop()
 
 # ======== Hjälpare för slump/minmax (MÅSTE ligga före sidopanelen) ========
@@ -94,8 +94,10 @@ def _minmax_from_hist(colname: str):
         v = r.get(colname, 0)
         try: vals.append(int(v))
         except: pass
-    if vals: mn, mx = min(vals), max(vals)
-    else:    mn = mx = 0
+    if vals:
+        mn, mx = min(vals), max(vals)
+    else:
+        mn = mx = 0
     st.session_state[HIST_MM_KEY][colname] = (mn, mx)
     return mn, mx
 
@@ -110,13 +112,18 @@ def apply_scenario_fill():
     s = st.session_state[SCENARIO_KEY]
 
     # nolla alla inputs först
-    for k in INPUT_ORDER: st.session_state[k] = 0
+    for key, _ in ORDERED_FIELDS:
+        st.session_state[key] = 0
+    st.session_state[EXTRA_FIELD_NILS[0]] = 0
 
     if s == "Ny scen":
+        # allt 0 – du matar in själv
         pass
 
     elif s == "Slumpa scen vit":
-        st.session_state["in_svarta"] = 0  # viktigt: alltid 0
+        # Svarta = 0 (alltid)
+        st.session_state["in_svarta"] = 0
+        # Slumpa övriga via historik
         st.session_state["in_man"]    = _rand_hist("Män")
         st.session_state["in_fitta"]  = _rand_hist("Fitta")
         st.session_state["in_rumpa"]  = _rand_hist("Rumpa")
@@ -124,23 +131,26 @@ def apply_scenario_fill():
         st.session_state["in_dpp"]    = _rand_hist("DPP")
         st.session_state["in_dap"]    = _rand_hist("DAP")
         st.session_state["in_tap"]    = _rand_hist("TAP")
+        st.session_state["in_pappan"]      = _rand_hist("Pappans vänner")
+        st.session_state["in_grannar"]     = _rand_hist("Grannar")
+        st.session_state["in_nils_vanner"] = _rand_hist("Nils vänner")
+        st.session_state["in_nils_familj"] = _rand_hist("Nils familj")
+        st.session_state["in_bekanta"]     = _rand_hist("Bekanta")
+        st.session_state["in_eskilstuna"]  = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
         st.session_state["in_alskar"] = 8
         st.session_state["in_sover"]  = 1
-        for f, key in [("Pappans vänner","in_pappan"),("Grannar","in_grannar"),
-                       ("Nils vänner","in_nils_vanner"),("Nils familj","in_nils_familj"),
-                       ("Bekanta","in_bekanta")]:
-            st.session_state[key] = _rand_hist(f)
-        st.session_state["in_eskilstuna"]  = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
+        # bonus/personaldeltagit anger du manuellt
 
     elif s == "Slumpa scen svart":
         st.session_state["in_svarta"] = _rand_hist("Svarta")
         for f, key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
             st.session_state[key] = _rand_hist(f)
+        # övriga källor = 0, personal deltagit = 0 (du kan ändra manuellt)
         st.session_state["in_alskar"] = 8
         st.session_state["in_sover"]  = 1
-        # övriga källor lämnas 0
 
     elif s == "Vila på jobbet":
+        # Slumpa källor + sexuella fält
         for f, key in [("Pappans vänner","in_pappan"),("Bekanta","in_bekanta"),
                        ("Grannar","in_grannar"),("Nils vänner","in_nils_vanner"),
                        ("Nils familj","in_nils_familj")]:
@@ -151,14 +161,20 @@ def apply_scenario_fill():
             st.session_state[key] = _rand_hist(f)
         st.session_state["in_alskar"] = 12
         st.session_state["in_sover"]  = 1
+        # bonus/personaldeltagit anger du själv
 
     elif s == "Vila i hemmet (dag 1–7)":
+        # dag 1–7 väljs på plats
         day = st.session_state.get("VIH_DAY", 1)
         day = st.number_input("Dag (1–7)", min_value=1, max_value=7, value=day, step=1, key="VIH_DAY")
         if day <= 5:
-            for f, key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
-                           ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
-                st.session_state[key] = _rand_hist(f)
+            # Slumpa ALLA fält du listade (utom bonus/personaldeltagit som du matar själv)
+            st.session_state["in_fitta"]  = _rand_hist("Fitta")
+            st.session_state["in_rumpa"]  = _rand_hist("Rumpa")
+            st.session_state["in_dp"]     = _rand_hist("DP")
+            st.session_state["in_dpp"]    = _rand_hist("DPP")
+            st.session_state["in_dap"]    = _rand_hist("DAP")
+            st.session_state["in_tap"]    = _rand_hist("TAP")
             for f, key in [("Pappans vänner","in_pappan"),("Bekanta","in_bekanta"),
                            ("Grannar","in_grannar"),("Nils vänner","in_nils_vanner"),
                            ("Nils familj","in_nils_familj")]:
@@ -166,13 +182,16 @@ def apply_scenario_fill():
             st.session_state["in_eskilstuna"] = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
             st.session_state["in_alskar"] = 8
             st.session_state["in_sover"]  = 0
-            # Nils (0/1/2)
+            # enkel Nils-slump för dagen (0/1/2)
             r = random.random()
-            st.session_state["in_nils_vanner"] = st.session_state.get("in_nils_vanner", 0)  # ofarligt
+            st.session_state[EXTRA_FIELD_NILS[0]] = 0 if r < 0.50 else (1 if r < 0.95 else 2)
         else:
+            # Dag 6–7: allt 0 utom älskar=6 (sista dagen sover=1)
             st.session_state["in_alskar"] = 6
             st.session_state["in_sover"]  = 1 if day == 7 else 0
+            # övriga fält förblir 0
 
+    # Uppdatera sceninfo (datum/veckodag i liven)
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
 # ======== Sidopanel ========
@@ -202,81 +221,31 @@ with st.sidebar:
         apply_scenario_fill()
         st.rerun()
 
-    # Skapa alla 7 dagar lokalt (som tidigare)
-    if st.session_state[SCENARIO_KEY] == "Vila i hemmet (dag 1–7)":
-        if st.button("🗓 Skapa alla 7 dagar (lägger till lokalt)"):
-            created = 0
-            for day in range(1, 8):
-                for k in INPUT_ORDER: st.session_state[k] = 0
-                if day <= 5:
-                    for f, key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
-                                   ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
-                        st.session_state[key] = _rand_hist(f)
-                    for f, key in [("Pappans vänner","in_pappan"),("Bekanta","in_bekanta"),
-                                   ("Grannar","in_grannar"),("Nils vänner","in_nils_vanner"),
-                                   ("Nils familj","in_nils_familj")]:
-                        st.session_state[key] = _rand_hist(f)
-                    st.session_state["in_eskilstuna"] = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
-                    st.session_state["in_alskar"] = 8
-                    st.session_state["in_sover"]  = 0
-                else:
-                    st.session_state["in_alskar"] = 6
-                    st.session_state["in_sover"]  = 1 if day == 7 else 0
+# ======== Import beräkning redan ovan ========
 
-                # bygg base & calc
-                scen_nr, d0, veckodag = _current_scene_info()
-                base = {
-                    "Datum": d0.isoformat(), "Veckodag": veckodag, "Scen": scen_nr, "Typ": "Vila i hemmet",
-                    "Män": st.session_state["in_man"], "Svarta": st.session_state["in_svarta"],
-                    "Fitta": st.session_state["in_fitta"], "Rumpa": st.session_state["in_rumpa"],
-                    "DP": st.session_state["in_dp"], "DPP": st.session_state["in_dpp"],
-                    "DAP": st.session_state["in_dap"], "TAP": st.session_state["in_tap"],
-                    "Pappans vänner": st.session_state["in_pappan"], "Grannar": st.session_state["in_grannar"],
-                    "Nils vänner": st.session_state["in_nils_vanner"], "Nils familj": st.session_state["in_nils_familj"],
-                    "Bekanta": st.session_state["in_bekanta"], "Eskilstuna killar": st.session_state["in_eskilstuna"],
-                    "Bonus deltagit": st.session_state["in_bonus_deltagit"], "Personal deltagit": st.session_state["in_personal_deltagit"],
-                    "Älskar": st.session_state["in_alskar"], "Sover med": st.session_state["in_sover"],
-                    "Tid S": st.session_state["in_tid_s"], "Tid D": st.session_state["in_tid_d"], "Vila": st.session_state["in_vila"],
-                    "DT tid (sek/kille)": st.session_state["in_dt_tid"], "DT vila (sek/kille)": st.session_state["in_dt_vila"],
-                    "Avgift": float(CFG["avgift_usd"]), "PROD_STAFF": int(CFG["PROD_STAFF"]),
-                    "Känner": 0,
-                    "_rad_datum": d0, "_fodelsedatum": CFG["fodelsedatum"], "_starttid": CFG["starttid"]
-                }
-                base["Känner"] = int(base["Pappans vänner"]) + int(base["Grannar"]) + int(base["Nils vänner"]) + int(base["Nils familj"])
-                try:
-                    pr = calc_row_values(base, base["_rad_datum"], base["_fodelsedatum"], base["_starttid"])
-                except TypeError:
-                    pr = calc_row_values(base, base["_rad_datum"], CFG["fodelsedatum"], CFG["starttid"])
-                st.session_state[ROWS_KEY].append(pr)
-
-                # uppdatera hist
-                for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP","Pappans vänner","Grannar","Nils vänner","Nils familj","Bekanta","Eskilstuna killar"]:
-                    v = int(pr.get(col,0))
-                    mn,mx = st.session_state[HIST_MM_KEY].get(col,(v,v))
-                    st.session_state[HIST_MM_KEY][col] = (min(mn,v), max(mx,v))
-                created += 1
-
-            st.session_state[SCENEINFO_KEY] = _current_scene_info()
-            st.success(f"✅ Skapade {created} dagar för 'Vila i hemmet' (lokalt).")
-
-# ======== UI – Inmatningsraden (EXAKT ordning du gav) ========
+# ======== UI – Inmatningsraden i EXAKT ordning ========
 st.subheader("Input (exakt ordning)")
-# Enkel en-kolumns layout för att garantera ordningen 1→22
-labels = {
-    "in_man":"Män", "in_svarta":"Svarta",
-    "in_fitta":"Fitta", "in_rumpa":"Rumpa", "in_dp":"DP", "in_dpp":"DPP", "in_dap":"DAP", "in_tap":"TAP",
-    "in_tid_s":"Tid S (60 sek)", "in_tid_d":"Tid D (60 sek)", "in_vila":"Vila (7 sek)",
-    "in_dt_tid":"DT tid (60 sek)", "in_dt_vila":"DT vila (3 sek)",
-    "in_alskar":"Älskar", "in_sover":"Sover med (0 eller 1)",
-    "in_pappan":"Pappans vänner", "in_grannar":"Grannar", "in_nils_vanner":"Nils vänner", "in_nils_familj":"Nils familj", "in_bekanta":"Bekanta",
-    "in_eskilstuna":"Eskilstuna killar",
-    "in_bonus_deltagit":"Bonus deltagit", "in_personal_deltagit":"Personal deltagit",
-}
-for key in INPUT_ORDER:
-    if key == "in_sover":
-        st.number_input(labels[key], min_value=0, max_value=1, step=1, key=key)
-    else:
-        st.number_input(labels[key], min_value=0, step=1, key=key)
+
+# Lägg ut jämnt i två kolumner men behåll ordningen
+c1, c2 = st.columns(2)
+half = (len(ORDERED_FIELDS) + 1) // 2  # 12 vänster, 11 höger
+
+with c1:
+    for key, label in ORDERED_FIELDS[:half]:
+        if key == "in_sover":
+            st.number_input(label, min_value=0, max_value=1, step=1, key=key)
+        else:
+            st.number_input(label, min_value=0, step=1, key=key)
+
+with c2:
+    for key, label in ORDERED_FIELDS[half:]:
+        if key == "in_sover":
+            st.number_input(label, min_value=0, max_value=1, step=1, key=key)
+        else:
+            st.number_input(label, min_value=0, step=1, key=key)
+
+# Extra fält (Nils) separat så vi inte bryter din ordning ovan
+st.number_input(EXTRA_FIELD_NILS[1], min_value=0, step=1, key=EXTRA_FIELD_NILS[0])
 
 # ======== Live-förhandsvisning ========
 def build_base_from_inputs():
@@ -287,18 +256,20 @@ def build_base_from_inputs():
         "Fitta": st.session_state["in_fitta"], "Rumpa": st.session_state["in_rumpa"],
         "DP": st.session_state["in_dp"], "DPP": st.session_state["in_dpp"],
         "DAP": st.session_state["in_dap"], "TAP": st.session_state["in_tap"],
+        "Tid S": st.session_state["in_tid_s"], "Tid D": st.session_state["in_tid_d"], "Vila": st.session_state["in_vila"],
+        "DT tid (sek/kille)": st.session_state["in_dt_tid"], "DT vila (sek/kille)": st.session_state["in_dt_vila"],
+        "Älskar": st.session_state["in_alskar"], "Sover med": st.session_state["in_sover"],
         "Pappans vänner": st.session_state["in_pappan"], "Grannar": st.session_state["in_grannar"],
         "Nils vänner": st.session_state["in_nils_vanner"], "Nils familj": st.session_state["in_nils_familj"],
         "Bekanta": st.session_state["in_bekanta"], "Eskilstuna killar": st.session_state["in_eskilstuna"],
         "Bonus deltagit": st.session_state["in_bonus_deltagit"], "Personal deltagit": st.session_state["in_personal_deltagit"],
-        "Älskar": st.session_state["in_alskar"], "Sover med": st.session_state["in_sover"],
-        "Tid S": st.session_state["in_tid_s"], "Tid D": st.session_state["in_tid_d"], "Vila": st.session_state["in_vila"],
-        "DT tid (sek/kille)": st.session_state["in_dt_tid"], "DT vila (sek/kille)": st.session_state["in_dt_vila"],
+        "Nils": st.session_state[EXTRA_FIELD_NILS[0]],
         "Avgift": float(st.session_state[CFG_KEY]["avgift_usd"]),
         "PROD_STAFF": int(st.session_state[CFG_KEY]["PROD_STAFF"]),
     }
     base["Känner"] = int(base["Pappans vänner"]) + int(base["Grannar"]) + int(base["Nils vänner"]) + int(base["Nils familj"])
-    base["_rad_datum"] = d
+    # meta för beräkning
+    base["_rad_datum"] = st.session_state[SCENEINFO_KEY][1]
     base["_fodelsedatum"] = st.session_state[CFG_KEY]["fodelsedatum"]
     base["_starttid"]     = st.session_state[CFG_KEY]["starttid"]
     return base
@@ -310,6 +281,7 @@ base = build_base_from_inputs()
 try:
     preview = calc_row_values(base, base["_rad_datum"], base["_fodelsedatum"], base["_starttid"])
 except TypeError:
+    # äldre signatur fallback
     preview = calc_row_values(base, base["_rad_datum"], st.session_state[CFG_KEY]["fodelsedatum"], st.session_state[CFG_KEY]["starttid"])
 
 # Överkant: datum/veckodag + ålder
@@ -327,6 +299,7 @@ fd = st.session_state[CFG_KEY]["fodelsedatum"]
 alder = _d.year - fd.year - (( _d.month, _d.day) < (fd.month, fd.day))
 st.markdown(f"**Datum/Veckodag:** {rad_datum} / {veckodag} &nbsp;•&nbsp; **Ålder:** {alder} år")
 
+# Tid/Klocka/Män
 c1, c2, c3 = st.columns(3)
 with c1:
     st.metric("Summa tid", preview.get("Summa tid","-"))
@@ -338,6 +311,7 @@ with c3:
     st.metric("Klockan", preview.get("Klockan","-"))
     st.metric("Totalt män", int(preview.get("Totalt Män",0)))
 
+# Hångel/Sug
 c4, c5 = st.columns(2)
 with c4:
     st.metric("Hångel (m:s/kille)", preview.get("Hångel (m:s/kille)", "-"))
@@ -346,6 +320,7 @@ with c5:
     st.metric("Suger (totalt sek)", int(preview.get("Suger", 0)))
     st.metric("Suger/kille (sek)", int(preview.get("Suger per kille (sek)", 0)))
 
+# Ekonomi
 st.markdown("**💵 Ekonomi (live)**")
 e1, e2, e3, e4 = st.columns(4)
 with e1:
@@ -367,6 +342,16 @@ st.caption("Obs: Älskar/Sover-med-tider ingår **inte** i scenens 'Summa tid', 
 def _sheets_available():
     return ("GOOGLE_CREDENTIALS" in st.secrets) and ("GOOGLE_SHEET_ID" in st.secrets)
 
+def _extract_sheet_id(val: str) -> str:
+    """Tillåt både rent ID och full URL; returnerar alltid rent ID."""
+    v = str(val).strip()
+    if "/spreadsheets/d/" in v:
+        try:
+            v = v.split("/spreadsheets/d/")[1].split("/")[0]
+        except Exception:
+            pass
+    return v
+
 def _load_creds_from_secrets():
     # Acceptera både dict och JSON-sträng i secrets
     cred_obj = st.secrets["GOOGLE_CREDENTIALS"]
@@ -374,8 +359,20 @@ def _load_creds_from_secrets():
         return json.loads(cred_obj)
     return dict(cred_obj)
 
-def _sheets_append_rows(rows:list):
-    """Appendar rader till Sheets. Hämtar/skriver header bara vid spar, aldrig annars."""
+def _ensure_header(ws, header_keys: list):
+    """Säkerställ att rad 1 innehåller header. Om tom → skriv given header."""
+    try:
+        existing = ws.row_values(1)
+    except Exception:
+        existing = []
+    if not existing:
+        ws.update("A1", [header_keys])
+
+def _sheets_append_row(row_dict: dict):
+    """
+    Appendar EN rad till Sheets. Skapar flik vid behov, skriver header om saknas.
+    Ordningen styrs av headern. Om header saknas används row_dict.keys() som header.
+    """
     import gspread
     from google.oauth2.service_account import Credentials
 
@@ -383,31 +380,32 @@ def _sheets_append_rows(rows:list):
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
     gc = gspread.authorize(creds)
-    sh = gc.open_by_key(st.secrets["GOOGLE_SHEET_ID"])
+
+    sheet_id = _extract_sheet_id(st.secrets["GOOGLE_SHEET_ID"])
     ws_name = st.secrets.get("GOOGLE_SHEET_TAB", "Data")
+
+    sh = gc.open_by_key(sheet_id)
     try:
         ws = sh.worksheet(ws_name)
-    except gspread.WorksheetNotFound:
+    except Exception:
+        # WorksheetNotFound eller annat: skapa fliken
         ws = sh.add_worksheet(title=ws_name, rows=2000, cols=100)
 
-    # Säkerställ header
+    # Header
     header = ws.row_values(1)
     if not header:
-        header = list(rows[0].keys())
-        ws.update("A1", [header])
+        header = list(row_dict.keys())
+        _ensure_header(ws, header)
 
-    # Ordna alla rader efter header
-    to_write = []
-    for r in rows:
-        to_write.append([r.get(col, "") for col in header])
-
-    ws.append_rows(to_write, value_input_option="RAW")
+    # Bygg rad i header-ordning
+    row_vals = [row_dict.get(col, "") for col in header]
+    ws.append_row(row_vals, value_input_option="RAW")
     return ws_name
 
-# ======== Spara lokalt (till minnet) + (om möjligt) Google Sheets ========
+# ======== Spara (lokalt + ev. Google Sheets) ========
 st.markdown("---")
 if not _sheets_available():
-    st.caption("💡 Lägg in GOOGLE_CREDENTIALS & GOOGLE_SHEET_ID i Secrets för att kunna spara till Google Sheets.")
+    st.caption("💡 Lägg in GOOGLE_CREDENTIALS & GOOGLE_SHEET_ID (ID eller URL) i Secrets för att spara till Google Sheets.")
 
 if st.button("💾 Spara raden"):
     # 1) spara lokalt
@@ -424,7 +422,7 @@ if st.button("💾 Spara raden"):
     sheet_status = ""
     if _sheets_available():
         try:
-            tab = _sheets_append_rows([preview])
+            tab = _sheets_append_row(preview)
             sheet_status = f" + sparat till Google Sheets (flik: {tab})"
         except Exception as e:
             st.error(f"Spara till Sheets misslyckades: {e}")
