@@ -1,254 +1,184 @@
-# berakningar.py
-from datetime import datetime, date, time, timedelta
+from datetime import datetime, time, timedelta
 
-# ---------------------------
-# Hjälpformat
-# ---------------------------
-def _hm_str_from_seconds(q_sec: int) -> str:
-    q = int(max(0, q_sec))
-    h = q // 3600
-    m = round((q % 3600) / 60)
+def _hm_from_seconds(q_sec: int) -> str:
+    h = q_sec // 3600
+    m = round((q_sec % 3600) / 60)
     if m == 60:
         h += 1
         m = 0
     return f"{int(h)}h {int(m)} min"
 
-def _ms_str_from_seconds(sec: int) -> str:
-    s = int(max(0, sec))
-    m = s // 60
-    r = s % 60
-    return f"{int(m)}m {int(r)}s"
+def _ms_from_seconds(sec: int) -> str:
+    m = sec // 60
+    s = sec % 60
+    return f"{int(m)}m {int(s)}s"
 
-def _safe_int(x, default=0):
-    try:
-        if x is None: return default
-        if isinstance(x, str) and not x.strip():
-            return default
-        return int(float(x))
-    except Exception:
-        return default
+def _safe_int(x, d=0):
+    try: return int(float(x))
+    except: return d
 
-def _safe_float(x, default=0.0):
-    try:
-        if x is None: return default
-        if isinstance(x, str) and not x.strip():
-            return default
-        return float(x)
-    except Exception:
-        return default
+def _safe_float(x, d=0.0):
+    try: return float(x)
+    except: return d
 
-# ---------------------------
-# Huvudberäkning
-# ---------------------------
-def berakna_radvarden(grund: dict, rad_datum: date, fodelsedatum: date, starttid: time) -> dict:
-    """
-    Returnerar en dict med alla fält som ska visas/sparas.
-    ALL logik är samlad här.
+def _time_add(start: time, add_seconds: int) -> str:
+    dt = datetime.combine(datetime.today().date(), start) + timedelta(seconds=add_seconds)
+    return dt.strftime("%H:%M")
 
-    Viktiga antaganden (från din spec):
-      - Summa S = Tid S * (Fitta + Rumpa) + (Totalt Män * DT tid)
-      - Summa D = Tid D * (DP + DPP + DAP)
-      - Summa TP = Tid S * TAP   (du sa tidigare att jag hade rätt på denna)
-      - Summa Vila = Vila * (Fitta + Rumpa + DP + DPP + DAP + TAP) + (Totalt Män * DT vila)
-      - Summa tid = Summa S + Summa D + Summa TP + Summa Vila   (sek)
-      - Älskar-tid = Älskar * 20 min (sek) — ska INTE ingå i Summa tid
-      - Sover-med-tid = (0/1) * 20 min (sek) — ska INTE ingå i Summa tid
-      - Klockan = starttid + Summa tid + 3h + 1h + älskar-tid + sover-tid
-      - Suger (sek) = 60% av Summa tid (sek)
-      - Tid/kille(sek) = (Summa S / tot_män) + 2*(Summa D / tot_män) + 3*(Summa TP / tot_män)
-                         + (Suger / tot_män) + DT tid (sek/kille)
-      - Hångel (sek/kille) = (3h) / tot_män
-      - Hårdhet = regler (se _hardhet)
-      - Prenumeranter = (Fitta+Rumpa+DP+DPP+DAP+TAP+Totalt Män) * Hårdhet
-      - Intäkter = Prenumeranter * Avgift
-      - Känner = Pappans vänner + Grannar + Nils vänner + Nils familj
-      - Intäkt Känner = (Summa tid i timmar) * 35 * Känner
-      - Utgift män = ( (Män+Svarta+Bekanta+Eskilstuna killar+Bonus deltagit) + PROD_STAFF ) * (Summa tid i timmar) * 15
-                     (PROD_STAFF = hela personalstyrkan får lön oavsett deltagit)
-      - Lön Malin = 8% av (Intäkter - Utgift män), min $150, max $800
-      - Vinst = Intäkter - (Utgift män + Intäkt Känner + Lön Malin)
-    """
+def _hardhet(grund: dict, tot_men: int) -> int:
+    h = 0
+    if _safe_int(grund.get("DP",0))  > 0: h += 3
+    if _safe_int(grund.get("DPP",0)) > 0: h += 5
+    if _safe_int(grund.get("DAP",0)) > 0: h += 7
+    if _safe_int(grund.get("TAP",0)) > 0: h += 9
+    if _safe_int(grund.get("Svarta",0)) > 0: h += 3
+    # trösklar på tot_men
+    if tot_men > 100: h += 1
+    if tot_men > 200: h += 3
+    if tot_men == 300: h += 5
+    if tot_men == 500: h += 6
+    if tot_men == 1000: h += 10
+    return h
 
-    # -------- Inläsning (säker) --------
-    man        = _safe_int(grund.get("Män", 0))
-    svarta     = _safe_int(grund.get("Svarta", 0))
-    fitta      = _safe_int(grund.get("Fitta", 0))
-    rumpa      = _safe_int(grund.get("Rumpa", 0))
-    dp         = _safe_int(grund.get("DP", 0))
-    dpp        = _safe_int(grund.get("DPP", 0))
-    dap        = _safe_int(grund.get("DAP", 0))
-    tap        = _safe_int(grund.get("TAP", 0))
+def calc_row_values(grund: dict, rad_datum, fodelsedatum, starttid):
+    # ------- läsa in -------
+    man   = _safe_int(grund.get("Män",0))
+    sv    = _safe_int(grund.get("Svarta",0))
+    fitta = _safe_int(grund.get("Fitta",0))
+    rumpa = _safe_int(grund.get("Rumpa",0))
+    DP    = _safe_int(grund.get("DP",0))
+    DPP   = _safe_int(grund.get("DPP",0))
+    DAP   = _safe_int(grund.get("DAP",0))
+    TAP   = _safe_int(grund.get("TAP",0))
 
-    pappan     = _safe_int(grund.get("Pappans vänner", 0))
-    grannar    = _safe_int(grund.get("Grannar", 0))
-    nvanner    = _safe_int(grund.get("Nils vänner", 0))
-    nfamilj    = _safe_int(grund.get("Nils familj", 0))
-    bekanta    = _safe_int(grund.get("Bekanta", 0))
-    esk        = _safe_int(grund.get("Eskilstuna killar", 0))
+    papp  = _safe_int(grund.get("Pappans vänner",0))
+    gran  = _safe_int(grund.get("Grannar",0))
+    nv    = _safe_int(grund.get("Nils vänner",0))
+    nf    = _safe_int(grund.get("Nils familj",0))
+    bek   = _safe_int(grund.get("Bekanta",0))
+    esk   = _safe_int(grund.get("Eskilstuna killar",0))
 
-    bonus_delt = _safe_int(grund.get("Bonus deltagit", 0))
-    # bonus_total = _safe_int(grund.get("Bonus killar", 0))  # används för visning/extern logik, påverkar ej tiderna
+    bonus_delt = _safe_int(grund.get("Bonus deltagit",0))
+    pers_delt  = _safe_int(grund.get("Personal deltagit",0))
 
-    pers_delt  = _safe_int(grund.get("Personal deltagit", 0))  # påverkar ej lönen (PROD_STAFF används i stället)
-    prod_staff = _safe_int(grund.get("PROD_STAFF", 0))
+    alskar = _safe_int(grund.get("Älskar",0))
+    sover  = _safe_int(grund.get("Sover med",0))
 
-    alskar_cnt = _safe_int(grund.get("Älskar", 0))
-    sover_med  = _safe_int(grund.get("Sover med", 0))
+    tidS   = _safe_int(grund.get("Tid S",0))
+    tidD   = _safe_int(grund.get("Tid D",0))
+    vila   = _safe_int(grund.get("Vila",0))
+    dt_tid = _safe_int(grund.get("DT tid (sek/kille)",0))
+    dt_vila= _safe_int(grund.get("DT vila (sek/kille)",0))
 
-    tid_s      = _safe_int(grund.get("Tid S", 0))
-    tid_d      = _safe_int(grund.get("Tid D", 0))
-    vila       = _safe_int(grund.get("Vila", 0))
-    dt_tid     = _safe_int(grund.get("DT tid (sek/kille)", 0))
-    dt_vila    = _safe_int(grund.get("DT vila (sek/kille)", 0))
+    avgift = _safe_float(grund.get("Avgift",30.0))
+    prod_staff = _safe_int(grund.get("PROD_STAFF",0))
 
-    avgift     = _safe_float(grund.get("Avgift", 30.0))
-    typ        = str(grund.get("Typ") or "")
+    kanner = _safe_int(grund.get("Känner",0))
 
-    # -------- Härleder & totals --------
-    kanner = pappan + grannar + nvanner + nfamilj
-    totalt_man = (
-        man + svarta + bekanta + esk + bonus_delt + prod_staff
-        # OBS: du har tidigare sagt att "Totalt Män"-kolumnen finns; vi räknar on-the-fly här.
+    # ------- totals -------
+    tot_man = (
+        man + kanner + sv + bek + esk + bonus_delt + pers_delt
     )
-    if totalt_man < 0:
-        totalt_man = 0
 
-    # -------- Tider (sek) --------
-    # DT-bidrag läggs in i Summa S resp. Summa Vila enligt din spec
-    summa_s   = tid_s * (fitta + rumpa) + (totalt_man * dt_tid)
-    summa_d   = tid_d * (dp + dpp + dap)
-    summa_tp  = tid_s * tap
-    summa_vila = vila * (fitta + rumpa + dp + dpp + dap + tap) + (totalt_man * dt_vila)
-    summa_tid_sec = int(max(0, summa_s + summa_d + summa_tp + summa_vila))
+    # ------- tider (sek) -------
+    summaS  = tidS * (fitta + rumpa) + dt_tid * max(tot_man, 0)  # DT tid in i S
+    summaD  = tidD * (DP + DPP + DAP)
+    summaTP = tidS * TAP
+    summaV  = vila * (fitta + rumpa + DP + DPP + DAP + TAP) + dt_vila * max(tot_man, 0)
 
-    # Älskar & Sover (utanför Summa tid)
-    alskar_sec = alskar_cnt * 20 * 60
-    sover_sec  = sover_med * 20 * 60
+    summa_tid_sec = summaS + summaD + summaTP + summaV
+    summa_tid_txt = _hm_from_seconds(summa_tid_sec)
 
-    # Suger = 60% av scenens aktiva tid (Summa tid)
-    suger_sec = int(round(0.60 * summa_tid_sec))
+    # älskar/sover (ej med i summa tid)
+    alskar_sec = alskar * 20 * 60
+    sover_sec  = sover  * 20 * 60
 
-    # Tid per kille (sek)
-    if totalt_man > 0:
-        tid_per_kille_sec = int(
-            (summa_s / totalt_man)
-            + 2 * (summa_d / totalt_man)
-            + 3 * (summa_tp / totalt_man)
-            + (suger_sec / totalt_man)
-            + dt_tid
-        )
-        hångel_per_kille_sec = int((3 * 3600) / totalt_man)
-        suger_per_kille_sec  = int(suger_sec / totalt_man)
+    # tid per kille
+    if tot_man > 0:
+        per_s  = summaS  / tot_man
+        per_d  = (summaD / tot_man) * 2
+        per_tp = (summaTP/ tot_man) * 3
+        per_tot = per_s + per_d + per_tp + (summaV / tot_man)
     else:
-        tid_per_kille_sec = 0
-        hångel_per_kille_sec = 0
-        suger_per_kille_sec = 0
+        per_tot = 0
 
-    # Klockslag: start + Summa tid + 3h + 1h + älskar + sover
-    base_dt = datetime.combine(rad_datum, starttid)
-    slut_dt = base_dt + timedelta(
-        seconds = int(summa_tid_sec + (3*3600) + (1*3600) + alskar_sec + sover_sec)
-    )
-    klockan_str = slut_dt.strftime("%H:%M")
+    # suger = 60% av scenens (summa tid), per kille:
+    suger_tot = 0.60 * summa_tid_sec
+    suger_pk  = (suger_tot / tot_man) if tot_man > 0 else 0
 
-    # -------- Hårdhet & Prenumeranter --------
-    hårdhet = _hardhet(dp, dpp, dap, tap, totalt_man, svarta)
-    pren = int(max(0, (fitta + rumpa + dp + dpp + dap + tap + totalt_man) * hårdhet))
+    # klockan (lägg på 3 + 1 min + alskar+sover)
+    extra_sec = (3+1)*60 + alskar_sec + sover_sec
+    klockan = _time_add(starttid, int(summa_tid_sec + extra_sec))
 
-    # -------- Ekonomi --------
-    intakter = float(pren) * float(avgift)
-    summa_tid_hr = (summa_tid_sec / 3600.0)
+    # hångel: 3h / (män+svarta+bekanta+eskilstuna+bonus_delt+personal_delt)
+    denom_h = man + sv + bek + esk + bonus_delt + pers_delt
+    hangel_pk_sec = int((3*3600) / denom_h) if denom_h > 0 else 0
+    hangel_pk_txt = _ms_from_seconds(hangel_pk_sec)
 
-    intakt_kanner = 35.0 * summa_tid_hr * float(kanner)
+    # hårdhet & prenumeranter
+    h = _hardhet(grund, tot_man)
+    pren = (fitta + rumpa + DP + DPP + DAP + TAP + tot_man) * h
 
-    # Utgift män (alla män + HELA personalstyrkan) * tid * 15
-    lonbas = (man + svarta + bekanta + esk + bonus_delt) + prod_staff
-    utgift_man = 15.0 * summa_tid_hr * float(max(0, lonbas))
+    # ekonomi
+    intakter = pren * avgift
+    # Utgift män = (män + svarta + bekanta + esk + bonus_delt + HELA personalstyrkan) * (summa_tid_timmar*15)
+    timmar = summa_tid_sec / 3600.0
+    utgift_man = (man + sv + bek + esk + bonus_delt + prod_staff) * (timmar * 15.0)
 
-    # Lön Malin = 8% av (Intäkter - Utgift män), min 150 max 800
-    bruttomarg = max(0.0, float(intakter) - float(utgift_man))
-    lon_malin = max(150.0, min(800.0, 0.08 * bruttomarg))
+    # Intäkt Känner (sparas också)
+    intakt_kanner = kanner * (timmar * 35.0)
 
-    vinst = float(intakter) - float(utgift_man) - float(intakt_kanner) - float(lon_malin)
+    # Lön Malin = 8% av (intäkter - utgift män), minst 150, max 800
+    malin = max(150.0, min(800.0, 0.08 * (intakter - utgift_man)))
 
-    # -------- Output --------
-    out = {
+    # Vinst = Intäkter - (utgift män + Intäkt Känner + Lön Malin)
+    vinst = intakter - (utgift_man + intakt_kanner + malin)
+
+    # Ålder vid datum
+    fd = fodelsedatum
+    alder = rad_datum.year - fd.year - ((rad_datum.month, rad_datum.day) < (fd.month, fd.day))
+
+    # svar-dict (alla kolumnnamn som i databasen)
+    out = dict(grund)  # behåll originalfält
+    out.update({
         "Datum": rad_datum.isoformat(),
-        "Veckodag": ["Måndag","Tisdag","Onsdag","Torsdag","Fredag","Lördag","Söndag"][rad_datum.weekday()],
-        "Typ": typ,
-        "Män": man, "Svarta": svarta, "Fitta": fitta, "Rumpa": rumpa, "DP": dp, "DPP": dpp, "DAP": dap, "TAP": tap,
-        "Pappans vänner": pappan, "Grannar": grannar, "Nils vänner": nvanner, "Nils familj": nfamilj,
-        "Bekanta": bekanta, "Eskilstuna killar": esk,
-        "Bonus deltagit": bonus_delt, "Personal deltagit": pers_delt,
-        "Känner": kanner, "Totalt Män": totalt_man,
+        "Veckodag": grund.get("Veckodag",""),
+        "Scen": grund.get("Scen",""),
+        "Totalt Män": tot_man,
 
-        "Tid S": tid_s, "Tid D": tid_d, "Vila": vila,
-        "DT tid (sek/kille)": dt_tid, "DT vila (sek/kille)": dt_vila,
-
-        "Summa S": int(summa_s),
-        "Summa D": int(summa_d),
-        "Summa TP": int(summa_tp),
-        "Summa Vila": int(summa_vila),
+        "Summa S": int(summaS),
+        "Summa D": int(summaD),
+        "Summa TP": int(summaTP),
+        "Summa Vila": int(summaV),
 
         "Summa tid (sek)": int(summa_tid_sec),
-        "Summa tid": _hm_str_from_seconds(summa_tid_sec),
+        "Summa tid": summa_tid_txt,
 
-        "Älskar": alskar_cnt,
-        "Sover med": sover_med,
+        "Tid per kille (sek)": int(per_tot),
+        "Tid per kille": _ms_from_seconds(int(per_tot)),
+
+        "Suger": int(suger_tot),
+        "Suger per kille (sek)": int(suger_pk),
+
+        "Hångel (sek/kille)": int(hangel_pk_sec),
+        "Hångel (m:s/kille)": hangel_pk_txt,
+
         "Tid Älskar (sek)": int(alskar_sec),
-        "Tid Älskar": _ms_str_from_seconds(alskar_sec),
+        "Tid Älskar": _ms_from_seconds(int(alskar_sec)),
         "Tid Sover med (sek)": int(sover_sec),
-        "Tid Sover med": _ms_str_from_seconds(sover_sec),
+        "Tid Sover med": _ms_from_seconds(int(sover_sec)),
 
-        "Suger": int(suger_sec),
-        "Suger per kille (sek)": int(suger_per_kille_sec),
-
-        "Tid per kille (sek)": int(tid_per_kille_sec),
-        "Tid per kille": _ms_str_from_seconds(tid_per_kille_sec),
-
-        "Hångel (sek/kille)": int(hångel_per_kille_sec),
-        "Hångel (m:s/kille)": _ms_str_from_seconds(hångel_per_kille_sec),
-
-        "Klockan": klockan_str,
-
-        "Hårdhet": int(hårdhet),
+        "Klockan": klockan,
+        "Hårdhet": int(h),
         "Prenumeranter": int(pren),
         "Avgift": float(avgift),
         "Intäkter": float(intakter),
-        "Intäkt Känner": float(intakt_kanner),
         "Utgift män": float(utgift_man),
-        "Lön Malin": float(lon_malin),
+        "Intäkt Känner": float(intakt_kanner),
+        "Lön Malin": float(malin),
         "Vinst": float(vinst),
-    }
+
+        "Känner Sammanlagt": int(kanner),
+        "Ålder": int(alder),
+    })
     return out
-
-def _hardhet(dp, dpp, dap, tap, totalt_man, svarta) -> int:
-    """
-    Hårdhetssumma enligt dina regler:
-      - DP>0 → +3, DPP>0 → +5, DAP>0 → +7, TAP>0 → +9
-      - Totalt Män >100 → +1, >200 → +3, >=300 → +5, >=500 → +6, >=1000 → +10
-      - Svarta>0 → +3
-    Notera: thresholds staplas inte; vi tar största tillämpliga för Totalt Män.
-    """
-    h = 0
-    if dp  > 0: h += 3
-    if dpp > 0: h += 5
-    if dap > 0: h += 7
-    if tap > 0: h += 9
-
-    tm = int(max(0, totalt_man))
-    if tm >= 1000: h += 10
-    elif tm >= 500: h += 6
-    elif tm >= 300: h += 5
-    elif tm >  200: h += 3
-    elif tm >  100: h += 1
-
-    if int(svarta) > 0:
-        h += 3
-
-    return h
-
-# (forts. berakningar.py)
-# Inget mer behövs här – filen är komplett.
-# Importera i app.py med:
-#   from berakningar import berakna_radvarden as calc_row_values
