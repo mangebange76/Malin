@@ -43,7 +43,7 @@ def init_state():
             "fodelsedatum": date(1970,1,1),
             "avgift_usd": 30.0,
             "PROD_STAFF": 800,         # hela personalstyrkan som ska få lön
-            "BONUS_AVAILABLE": 500,    # tillgängliga bonuskillar (info)
+            "BONUS_AVAILABLE": 500,    # tillgängliga bonuskillar (info/kvar)
             "ESK_MIN": 20, "ESK_MAX": 40,
             # Maxvärden för källor
             "MAX_PAPPAN": 100,
@@ -146,24 +146,22 @@ def apply_scenario_fill():
         st.session_state["in_sover"]  = 1
 
     elif s == "Vila i hemmet (dag 1–7)":
-        day = st.session_state.get("VIH_DAY", 1)
-        day = st.number_input("Dag (1–7)", min_value=1, max_value=7, value=day, step=1, key="VIH_DAY")
-        if day <= 5:
-            for f,key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
-                          ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
-                st.session_state[key] = _rand_hist(f)
-            for f,key in [("Pappans vänner","in_pappan"),("Bekanta","in_bekanta"),
-                          ("Grannar","in_grannar"),("Nils vänner","in_nils_vanner"),
-                          ("Nils familj","in_nils_familj")]:
-                st.session_state[key] = _rand_hist(f)
-            st.session_state["in_eskilstuna"] = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
-            st.session_state["in_alskar"] = 8
-            st.session_state["in_sover"]  = 0
-            r = random.random()
-            st.session_state["in_nils"] = 0 if r < 0.50 else (1 if r < 0.95 else 2)
-        else:
-            st.session_state["in_alskar"] = 6
-            st.session_state["in_sover"]  = 1 if day == 7 else 0
+        # FÖRENKLAD: hanteras numera som EN dag (din önskan)
+        # Slumpa: Fitta, Rumpa, DP, DPP, DAP, TAP, Pappans vänner, Grannar,
+        # Nils vänner, Nils familj, Bekanta, Eskilstuna.
+        for f,key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
+                      ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
+            st.session_state[key] = _rand_hist(f)
+        for f,key in [("Pappans vänner","in_pappan"),("Grannar","in_grannar"),
+                      ("Nils vänner","in_nils_vanner"),("Nils familj","in_nils_familj"),
+                      ("Bekanta","in_bekanta")]:
+            st.session_state[key] = _rand_hist(f)
+        st.session_state["in_eskilstuna"] = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
+        # Fasta värden:
+        st.session_state["in_alskar"] = 6
+        st.session_state["in_sover"]  = 0
+        st.session_state["in_nils"]   = 0
+        # Bonus/Personal deltagit anger du själv
 
     # uppdatera sceninfo (datum/veckodag i liven)
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
@@ -177,7 +175,8 @@ with st.sidebar:
     CFG["fodelsedatum"] = st.date_input("Födelsedatum", value=CFG["fodelsedatum"])
     CFG["avgift_usd"]   = st.number_input("Avgift per prenumerant (USD)", min_value=0.0, value=float(CFG["avgift_usd"]), step=1.0)
     CFG["PROD_STAFF"]   = st.number_input("Totalt antal personal (lönebas)", min_value=0, value=int(CFG["PROD_STAFF"]), step=1)
-    st.caption(f"Bonus killar tillgängliga (info): {int(CFG['BONUS_AVAILABLE'])}")
+
+    st.markdown(f"**Bonus killar kvar:** {int(CFG['BONUS_AVAILABLE'])}")
 
     st.markdown("---")
     st.subheader("Eskilstuna-intervall")
@@ -214,16 +213,22 @@ with st.sidebar:
 st.subheader("Input (exakt ordning)")
 c1,c2 = st.columns(2)
 
+# dynamiska etiketter med inställningsvärden
 labels = {
     "in_man":"Män","in_svarta":"Svarta",
     "in_fitta":"Fitta","in_rumpa":"Rumpa","in_dp":"DP","in_dpp":"DPP","in_dap":"DAP","in_tap":"TAP",
     "in_tid_s":"Tid S (sek)","in_tid_d":"Tid D (sek)","in_vila":"Vila (sek)",
     "in_dt_tid":"DT tid (sek/kille)","in_dt_vila":"DT vila (sek/kille)",
     "in_alskar":"Älskar","in_sover":"Sover med (0/1)",
-    "in_pappan":"Pappans vänner","in_grannar":"Grannar","in_nils_vanner":"Nils vänner","in_nils_familj":"Nils familj",
-    "in_bekanta":"Bekanta","in_eskilstuna":"Eskilstuna killar",
-    "in_bonus_deltagit":"Bonus deltagit","in_personal_deltagit":"Personal deltagit",
-    "in_nils":"Nils"
+    "in_pappan":f"Pappans vänner (MAX {int(CFG['MAX_PAPPAN'])})",
+    "in_grannar":f"Grannar (MAX {int(CFG['MAX_GRANNAR'])})",
+    "in_nils_vanner":f"Nils vänner (MAX {int(CFG['MAX_NILS_VANNER'])})",
+    "in_nils_familj":f"Nils familj (MAX {int(CFG['MAX_NILS_FAMILJ'])})",
+    "in_bekanta":f"Bekanta (MAX {int(CFG['MAX_BEKANTA'])})",
+    "in_eskilstuna":f"Eskilstuna killar ({int(CFG['ESK_MIN'])}–{int(CFG['ESK_MAX'])})",
+    "in_bonus_deltagit":f"Bonus deltagit (kvar {int(CFG['BONUS_AVAILABLE'])})",
+    "in_personal_deltagit":f"Personal deltagit (av {int(CFG['PROD_STAFF'])})",
+    "in_nils":"Nils (0/1/2)"
 }
 
 with c1:
@@ -271,7 +276,7 @@ def build_base_from_inputs():
     base["_rad_datum"] = st.session_state[SCENEINFO_KEY][1]
     base["_fodelsedatum"] = st.session_state[CFG_KEY]["fodelsedatum"]
     base["_starttid"]     = st.session_state[CFG_KEY]["starttid"]
-    # bonusrate: 1%
+    # bonusrate (kan nyttjas i beräkningarna)
     base["BONUS_RATE"]    = 0.01
     return base
 
@@ -284,12 +289,13 @@ try:
 except TypeError:
     preview = calc_row_values(base, base["_rad_datum"], st.session_state[CFG_KEY]["fodelsedatum"], st.session_state[CFG_KEY]["starttid"])
 
-# ➕ Säkerställ att “Totalt Män” inkluderar Bekanta + Bonus deltagit + Personal deltagit
+# Säkerställ att “Totalt Män” inkluderar Bekanta + Bonus + Personal + Eskilstuna
 try:
     preview["Totalt Män"] = int(preview.get("Totalt Män", 0)) \
         + int(base.get("Bekanta", 0)) \
         + int(base.get("Bonus deltagit", 0)) \
-        + int(base.get("Personal deltagit", 0))
+        + int(base.get("Personal deltagit", 0)) \
+        + int(base.get("Eskilstuna killar", 0))
 except Exception:
     pass
 
@@ -320,7 +326,7 @@ with c3:
     st.metric("Klockan", preview.get("Klockan","-"))
     st.metric("Totalt män", int(preview.get("Totalt Män",0)))
 
-# Hångel/Sug + Ekonomi
+# Hångel/Sug + Ekonomi + Känner/Extra
 c4, c5 = st.columns(2)
 with c4:
     st.metric("Hångel (m:s/kille)", preview.get("Hångel (m:s/kille)", "-"))
@@ -344,7 +350,8 @@ with e4:
     st.metric("Vinst", f"${float(preview.get('Vinst',0)):,.2f}")
     st.metric("Älskar (sek)", int(preview.get("Tid Älskar (sek)", 0)))
 
-st.caption("Obs: Älskar/Sover-med-tider ingår **inte** i scenens 'Summa tid', men lägger på klockan.")
+st.caption("Obs: Älskar/Sover-med-tider ingår **inte** i scenens 'Summa tid', men lägger på klockan. "
+           "Vi visar så mycket som möjligt från beräkningarna för enkel genomgång.")
 
 # ======== Spara lokalt ========
 st.markdown("---")
@@ -358,7 +365,10 @@ with cL:
             v = int(preview.get(col,0))
             mn,mx = st.session_state[HIST_MM_KEY].get(col,(v,v))
             st.session_state[HIST_MM_KEY][col] = (min(mn,v), max(mx,v))
-        st.session_state[CFG_KEY]["BONUS_AVAILABLE"] = max(0, int(st.session_state[CFG_KEY]["BONUS_AVAILABLE"]) - int(preview.get("Bonus deltagit",0)))
+        # minska bonus-kvar med det du angav
+        st.session_state[CFG_KEY]["BONUS_AVAILABLE"] = max(
+            0, int(st.session_state[CFG_KEY]["BONUS_AVAILABLE"]) - int(preview.get("Bonus deltagit",0))
+        )
         st.session_state[SCENEINFO_KEY] = _current_scene_info()
         st.success("✅ Sparad i minnet (ingen Sheets).")
 
@@ -408,7 +418,9 @@ with cR:
                 v = int(preview.get(col,0))
                 mn,mx = st.session_state[HIST_MM_KEY].get(col,(v,v))
                 st.session_state[HIST_MM_KEY][col] = (min(mn,v), max(mx,v))
-            st.session_state[CFG_KEY]["BONUS_AVAILABLE"] = max(0, int(st.session_state[CFG_KEY]["BONUS_AVAILABLE"]) - int(preview.get("Bonus deltagit",0)))
+            st.session_state[CFG_KEY]["BONUS_AVAILABLE"] = max(
+                0, int(st.session_state[CFG_KEY]["BONUS_AVAILABLE"]) - int(preview.get("Bonus deltagit",0))
+            )
             st.session_state[SCENEINFO_KEY] = _current_scene_info()
         except Exception as e:
             st.error(f"Misslyckades att spara till Sheets: {e}")
