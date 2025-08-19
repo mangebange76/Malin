@@ -60,10 +60,20 @@ def init_state():
 init_state()
 
 # ======== Import av beräkning ========
+calc_row_values = None
+_import_err = None
 try:
-    from berakningar import calc_row_values
-except Exception as e:
-    st.error(f"Kunde inte importera beräkningar: {e}")
+    from berakningar import calc_row_values as _crv
+    calc_row_values = _crv
+except Exception:
+    try:
+        from Berakningar import calc_row_values as _crv2
+        calc_row_values = _crv2
+    except Exception as e:
+        _import_err = e
+
+if calc_row_values is None:
+    st.error(f"Kunde inte importera beräkningar: {_import_err}")
     st.stop()
 
 # ======== Hjälpare för slump/minmax (MÅSTE ligga före sidopanelen) ========
@@ -173,7 +183,7 @@ def apply_scenario_fill():
     # Uppdatera sceninfo (datum/veckodag i liven)
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
-# ======== Sidopanel (nu efter att apply_scenario_fill finns) ========
+# ======== Sidopanel ========
 CFG = st.session_state[CFG_KEY]
 with st.sidebar:
     st.header("Inställningar (lokalt)")
@@ -200,13 +210,12 @@ with st.sidebar:
         apply_scenario_fill()
         st.rerun()
 
-    # EXTRA: skapa alla 7 dagar av "Vila i hemmet" i ett svep
+    # Skapa alla 7 dagar lokalt
     if st.session_state[SCENARIO_KEY] == "Vila i hemmet (dag 1–7)":
         if st.button("🗓 Skapa alla 7 dagar (lägger till lokalt)"):
-            # generera dag1..7 enligt reglerna och lägg in som lokala rader
             created = 0
             for day in range(1, 8):
-                # ställ in fält per dag (återanvänder samma logik som ovan)
+                # nolla inputs
                 for k in INPUT_ORDER: st.session_state[k] = 0
                 if day <= 5:
                     # slumpa ALLA listade + källor + esk
@@ -228,7 +237,6 @@ with st.sidebar:
                 else:
                     st.session_state["in_alskar"] = 6
                     st.session_state["in_sover"]  = 1 if day == 7 else 0
-                    # övriga fält 0
 
                 # bygg base & calc
                 scen_nr, d0, veckodag = _current_scene_info()
@@ -265,25 +273,39 @@ with st.sidebar:
             st.session_state[SCENEINFO_KEY] = _current_scene_info()
             st.success(f"✅ Skapade {created} dagar för 'Vila i hemmet' (lokalt).")
 
-# ======== UI – Inmatningsraden (EXAKT ordning) ========
+# ======== UI – Inmatningsraden (EXAKT ordning & exakt din gruppering) ========
 st.subheader("Input (exakt ordning)")
 
-# Rendera i exakt ordning enligt INPUT_ORDER, fördelat snyggt över två kolumner men utan att bryta ordningen
-cols = st.columns(2)
-labels = {
-    "in_man":"Män","in_svarta":"Svarta","in_fitta":"Fitta","in_rumpa":"Rumpa","in_dp":"DP","in_dpp":"DPP","in_dap":"DAP","in_tap":"TAP",
-    "in_pappan":"Pappans vänner","in_grannar":"Grannar","in_nils_vanner":"Nils vänner","in_nils_familj":"Nils familj",
-    "in_bekanta":"Bekanta","in_eskilstuna":"Eskilstuna killar","in_bonus_deltagit":"Bonus deltagit","in_personal_deltagit":"Personal deltagit",
-    "in_alskar":"Älskar","in_sover":"Sover med","in_tid_s":"Tid S (sek)","in_tid_d":"Tid D (sek)","in_vila":"Vila (sek)",
-    "in_dt_tid":"DT tid (sek/kille)","in_dt_vila":"DT vila (sek/kille)","in_nils":"Nils"
-}
-for idx, key in enumerate(INPUT_ORDER):
-    col = cols[idx % 2]
-    with col:
-        if key == "in_sover":
-            st.number_input(labels[key], min_value=0, max_value=1, step=1, key=key)
-        else:
-            st.number_input(labels[key], min_value=0, step=1, key=key)
+# Vi följer exakt din layout/gruppering från “funkade men fel ordning”:
+c1,c2 = st.columns(2)
+
+with c1:
+    st.number_input("Män",    min_value=0, step=1, key="in_man")
+    st.number_input("Fitta",  min_value=0, step=1, key="in_fitta")
+    st.number_input("DP",     min_value=0, step=1, key="in_dp")
+    st.number_input("DAP",    min_value=0, step=1, key="in_dap")
+    st.number_input("Pappans vänner", min_value=0, step=1, key="in_pappan")
+    st.number_input("Nils vänner",    min_value=0, step=1, key="in_nils_vanner")
+    st.number_input("Bekanta",        min_value=0, step=1, key="in_bekanta")
+    st.number_input("Bonus deltagit", min_value=0, step=1, key="in_bonus_deltagit")
+    st.number_input("Älskar",         min_value=0, step=1, key="in_alskar")
+    st.number_input("Tid S (sek)",    min_value=0, step=1, key="in_tid_s")
+    st.number_input("Vila (sek)",     min_value=0, step=1, key="in_vila")
+    st.number_input("DT tid (sek/kille)",  min_value=0, step=1, key="in_dt_tid")
+
+with c2:
+    st.number_input("Svarta", min_value=0, step=1, key="in_svarta")
+    st.number_input("Rumpa",  min_value=0, step=1, key="in_rumpa")
+    st.number_input("DPP",    min_value=0, step=1, key="in_dpp")
+    st.number_input("TAP",    min_value=0, step=1, key="in_tap")
+    st.number_input("Grannar",        min_value=0, step=1, key="in_grannar")
+    st.number_input("Nils familj",    min_value=0, step=1, key="in_nils_familj")
+    st.number_input("Eskilstuna killar", min_value=0, step=1, key="in_eskilstuna")
+    st.number_input("Personal deltagit", min_value=0, step=1, key="in_personal_deltagit")
+    st.number_input("Sover med (0/1)",   min_value=0, max_value=1, step=1, key="in_sover")
+    st.number_input("Tid D (sek)",    min_value=0, step=1, key="in_tid_d")
+    st.number_input("Nils",           min_value=0, step=1, key="in_nils")
+    st.number_input("DT vila (sek/kille)", min_value=0, step=1, key="in_dt_vila")
 
 # ======== Live-förhandsvisning ========
 def build_base_from_inputs():
@@ -375,14 +397,9 @@ with e4:
 
 st.caption("Obs: Älskar/Sover-med-tider ingår **inte** i scenens 'Summa tid', men lägger på klockan.")
 
-# ======== Spara lokalt (till minnet) + (valfritt) Google Sheets ========
-st.markdown("---")
-use_sheets = False
-sheet_status = ""
-if "GOOGLE_CREDENTIALS" in st.secrets and "GOOGLE_SHEET_ID" in st.secrets:
-    use_sheets = st.checkbox("Spara även till Google Sheets (helt valfritt)", value=False, help="Aktivera om du har lagt in GOOGLE_CREDENTIALS & GOOGLE_SHEET_ID i Secrets.")
-else:
-    st.caption("💡 Lägg in GOOGLE_CREDENTIALS & GOOGLE_SHEET_ID i Secrets för att kunna spara till Google Sheets.")
+# ======== Sheets-hjälpare (endast på spara) ========
+def _sheets_available():
+    return ("GOOGLE_CREDENTIALS" in st.secrets) and ("GOOGLE_SHEET_ID" in st.secrets)
 
 def _sheets_append_rows(rows:list):
     """Appendar rader till Sheets. Hämtar/skriv header bara vid spar, aldrig annars."""
@@ -403,7 +420,6 @@ def _sheets_append_rows(rows:list):
     # Säkerställ header
     header = ws.row_values(1)
     if not header:
-        # bygg header av första radens nycklar (i ordning)
         header = list(rows[0].keys())
         ws.update("A1", [header])
 
@@ -413,6 +429,12 @@ def _sheets_append_rows(rows:list):
         to_write.append([r.get(col, "") for col in header])
 
     ws.append_rows(to_write, value_input_option="RAW")
+    return ws_name
+
+# ======== Spara lokalt (till minnet) + (om möjligt) Google Sheets ========
+st.markdown("---")
+if not _sheets_available():
+    st.caption("💡 Lägg in GOOGLE_CREDENTIALS & GOOGLE_SHEET_ID i Secrets för att kunna spara till Google Sheets.")
 
 if st.button("💾 Spara raden"):
     # 1) spara lokalt
@@ -425,11 +447,12 @@ if st.button("💾 Spara raden"):
     # bonus-available: minska med inmatat bonus deltagit (du styr själv)
     st.session_state[CFG_KEY]["BONUS_AVAILABLE"] = max(0, int(st.session_state[CFG_KEY]["BONUS_AVAILABLE"]) - int(preview.get("Bonus deltagit",0)))
 
-    # 2) valfritt: spara även till Sheets
-    if use_sheets:
+    # 2) spara till Sheets om tillgängligt (automatisk – ingen checkbox)
+    sheet_status = ""
+    if _sheets_available():
         try:
-            _sheets_append_rows([preview])
-            sheet_status = " + sparat till Google Sheets"
+            tab = _sheets_append_rows([preview])
+            sheet_status = f" + sparat till Google Sheets (flik: {tab})"
         except Exception as e:
             st.error(f"Spara till Sheets misslyckades: {e}")
 
