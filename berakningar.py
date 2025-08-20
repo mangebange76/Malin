@@ -1,4 +1,3 @@
-# berakningar.py
 from datetime import datetime, timedelta
 
 # ---------- Små hjälpmetoder ----------
@@ -133,27 +132,40 @@ def calc_row_values(grund: dict, rad_datum, fodelsedatum, starttid):
     tid_alskar_sek = (alskar + sover) * 20 * 60  # 20 minuter per person
 
     # ---- Klockan (huvud) ----
-    # start + 3h (hångel) + 1h (vila) + summa tid (sek)
     try:
-        # bygg ett datetime-objekt av rad_datum + starttid
         if isinstance(rad_datum, datetime):
             base_dt = rad_datum.replace(hour=starttid.hour, minute=starttid.minute, second=0, microsecond=0)
         else:
-            # rad_datum förväntas vara date
             base_dt = datetime.combine(rad_datum, starttid)
         klockan_dt = base_dt + timedelta(hours=3) + timedelta(hours=1) + timedelta(seconds=summa_tid_sek)
         klockan_str = klockan_dt.strftime("%H:%M")
     except Exception:
         klockan_str = "-"
 
-    # (valfri) Klockan inkl älskar/sover – kan användas senare i liven om ni vill
+    # Klockan inkl älskar/sover
     try:
         klockan2_dt = base_dt + timedelta(hours=3) + timedelta(hours=1) + timedelta(seconds=summa_tid_sek + tid_alskar_sek)
         klockan2_str = klockan2_dt.strftime("%H:%M")
     except Exception:
         klockan2_str = "-"
 
-    # ---- Återlämna allt appen använder i liven (och lite till) ----
+    # ---- Hårdhet ----
+    hardhet = 0
+    # DP/DPP/DAP/TAP
+    if dp  > 0: hardhet += 3
+    if dpp > 0: hardhet += 5
+    if dap > 0: hardhet += 7
+    if tap > 0: hardhet += 9
+    # Totalt män trösklar (adderas kumulativt)
+    if totalt_man > 100:  hardhet += 1
+    if totalt_man > 200:  hardhet += 2
+    if totalt_man > 400:  hardhet += 4
+    if totalt_man > 700:  hardhet += 7
+    if totalt_man > 1000: hardhet += 10
+    # Svarta
+    if svarta > 0: hardhet += 3
+
+    # ---- Återlämna allt appen använder ----
     out = {}
 
     # Bas-info
@@ -171,7 +183,7 @@ def calc_row_values(grund: dict, rad_datum, fodelsedatum, starttid):
     out["Summa TP (sek)"] = int(summa_tp)
 
     out["Summa tid (sek)"] = int(summa_tid_sek)
-    out["Summa tid"] = _hhmm(summa_tid_sek)  # visas som HH:MM
+    out["Summa tid"] = _hhmm(summa_tid_sek)  # HH:MM
 
     out["Tid per kille (sek)"] = float(tid_per_kille_sek)
     out["Tid per kille"]       = _mmss(tid_per_kille_sek)
@@ -190,7 +202,7 @@ def calc_row_values(grund: dict, rad_datum, fodelsedatum, starttid):
 
     # Ekonomi (placeholder tills vi definierar)
     out["Prenumeranter"]   = 0
-    out["Hårdhet"]         = 0
+    out["Hårdhet"]         = hardhet
     out["Intäkter"]        = 0.0
     out["Intäkt Känner"]   = 0.0
     out["Utgift män"]      = 0.0
