@@ -8,28 +8,29 @@ import json
 # Grundinställningar
 # =========================
 st.set_page_config(page_title="Malin – produktionsapp", layout="wide")
-st.title("Malin – produktionsapp (Profiler + Sheets via SHEET_URL)")
+st.title("Malin – produktionsapp (Profiler + Sheets + BMI mål)")
 
 # ======== State-nycklar ========
-CFG_KEY       = "CFG"            # alla config + etiketter + maxvärden + profil
-ROWS_KEY      = "ROWS"           # sparade rader (lokalt minne)
-HIST_MM_KEY   = "HIST_MINMAX"    # min/max per fält
-SCENEINFO_KEY = "CURRENT_SCENE"  # (scen_nr, rad_datum, veckodag)
-SCENARIO_KEY  = "SCENARIO"       # rullist-valet
-PROFILE_KEY   = "PROFILE_NAME"   # valt profilenamn
+CFG_KEY        = "CFG"            # alla config + etiketter + profilvärden
+ROWS_KEY       = "ROWS"           # sparade rader (lokalt minne speglas från/vid Sheets)
+HIST_MM_KEY    = "HIST_MINMAX"    # min/max per fält
+SCENEINFO_KEY  = "CURRENT_SCENE"  # (scen_nr, rad_datum, veckodag)
+SCENARIO_KEY   = "SCENARIO"       # rullist-valet
+PROFILE_KEY    = "PROFILE_NAME"   # valt profilnamn
+PROFILE_LIST   = "PROFILE_LIST"   # lista av profiler (från fliken "Profil")
 
-# ======== Import av beräkning ========
+# ======== Import av beräkning & ev. statistik ========
 try:
     from berakningar import calc_row_values
 except Exception as e:
     st.error(f"Kunde inte importera beräkningar: {e}")
     st.stop()
 
-# ======== (NYTT) Import av statistik (frivillig) ========
 try:
-    from statistik import compute_stats  # förväntad signatur: compute_stats(rows: list[dict], cfg: dict) -> dict|DataFrame
+    from statistik import compute_stats   # valfri
+    HAS_STATS = True
 except Exception:
-    compute_stats = None  # kör appen även om statistik-modulen inte finns
+    HAS_STATS = False
 
 # =========================
 # Hjälpare: Secrets & Sheets
@@ -50,7 +51,7 @@ def _get_gspread_client():
     ss = client.open_by_url(st.secrets["SHEET_URL"])
     return ss
 
-def _ensure_ws(ss, title, rows=4000, cols=120):
+def _ensure_ws(ss, title, rows=4000, cols=80):
     import gspread
     try:
         return ss.worksheet(title)
@@ -73,76 +74,6 @@ INPUT_ORDER = [
 ]
 
 # =========================
-# Profiler
-# =========================
-def _load_profile_names():
-    """Returnerar lista med profilnamn från fliken 'Profil' (kolumn A)."""
-    try:
-        ss = _get_gspread_client()
-        wsP = _ensure_ws(ss, "Profil")
-        vals = wsP.col_values(1) or []
-        names = [v.strip() for v in vals if v and v.strip() and v.strip().lower() != "namn"]
-        return names
-    except Exception:
-        return []
-
-def _load_profile_into_cfg(profile_name: str):
-    """
-    Läser in inställningar för given profil från blad med samma namn.
-    Format: två kolumner [Key, Value].
-    Sätter in i st.session_state[CFG_KEY].
-    """
-    if not profile_name:
-        return
-    try:
-        ss = _get_gspread_client()
-        ws = _ensure_ws(ss, profile_name)
-        kv = ws.get_all_values()
-        if not kv:
-            st.warning(f"Inga värden hittades i bladet '{profile_name}'.")
-            return
-        cfg = st.session_state[CFG_KEY]
-        for row in kv:
-            if len(row) < 2:
-                continue
-            k = row[0].strip()
-            v = row[1]
-            if not k:
-                continue
-            # typning
-            if k in ("startdatum","fodelsedatum"):
-                try:
-                    y,m,d = [int(x) for x in v.split("-")]
-                    cfg[k] = date(y,m,d)
-                except Exception:
-                    pass
-            elif k in cfg:
-                try:
-                    if isinstance(cfg[k], bool):
-                        cfg[k] = (str(v).lower() == "true")
-                    elif isinstance(cfg[k], int):
-                        cfg[k] = int(v)
-                    elif isinstance(cfg[k], float):
-                        cfg[k] = float(v)
-                    else:
-                        # auto
-                        if str(v).lower() in ("true","false"):
-                            cfg[k] = (str(v).lower() == "true")
-                        elif "." in str(v):
-                            cfg[k] = float(v)
-                        else:
-                            cfg[k] = int(v)
-                except Exception:
-                    cfg[k] = v
-            else:
-                cfg[k] = v
-        # märk aktiv profil
-        cfg["ACTIVE_PROFILE"] = profile_name
-        st.success(f"✅ Profil '{profile_name}' inläst.")
-    except Exception as e:
-        st.error(f"Kunde inte läsa profil '{profile_name}': {e}")
-
-# =========================
 # Init state
 # =========================
 def _current_scene_info():
@@ -154,13 +85,19 @@ def _current_scene_info():
 def init_state():
     if CFG_KEY not in st.session_state:
         st.session_state[CFG_KEY] = {
-            # start/födelse enligt din begäran
+            # Start/födelse enligt dina ramar
             "startdatum":   date(1990,1,1),
             "starttid":     time(7,0),
             "fodelsedatum": date(1970,1,1),
+
+            # Ekonomi & personal
             "avgift_usd":   30.0,
             "PROD_STAFF":   800,
-            "BONUS_AVAILABLE": 500,      # uppdateras vid spar
+
+            # Bonus killar – initialt från Profil/Inställningar, uppdateras löpande
+            "BONUS_AVAILABLE": 500,
+
+            # Eskilstuna-intervall
             "ESK_MIN": 20, "ESK_MAX": 40,
 
             # Maxvärden (källor)
@@ -168,7 +105,7 @@ def init_state():
             "MAX_NILS_VANNER": 100, "MAX_NILS_FAMILJ": 100,
             "MAX_BEKANTA": 100,
 
-            # Etiketter
+            # Etiketter (kan döpas om)
             "LBL_PAPPAN": "Pappans vänner",
             "LBL_GRANNAR": "Grannar",
             "LBL_NILS_VANNER": "Nils vänner",
@@ -176,17 +113,22 @@ def init_state():
             "LBL_BEKANTA": "Bekanta",
             "LBL_ESK": "Eskilstuna killar",
 
-            # Aktiv profil (namn)
-            "ACTIVE_PROFILE": "",
+            # Profilfält
+            "HEIGHT_M": 1.64,  # hämtas normalt från profilfliken
+            "BM_MAL": 0.0,
+            "MAL_VIKT": 0.0,
         }
-    if PROFILE_KEY not in st.session_state:
-        st.session_state[PROFILE_KEY] = ""
     if ROWS_KEY not in st.session_state:
         st.session_state[ROWS_KEY] = []
     if HIST_MM_KEY not in st.session_state:
         st.session_state[HIST_MM_KEY] = {}
     if SCENARIO_KEY not in st.session_state:
         st.session_state[SCENARIO_KEY] = "Ny scen"
+    if PROFILE_KEY not in st.session_state:
+        st.session_state[PROFILE_KEY] = ""  # väljs från Profil-fliken
+    if PROFILE_LIST not in st.session_state:
+        st.session_state[PROFILE_LIST] = []
+
     # default för tidsfält m.m.
     defaults = {
         "in_tid_s":60, "in_tid_d":60, "in_vila":7, "in_dt_tid":60, "in_dt_vila":3,
@@ -194,6 +136,7 @@ def init_state():
     }
     for k in INPUT_ORDER:
         st.session_state.setdefault(k, defaults.get(k, 0))
+
     if SCENEINFO_KEY not in st.session_state:
         st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
@@ -238,8 +181,6 @@ def _rand_hist(colname: str):
 def apply_scenario_fill():
     CFG = st.session_state[CFG_KEY]
     s = st.session_state[SCENARIO_KEY]
-
-    # nolla (behåll tidsstandarder)
     keep_defaults = {"in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3}
     for k in INPUT_ORDER:
         st.session_state[k] = keep_defaults.get(k, 0)
@@ -253,9 +194,12 @@ def apply_scenario_fill():
         for f,key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
                       ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
             st.session_state[key] = _rand_hist(f)
-        for f,key in [("Pappans vänner","in_pappan"),("Grannar","in_grannar"),
-                      ("Nils vänner","in_nils_vanner"),("Nils familj","in_nils_familj"),
-                      ("Bekanta","in_bekanta")]:
+        for f,key in [(st.session_state[CFG_KEY]["LBL_PAPPAN"],"in_pappan"),
+                      (st.session_state[CFG_KEY]["LBL_GRANNAR"],"in_grannar"),
+                      (st.session_state[CFG_KEY]["LBL_NILS_VANNER"],"in_nils_vanner"),
+                      (st.session_state[CFG_KEY]["LBL_NILS_FAMILJ"],"in_nils_familj"),
+                      (st.session_state[CFG_KEY]["LBL_BEKANTA"],"in_bekanta")]:
+            # slumpa via historiska rubriker
             st.session_state[key] = _rand_hist(f)
         st.session_state["in_eskilstuna"]  = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
         st.session_state["in_alskar"] = 8
@@ -266,50 +210,139 @@ def apply_scenario_fill():
         for f,key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
                       ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
             st.session_state[key] = _rand_hist(f)
-        # övriga källor/personaldeltagit 0
 
     elif s == "Vila på jobbet":
         for f,key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
                       ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
             st.session_state[key] = _rand_hist(f)
-        for f,key in [("Pappans vänner","in_pappan"),("Bekanta","in_bekanta"),
-                      ("Grannar","in_grannar"),("Nils vänner","in_nils_vanner"),
-                      ("Nils familj","in_nils_familj")]:
+        for f,key in [(st.session_state[CFG_KEY]["LBL_PAPPAN"],"in_pappan"),
+                      (st.session_state[CFG_KEY]["LBL_BEKANTA"],"in_bekanta"),
+                      (st.session_state[CFG_KEY]["LBL_GRANNAR"],"in_grannar"),
+                      (st.session_state[CFG_KEY]["LBL_NILS_VANNER"],"in_nils_vanner"),
+                      (st.session_state[CFG_KEY]["LBL_NILS_FAMILJ"],"in_nils_familj")]:
             st.session_state[key] = _rand_hist(f)
         st.session_state["in_eskilstuna"]  = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
         st.session_state["in_alskar"] = 12
         st.session_state["in_sover"]  = 1
 
     elif s == "Vila i hemmet (dag 1–7)":
-        # Förenklad: EN dag enligt din beskrivning
+        # Förenklad till en dag enligt dina senaste önskemål
         for f,key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
                       ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
             st.session_state[key] = _rand_hist(f)
-        for f,key in [("Pappans vänner","in_pappan"),("Grannar","in_grannar"),
-                      ("Nils vänner","in_nils_vanner"),("Nils familj","in_nils_familj"),
-                      ("Bekanta","in_bekanta")]:
+        for f,key in [(st.session_state[CFG_KEY]["LBL_PAPPAN"],"in_pappan"),
+                      (st.session_state[CFG_KEY]["LBL_GRANNAR"],"in_grannar"),
+                      (st.session_state[CFG_KEY]["LBL_NILS_VANNER"],"in_nils_vanner"),
+                      (st.session_state[CFG_KEY]["LBL_NILS_FAMILJ"],"in_nils_familj"),
+                      (st.session_state[CFG_KEY]["LBL_BEKANTA"],"in_bekanta")]:
             st.session_state[key] = _rand_hist(f)
         st.session_state["in_eskilstuna"] = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
         st.session_state["in_alskar"] = 6
         st.session_state["in_sover"]  = 0
         st.session_state["in_nils"]   = 0
-        # bonus/personaldeltagit anger du själv
 
-    # uppdatera sceninfo (datum/veckodag i liven)
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
 # =========================
-# Sidopanel (inkl. profiler)
+# Profil-hantering (läs Profil-lista + ladda profilblad)
+# =========================
+def _load_profile_names():
+    try:
+        ss = _get_gspread_client()
+        wsP = _ensure_ws(ss, "Profil")
+        vals = wsP.col_values(1)  # kolumn A
+        names = [v.strip() for v in vals if v and v.strip().lower() != "profil"]
+        st.session_state[PROFILE_LIST] = names
+    except Exception as e:
+        st.session_state[PROFILE_LIST] = []
+        st.warning(f"Kunde inte läsa profilnamn: {e}")
+
+def _load_profile_sheet(name: str):
+    """Läser profilflik (Key/Value) + inställningar och dataflik med samma namn.
+       Samt ‘Inställningar’ & ‘Data’ som bas (överlagras av profilen)."""
+    try:
+        ss = _get_gspread_client()
+        # 1) Inställningar (global bas – läses först)
+        wsI = _ensure_ws(ss, "Inställningar")
+        inst = wsI.get_all_values()
+        if inst:
+            for row in inst:
+                if len(row) >= 2 and row[0]:
+                    key = row[0].strip()
+                    val = row[1]
+                    _assign_cfg_key(key, val)
+
+        # 2) Profilblad: namn = name (Key/Value)
+        wsProf = _ensure_ws(ss, name)
+        prof = wsProf.get_all_values()
+        for row in prof:
+            if len(row) >= 2 and row[0]:
+                key = row[0].strip()
+                val = row[1]
+                _assign_cfg_key(key, val)
+
+        # 3) Data – profilens Dataflik? (om du vill separera per profil)
+        #    Standard: vi använder universell "Data". Vill du ha per profil,
+        #    döp fliken till exakt profilnamnet och läs därifrån:
+        try:
+            wsD = ss.worksheet(name)  # om du vill ha data i samma profilflik
+            data_vals = wsD.get_all_records()
+        except Exception:
+            wsD = _ensure_ws(ss, "Data")
+            data_vals = wsD.get_all_records()
+
+        st.session_state[ROWS_KEY] = data_vals or []
+        st.session_state[HIST_MM_KEY] = {}
+        # bygg min/max för historik – använd gällande etiketter:
+        LBL_PAPPAN = st.session_state[CFG_KEY]["LBL_PAPPAN"]
+        LBL_GRANNAR = st.session_state[CFG_KEY]["LBL_GRANNAR"]
+        LBL_NV = st.session_state[CFG_KEY]["LBL_NILS_VANNER"]
+        LBL_NF = st.session_state[CFG_KEY]["LBL_NILS_FAMILJ"]
+        LBL_BEK = st.session_state[CFG_KEY]["LBL_BEKANTA"]
+        LBL_ESK = st.session_state[CFG_KEY]["LBL_ESK"]
+        for r in st.session_state[ROWS_KEY]:
+            for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
+                        LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
+                _add_hist_value(col, r.get(col, 0))
+
+        st.session_state[SCENEINFO_KEY] = _current_scene_info()
+        st.success(f"✅ Profil '{name}' inläst.")
+    except Exception as e:
+        st.error(f"Kunde inte läsa profil '{name}': {e}")
+
+def _assign_cfg_key(key, val):
+    # Typning: datum, float/int/bool, annars str
+    try:
+        if key in ("startdatum","fodelsedatum"):
+            y,m,d = [int(x) for x in str(val).replace("/", "-").split("-")]
+            st.session_state[CFG_KEY][key] = date(y,m,d)
+            return
+        if str(val).strip().lower() in ("true","false"):
+            st.session_state[CFG_KEY][key] = (str(val).strip().lower() == "true")
+            return
+        v2 = str(val).replace(",", ".")
+        if "." in v2:
+            st.session_state[CFG_KEY][key] = float(v2)
+        else:
+            st.session_state[CFG_KEY][key] = int(v2)
+    except:
+        st.session_state[CFG_KEY][key] = val
+
+# =========================
+# Sidopanel
 # =========================
 CFG = st.session_state[CFG_KEY]
 with st.sidebar:
     st.header("Profiler")
-    names = _load_profile_names()
-    sel = st.selectbox("Välj profil (hämtas från blad 'Profil')", options=["—"] + names,
-                       index=(["—"]+names).index(st.session_state.get(PROFILE_KEY,"—")) if st.session_state.get(PROFILE_KEY,"—") in (["—"]+names) else 0)
-    if sel != "—" and sel != st.session_state.get(PROFILE_KEY,""):
-        st.session_state[PROFILE_KEY] = sel
-        _load_profile_into_cfg(sel)
+    if st.button("↻ Läs in profiler"):
+        _load_profile_names()
+    # rullista (om inga profiler ännu – visa tomt)
+    profile_names = st.session_state[PROFILE_LIST] or []
+    st.session_state[PROFILE_KEY] = st.selectbox("Välj profil", options=[""] + profile_names, index=0)
+
+    if st.session_state[PROFILE_KEY]:
+        if st.button("📥 Ladda vald profil"):
+            _load_profile_sheet(st.session_state[PROFILE_KEY])
 
     st.markdown("---")
     st.header("Inställningar")
@@ -336,12 +369,12 @@ with st.sidebar:
 
     st.markdown("---")
     st.subheader("Egna etiketter")
-    CFG["LBL_PAPPAN"]      = st.text_input("Etikett för Pappans vänner", value=CFG["LBL_PAPPAN"])
-    CFG["LBL_GRANNAR"]     = st.text_input("Etikett för Grannar", value=CFG["LBL_GRANNAR"])
-    CFG["LBL_NILS_VANNER"] = st.text_input("Etikett för Nils vänner", value=CFG["LBL_NILS_VANNER"])
-    CFG["LBL_NILS_FAMILJ"] = st.text_input("Etikett för Nils familj", value=CFG["LBL_NILS_FAMILJ"])
-    CFG["LBL_BEKANTA"]     = st.text_input("Etikett för Bekanta", value=CFG["LBL_BEKANTA"])
-    CFG["LBL_ESK"]         = st.text_input("Etikett för Eskilstuna killar", value=CFG["LBL_ESK"])
+    CFG["LBL_PAPPAN"]      = st.text_input("Etikett Pappans vänner", value=CFG["LBL_PAPPAN"])
+    CFG["LBL_GRANNAR"]     = st.text_input("Etikett Grannar", value=CFG["LBL_GRANNAR"])
+    CFG["LBL_NILS_VANNER"] = st.text_input("Etikett Nils vänner", value=CFG["LBL_NILS_VANNER"])
+    CFG["LBL_NILS_FAMILJ"] = st.text_input("Etikett Nils familj", value=CFG["LBL_NILS_FAMILJ"])
+    CFG["LBL_BEKANTA"]     = st.text_input("Etikett Bekanta", value=CFG["LBL_BEKANTA"])
+    CFG["LBL_ESK"]         = st.text_input("Etikett Eskilstuna killar", value=CFG["LBL_ESK"])
 
     st.markdown("---")
     st.subheader("Scenario")
@@ -355,20 +388,19 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    st.subheader("Google Sheets")
+    st.subheader("Google Sheets – status")
     has_creds = "GOOGLE_CREDENTIALS" in st.secrets
     has_url   = "SHEET_URL" in st.secrets
     st.write(f"GOOGLE_CREDENTIALS: {'✅' if has_creds else '❌'}")
     st.write(f"SHEET_URL: {'✅' if has_url else '❌'}")
 
-    # Spara inställningar för AKTIV PROFIL (skriv tillbaka i blad med samma namn)
-    if st.button("💾 Spara INSTÄLLNINGAR till Profil-blad"):
+    # Spara inställningar till flik Inställningar (key/value)
+    if st.button("💾 Spara inställningar till Sheets"):
         try:
-            prof = st.session_state.get(PROFILE_KEY) or CFG.get("ACTIVE_PROFILE") or "Profil"
             ss = _get_gspread_client()
-            wsI = _ensure_ws(ss, prof)
+            wsI = _ensure_ws(ss, "Inställningar")
             rows = []
-            for k,v in CFG.items():
+            for k,v in st.session_state[CFG_KEY].items():
                 if isinstance(v, (date, datetime)):
                     v = v.strftime("%Y-%m-%d")
                 rows.append([k, str(v)])
@@ -376,12 +408,12 @@ with st.sidebar:
             wsI.update("A1", [["Key","Value"]])
             if rows:
                 wsI.update(f"A2:B{len(rows)+1}", rows)
-            st.success(f"✅ Inställningar sparade i bladet '{prof}'.")
+            st.success("✅ Inställningar sparade.")
         except Exception as e:
             st.error(f"Misslyckades att spara inställningar: {e}")
 
 # =========================
-# Inmatning (etiketter från inställningar), exakt ordning
+# Inmatning (etiketter via inställningar), exakt ordning
 # =========================
 st.subheader("Input (exakt ordning)")
 c1,c2 = st.columns(2)
@@ -431,7 +463,7 @@ with c2:
         st.number_input(labels[key], min_value=0, step=1, key=key)
 
 # =========================
-# Bygg basrad från inputs
+# Basrad från inputs
 # =========================
 def build_base_from_inputs():
     scen, d, veckodag = st.session_state[SCENEINFO_KEY]
@@ -460,7 +492,14 @@ def build_base_from_inputs():
 
         "Nils":    st.session_state["in_nils"],
         "Avgift":  float(st.session_state[CFG_KEY]["avgift_usd"]),
-        "PROD_STAFF": int(st.session_state[CFG_KEY]["PROD_STAFF"])
+        "PROD_STAFF": int(st.session_state[CFG_KEY]["PROD_STAFF"]),
+
+        # MAX för statistik i beräkningar (om/när de används)
+        "MAX_PAPPAN":      int(st.session_state[CFG_KEY]["MAX_PAPPAN"]),
+        "MAX_GRANNAR":     int(st.session_state[CFG_KEY]["MAX_GRANNAR"]),
+        "MAX_NILS_VANNER": int(st.session_state[CFG_KEY]["MAX_NILS_VANNER"]),
+        "MAX_NILS_FAMILJ": int(st.session_state[CFG_KEY]["MAX_NILS_FAMILJ"]),
+        "MAX_BEKANTA":     int(st.session_state[CFG_KEY]["MAX_BEKANTA"]),
     }
     # Känner = summa av käll-etiketter
     base["Känner"] = (
@@ -484,15 +523,6 @@ try:
     preview = calc_row_values(base, base["_rad_datum"], base["_fodelsedatum"], base["_starttid"])
 except TypeError:
     preview = calc_row_values(base, base["_rad_datum"], st.session_state[CFG_KEY]["fodelsedatum"], st.session_state[CFG_KEY]["starttid"])
-
-# Egen kontrollsumma (inkl källor/bonus/personal/Eskilstuna)
-tot_men_including = (
-    int(base.get("Män",0)) + int(base.get("Svarta",0)) +
-    int(base.get(LBL_PAPPAN,0)) + int(base.get(LBL_GRANNAR,0)) +
-    int(base.get(LBL_NV,0)) + int(base.get(LBL_NF,0)) +
-    int(base.get(LBL_BEK,0)) + int(base.get(LBL_ESK,0)) +
-    int(base.get("Bonus deltagit",0)) + int(base.get("Personal deltagit",0))
-)
 
 # Datum/ålder
 rad_datum = preview.get("Datum", base["Datum"])
@@ -546,7 +576,7 @@ with e4:
     st.metric("Vinst", f"${float(preview.get('Vinst',0)):,.2f}")
     st.metric("Älskar (sek)", int(preview.get("Tid Älskar (sek)", 0)))
 
-# Käll-brakeout med etiketter
+# Käll-breakout (med etiketter)
 st.markdown("**👥 Källor (live)**")
 k1,k2,k3,k4,k5,k6 = st.columns(6)
 with k1: st.metric(LBL_PAPPAN, int(base.get(LBL_PAPPAN,0)))
@@ -555,78 +585,68 @@ with k3: st.metric(LBL_NV, int(base.get(LBL_NV,0)))
 with k4: st.metric(LBL_NF, int(base.get(LBL_NF,0)))
 with k5: st.metric(LBL_BEK, int(base.get(LBL_BEK,0)))
 with k6: st.metric(LBL_ESK, int(base.get(LBL_ESK,0)))
-st.metric("Totalt män (inkl. källor/bonus/personal/Eskilstuna)", tot_men_including)
 
-st.caption("Obs: Älskar/Sover-med-tider ingår **inte** i scenens 'Summa tid', men lägger på klockan.")
+st.caption("Obs: Älskar/Sover-med-tider ingår inte i scenens 'Summa tid', men läggs på klockan i din separata logik.")
 
-# =========================
-# Bonus-uppdatering (+1% pren – Bonus deltagit)
-# =========================
-def _bonus_delta_for_row(preview: dict) -> int:
-    pren = int(preview.get("Prenumeranter", 0))
-    deltog = int(preview.get("Bonus deltagit", 0))
-    return (pren // 100) - deltog  # ⌊1%⌋ − deltagit
+# ======== BM mål och Mål vikt (ackumulerat över alla prenumeranter) ========
+st.markdown("---")
+st.subheader("📏 BM mål & Mål vikt (ackumulerat)")
+try:
+    prev_total = sum(int(r.get("Prenumeranter", 0)) for r in st.session_state[ROWS_KEY])
+    curr = int(preview.get("Prenumeranter", 0))
+    n_subs = prev_total + curr
+except Exception:
+    n_subs = 0
 
-def _write_bonus_to_settings_sheet(new_value: int):
-    """Skriv tillbaka BONUS_AVAILABLE till 'Inställningar' och aktiv profil (om vald)."""
-    try:
-        ss = _get_gspread_client()
-        # 1) Inställningar-fliken (global fallback)
-        wsI = _ensure_ws(ss, "Inställningar")
-        rows = wsI.get_all_values()
-        key_row = None
-        for i, row in enumerate(rows, start=1):
-            if row and row[0].strip() == "BONUS_AVAILABLE":
-                key_row = i
-                break
-        if key_row is None:
-            if not rows:
-                wsI.update("A1", [["Key","Value"]])
-                key_row = 2
-            else:
-                key_row = len(rows) + 1
-        wsI.update(f"A{key_row}:B{key_row}", [["BONUS_AVAILABLE", str(new_value)]])
+bm_mal = 0.0
+mal_vikt = 0.0
+if n_subs > 0:
+    total = 0
+    for _ in range(n_subs):
+        total += random.randint(12, 18)
+    bm_mal = total / float(n_subs)
+    h = float(st.session_state[CFG_KEY].get("HEIGHT_M", 1.64))
+    mal_vikt = bm_mal * h * h
 
-        # 2) Aktiv profil-blad
-        prof = st.session_state.get(PROFILE_KEY) or st.session_state[CFG_KEY].get("ACTIVE_PROFILE")
-        if prof:
-            wsP = _ensure_ws(ss, prof)
-            rows2 = wsP.get_all_values()
-            key_row2 = None
-            for i, row in enumerate(rows2, start=1):
-                if row and row[0].strip() == "BONUS_AVAILABLE":
-                    key_row2 = i
-                    break
-            if key_row2 is None:
-                if not rows2:
-                    wsP.update("A1", [["Key","Value"]])
-                    key_row2 = 2
-                else:
-                    key_row2 = len(rows2) + 1
-            wsP.update(f"A{key_row2}:B{key_row2}", [["BONUS_AVAILABLE", str(new_value)]])
-    except Exception:
-        pass  # tyst miss – påverkar inte sparad rad
+st.session_state[CFG_KEY]["BM_MAL"] = float(bm_mal)
+st.session_state[CFG_KEY]["MAL_VIKT"] = float(mal_vikt)
+
+b1, b2 = st.columns(2)
+with b1:
+    st.metric("BM mål (snitt)", f"{bm_mal:.2f}")
+with b2:
+    st.metric("Mål vikt", f"{mal_vikt:.1f} kg")
 
 # =========================
 # Spara lokalt
 # =========================
 st.markdown("---")
 cL, cR = st.columns([1,1])
+
+def _after_save_common(preview_row: dict):
+    """Gemensam uppdatering efter spar (lokalt/Sheets)."""
+    # uppdatera min/max
+    for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
+                LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
+        v = int(preview_row.get(col,0))
+        _add_hist_value(col, v)
+    # Bonus killar kvar = kvar + 1% av nya prenumeranter – ‘Bonus deltagit’ (på raden)
+    try:
+        add_from_subs = int(round(preview_row.get("Prenumeranter",0) * 0.01))
+    except Exception:
+        add_from_subs = 0
+    try:
+        used = int(preview_row.get("Bonus deltagit",0))
+    except Exception:
+        used = 0
+    st.session_state[CFG_KEY]["BONUS_AVAILABLE"] = max(0, int(st.session_state[CFG_KEY]["BONUS_AVAILABLE"]) + add_from_subs - used)
+
+    st.session_state[SCENEINFO_KEY] = _current_scene_info()
+
 with cL:
     if st.button("💾 Spara raden (lokalt)"):
         st.session_state[ROWS_KEY].append(preview)
-        # uppdatera min/max
-        for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
-                    LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
-            v = int(preview.get(col,0))
-            _add_hist_value(col, v)
-        # bonus kvar: + ⌊1% pren⌋ − bonus_deltagit
-        delta = _bonus_delta_for_row(preview)
-        st.session_state[CFG_KEY]["BONUS_AVAILABLE"] = max(
-            0, int(st.session_state[CFG_KEY]["BONUS_AVAILABLE"]) + delta
-        )
-        _write_bonus_to_settings_sheet(int(st.session_state[CFG_KEY]["BONUS_AVAILABLE"]))
-        st.session_state[SCENEINFO_KEY] = _current_scene_info()
+        _after_save_common(preview)
         st.success("✅ Sparad i minnet (ingen Sheets).")
 
 # =========================
@@ -649,72 +669,34 @@ with cR:
         try:
             save_to_sheets(preview)
             st.success("✅ Sparad till Google Sheets (flik: Data).")
-            # spegla samma som lokalspar
+            # Spegla lokalt + bonus kvar
             st.session_state[ROWS_KEY].append(preview)
-            for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
-                        LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
-                v = int(preview.get(col,0))
-                _add_hist_value(col, v)
-            # bonus kvar: + ⌊1% pren⌋ − bonus_deltagit
-            delta = _bonus_delta_for_row(preview)
-            st.session_state[CFG_KEY]["BONUS_AVAILABLE"] = max(
-                0, int(st.session_state[CFG_KEY]["BONUS_AVAILABLE"]) + delta
-            )
-            _write_bonus_to_settings_sheet(int(st.session_state[CFG_KEY]["BONUS_AVAILABLE"]))
-            st.session_state[SCENEINFO_KEY] = _current_scene_info()
+            _after_save_common(preview)
         except Exception as e:
             st.error(f"Misslyckades att spara till Sheets: {e}")
 
 # =========================
-# Visa lokala rader
+# Visa lokala rader & Statistik (om finns)
 # =========================
 st.markdown("---")
-st.subheader("📋 Lokala rader (förhandslagrade)")
+st.subheader("📋 Lokala rader")
 if st.session_state[ROWS_KEY]:
     df = pd.DataFrame(st.session_state[ROWS_KEY])
     st.dataframe(df, use_container_width=True, height=320)
 else:
     st.info("Inga lokala rader ännu.")
 
-# =========================
-# (NYTT) Statistik – expander som anropar statistik.py om den finns
-# =========================
-st.markdown("---")
-with st.expander("📊 Statistik (från statistik.py)"):
-    if compute_stats is None:
-        st.info("Hittade inte modulen `statistik.py`. Lägg den i samma mapp som appen (med funktionen `compute_stats(rows, cfg)`).")
-    else:
-        if st.button("Beräkna statistik"):
-            try:
-                stats = compute_stats(st.session_state[ROWS_KEY], st.session_state[CFG_KEY])
-                if stats is None:
-                    st.warning("compute_stats() returnerade inget.")
-                elif isinstance(stats, pd.DataFrame):
-                    st.dataframe(stats, use_container_width=True)
-                elif isinstance(stats, dict):
-                    # visa enkelt: nycklar + ev tabeller
-                    for k, v in stats.items():
-                        if isinstance(v, pd.DataFrame):
-                            st.markdown(f"**{k}**")
-                            st.dataframe(v, use_container_width=True)
-                        else:
-                            st.markdown(f"**{k}:** {v}")
-                else:
-                    st.write(stats)
-            except Exception as e:
-                st.error(f"Fel vid beräkning av statistik: {e}")
-
-# =========================
-# Del 4/4 – Main & entrypoint
-# =========================
-
-def main():
-    # Alla vyer/knappar/rendering sker i delarna ovan (sidopanel, formulär, live, spar, statistik).
-    # main() hålls medvetet tom för att INTE rubba något av flödet.
-    # Om du vill lägga något litet statusmeddelande kan du avkommentera nedan:
-    # st.caption("Appen är klar att användas. (main())")
-
-    return
-
-if __name__ == "__main__":
-    main()
+if HAS_STATS:
+    st.markdown("---")
+    st.subheader("📈 Statistik (från statistik.py)")
+    try:
+        stats = compute_stats(st.session_state[ROWS_KEY], st.session_state[CFG_KEY])
+        if isinstance(stats, dict):
+            for k,v in stats.items():
+                st.write(f"**{k}:** {v}")
+        elif isinstance(stats, pd.DataFrame):
+            st.dataframe(stats, use_container_width=True)
+        else:
+            st.write(stats)
+    except Exception as e:
+        st.error(f"Fel i compute_stats: {e}")
