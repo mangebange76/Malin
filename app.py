@@ -324,8 +324,8 @@ def visa_statistik(cfg, rows_df):
     statistik = compute_stats(rows_df, cfg)
 
     st.subheader("📊 Statistik")
-    for nyckel, värde in statistik.items():
-        st.write(f"**{nyckel}**: {värde}")
+    for key, value in statistik.items():
+        st.write(f"**{key}**: {value}")
 
 def render_input_fields(cfg):
     """Visar formulärfält för manuell inmatning."""
