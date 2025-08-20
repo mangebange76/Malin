@@ -1,69 +1,37 @@
 # sheets_utils.py
-import gspread
-import pandas as pd
+import json
+import streamlit as st
 from google.oauth2.service_account import Credentials
+import gspread
 
-SHEET_NAME = "Data"
-PROFILE_SHEET = "Profil"
-CFG_SHEET = "Inställningar"
+def get_client():
+    """
+    Returnerar ett gspread Spreadsheet-objekt öppnat via st.secrets:
+    - st.secrets["GOOGLE_CREDENTIALS"]  (JSON-sträng eller dict/AttrDict)
+    - st.secrets["SHEET_URL"]           (Google Sheets URL)
+    """
+    if "GOOGLE_CREDENTIALS" not in st.secrets or "SHEET_URL" not in st.secrets:
+        raise RuntimeError("Secrets saknas: GOOGLE_CREDENTIALS och/eller SHEET_URL.")
 
-def skapa_koppling(secrets):
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    credentials = Credentials.from_service_account_info(secrets, scopes=scope)
-    client = gspread.authorize(credentials)
-    return client
+    creds_raw = st.secrets["GOOGLE_CREDENTIALS"]
+    if isinstance(creds_raw, str):
+        creds_info = json.loads(creds_raw)
+    else:
+        # AttrDict/dict → vanlig dict
+        creds_info = json.loads(json.dumps(dict(creds_raw)))
 
-def hamta_data_fran_sheet(client, sheet_url, sheet_name=SHEET_NAME):
-    """Hämtar hela datafliken från Google Sheets som DataFrame."""
-    sh = client.open_by_url(sheet_url)
-    ws = sh.worksheet(sheet_name)
-    rows = ws.get_all_records()
-    return pd.DataFrame(rows)
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_info(creds_info, scopes=scopes)
+    client = gspread.authorize(creds)
+    spreadsheet = client.open_by_url(st.secrets["SHEET_URL"])
+    return spreadsheet
 
-def spara_data_till_sheet(client, sheet_url, df, sheet_name=SHEET_NAME):
-    """Sparar en DataFrame till angiven flik i Google Sheets."""
-    sh = client.open_by_url(sheet_url)
-    ws = sh.worksheet(sheet_name)
-    ws.clear()
-    ws.update([df.columns.values.tolist()] + df.astype(str).values.tolist())
-
-def hamta_inställningar(client, sheet_url):
-    """Hämtar nyckel/värde-par från inställningsfliken."""
-    sh = client.open_by_url(sheet_url)
-    ws = sh.worksheet(CFG_SHEET)
-    inst_df = pd.DataFrame(ws.get_all_records())
-    cfg = {}
-    for _, row in inst_df.iterrows():
-        nyckel = str(row.get("Nyckel", "")).strip()
-        värde = str(row.get("Värde", "")).strip()
-        if not nyckel:
-            continue
-        try:
-            cfg[nyckel] = int(värde)
-        except:
-            try:
-                cfg[nyckel] = float(värde)
-            except:
-                cfg[nyckel] = värde
-    return cfg
-
-def hamta_profil_lista(client, sheet_url):
-    """Hämtar lista med alla tillgängliga profilnamn."""
-    sh = client.open_by_url(sheet_url)
-    ws = sh.worksheet(PROFILE_SHEET)
-    return ws.col_values(1)
-
-def hamta_profil_data(client, sheet_url, profilnamn):
-    """Hämtar hela bladet för en specifik profil."""
-    sh = client.open_by_url(sheet_url)
+def ensure_ws(ss, title: str, rows: int = 4000, cols: int = 100):
+    """
+    Säkerställ att ett kalkylblad (worksheet) med namnet 'title' finns.
+    Returnerar worksheet-objektet (skapar om det saknas).
+    """
     try:
-        ws = sh.worksheet(profilnamn)
-        rows = ws.get_all_records()
-        return pd.DataFrame(rows)
-    except Exception:
-        return pd.DataFrame()
-
-def hamta_scen_data(client, sheet_url, profilnamn):
-    """Filtrerar ut scenrader från fliken 'Data' för en specifik profil."""
-    df = hamta_data_fran_sheet(client, sheet_url)
-    return df[df["Profil"] == profilnamn].copy() if "Profil" in df.columns else pd.DataFrame()
+        return ss.worksheet(title)
+    except gspread.WorksheetNotFound:
+        return ss.add_worksheet(title=title, rows=rows, cols=cols)
