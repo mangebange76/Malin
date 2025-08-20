@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 import random
-import datetime
+from datetime import date, time, datetime, timedelta
 from google.oauth2.service_account import Credentials
 
 # Importera beräkningar och statistik
