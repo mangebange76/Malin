@@ -314,44 +314,18 @@ def main():
 if __name__ == "__main__":
     main()
 
-def hamta_profiler():
-    """Hämtar listan med tillgängliga profiler från fliken 'Profil'."""
-    try:
-        sheet = skapa_koppling()
-        profiler = sheet.worksheet("Profil").col_values(1)
-        return [p.strip() for p in profiler if p.strip()]
-    except Exception as e:
-        st.error(f"Kunde inte läsa profiler: {e}")
-        return []
+# --- Del 10: Visa statistik ---
 
-def hamta_profil_data(namn):
-    """Hämtar inställningar för vald profil från dess blad."""
-    df = skapa_koppling().worksheet(namn).get_all_records()
-    return pd.DataFrame(df)
+def visa_statistik(cfg, rows_df):
+    if rows_df.empty:
+        st.info("Ingen data att visa statistik för.")
+        return
 
-def hamta_scen_data(namn):
-    """Hämtar sparade scenrader för vald profil från fliken 'Data'."""
-    df = skapa_koppling().worksheet("Data").get_all_records()
-    df = pd.DataFrame(df)
-    return df[df["Profil"] == namn].copy() if "Profil" in df.columns else df
+    statistik = compute_stats(rows_df, cfg)
 
-def skapa_cfg_dict(profil_df):
-    """Konverterar inställningsrader från profilens blad till CFG-dict."""
-    cfg = {}
-    for _, row in profil_df.iterrows():
-        nyckel = str(row.get("Nyckel", "")).strip()
-        värde = str(row.get("Värde", "")).strip()
-        if not nyckel:
-            continue
-        # Försök konvertera till int eller float
-        if värde.isdigit():
-            cfg[nyckel] = int(värde)
-        else:
-            try:
-                cfg[nyckel] = float(värde)
-            except:
-                cfg[nyckel] = värde
-    return cfg
+    st.subheader("📊 Statistik")
+    for nyckel, värde in statistik.items():
+        st.write(f"**{nyckel}**: {värde}")
 
 def render_input_fields(cfg):
     """Visar formulärfält för manuell inmatning."""
