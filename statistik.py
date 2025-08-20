@@ -1,16 +1,47 @@
-def compute_stats(rows):
-    total_rows = len(rows)
-    total_men = sum(int(r.get("Totalt Män", 0)) for r in rows)
-    total_fitta = sum(int(r.get("Fitta", 0)) for r in rows)
-    total_alskar = sum(int(r.get("Älskar", 0)) for r in rows)
-    total_sover = sum(int(r.get("Sover med", 0)) for r in rows)
+# statistik.py
+import pandas as pd
 
-    return {
-        "Antal scener": total_rows,
-        "Totalt antal män": total_men,
-        "Total fitta": total_fitta,
-        "Totalt älskar": total_alskar,
-        "Totalt sover med": total_sover,
-        "Andel älskar": f"{(total_alskar / total_rows * 100):.1f}%" if total_rows else "-",
-        "Andel sover med": f"{(total_sover / total_rows * 100):.1f}%" if total_rows else "-",
-    }
+def compute_stats(rows: pd.DataFrame, cfg: dict) -> dict:
+    """Beräknar grundläggande statistik från alla rader + inställningar."""
+    stats = {}
+
+    if rows.empty:
+        return stats
+
+    # Totalt antal rader
+    stats["Totalt antal scener"] = len(rows)
+
+    # Summeringar
+    stats["Totalt intäkt företag (USD)"] = rows.get("Intäkt företag", pd.Series(dtype=float)).sum()
+    stats["Totalt intäkt känner (USD)"] = rows.get("Intäkt känner", pd.Series(dtype=float)).sum()
+    stats["Totalt intäkt (USD)"] = rows.get("Intäkter", pd.Series(dtype=float)).sum()
+    stats["Totalt kostnad män (USD)"] = rows.get("Kostnad män", pd.Series(dtype=float)).sum()
+    stats["Totalt lön Malin (USD)"] = rows.get("Lön Malin", pd.Series(dtype=float)).sum()
+    stats["Totalt vinst (USD)"] = rows.get("Vinst", pd.Series(dtype=float)).sum()
+
+    # Totalt antal prenumeranter
+    stats["Totalt antal prenumeranter"] = rows.get("Prenumeranter", pd.Series(dtype=int)).sum()
+
+    # BM-mål (utifrån slumptal för prenumeranter)
+    if "BM-mål" in cfg:
+        stats["BM-mål (snitt)"] = round(cfg["BM-mål"], 2)
+    if "Mål vikt" in cfg:
+        stats["Mål vikt (kg)"] = round(cfg["Mål vikt"], 1)
+
+    # Andel svarta
+    try:
+        svarta = rows["Svarta"].sum()
+        män_totalt = (
+            rows["Män"].sum()
+            + cfg.get("Känner Sammanlagt", 0)
+            + rows["Svarta"].sum()
+            + cfg.get("Bekanta", 0)
+            + rows["Eskilstuna killar"].sum()
+            + rows["Bonus deltagit"].sum()
+            + cfg.get("Personal", 0)
+        )
+        stats["Andel svarta (%)"] = round(100 * svarta / män_totalt, 2) if män_totalt > 0 else 0
+    except:
+        stats["Andel svarta (%)"] = "?"
+
+    return stats
