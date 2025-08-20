@@ -50,6 +50,41 @@ def _ensure_ws(ss, title, rows=4000, cols=80):
     except gspread.WorksheetNotFound:
         return ss.add_worksheet(title=title, rows=rows, cols=cols)
 
+# --- Profilhjälpare ---
+def _list_profiles(ss):
+    """Hämta namnlistan från fliken 'Profil' (kolumn A)."""
+    wsP = _ensure_ws(ss, "Profil")
+    rows = wsP.col_values(1)
+    names = [r.strip() for r in rows if r and r.strip().lower() not in ("namn", "name")]
+    return names
+
+def _load_profile_settings(ss, profile_name):
+    """Läser key/value från fliken med samma namn som profilen och lägger i CFG."""
+    ws = _ensure_ws(ss, profile_name)
+    kv = ws.get_all_values()
+    if not kv:
+        return
+    for row in kv:
+        if len(row) >= 2 and row[0]:
+            key = row[0].strip()
+            val = row[1]
+            if key in ("startdatum","fodelsedatum"):
+                try:
+                    y,m,d = [int(x) for x in val.split("-")]
+                    st.session_state[CFG_KEY][key] = date(y,m,d)
+                except:
+                    pass
+            elif key in st.session_state[CFG_KEY]:
+                try:
+                    if "." in val:
+                        st.session_state[CFG_KEY][key] = float(val)
+                    else:
+                        st.session_state[CFG_KEY][key] = int(val)
+                except:
+                    st.session_state[CFG_KEY][key] = val
+            else:
+                st.session_state[CFG_KEY][key] = val
+
 # =========================
 # Input-ordning (EXAKT)
 # =========================
@@ -155,22 +190,14 @@ def _rand_hist(colname: str):
     return random.randint(lo, hi) if hi > lo else lo
 
 # =========================
-# Scenario-fill (uppdaterad, etikett-säker)
+# Scenario-fill
 # =========================
 def apply_scenario_fill():
     CFG = st.session_state[CFG_KEY]
     s = st.session_state[SCENARIO_KEY]
 
-    # Plocka etiketter dynamiskt
-    LBL_PAPPAN = CFG["LBL_PAPPAN"]
-    LBL_GRANNAR = CFG["LBL_GRANNAR"]
-    LBL_NV = CFG["LBL_NILS_VANNER"]
-    LBL_NF = CFG["LBL_NILS_FAMILJ"]
-    LBL_BEK = CFG["LBL_BEKANTA"]
-    LBL_ESK = CFG["LBL_ESK"]
-
     # nolla (behåll tidsstandarder)
-    keep_defaults = {"in_tid_s":60, "in_tid_d":60, "in_vila":7, "in_dt_tid":60, "in_dt_vila":3}
+    keep_defaults = {"in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3}
     for k in INPUT_ORDER:
         st.session_state[k] = keep_defaults.get(k, 0)
 
@@ -178,68 +205,47 @@ def apply_scenario_fill():
         pass
 
     elif s == "Slumpa scen vit":
-        # Svarta = 0
         st.session_state["in_svarta"] = 0
-        # Män via historik
-        st.session_state["in_man"] = _rand_hist("Män")
-        # Sex-fält
-        for src, key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),
-                         ("DP","in_dp"),("DPP","in_dpp"),
-                         ("DAP","in_dap"),("TAP","in_tap")]:
-            st.session_state[key] = _rand_hist(src)
-        # Källor med etiketter
-        for src_lbl, key in [(LBL_PAPPAN,"in_pappan"),(LBL_GRANNAR,"in_grannar"),
-                             (LBL_NV,"in_nils_vanner"),(LBL_NF,"in_nils_familj"),
-                             (LBL_BEK,"in_bekanta")]:
-            st.session_state[key] = _rand_hist(src_lbl)
-        # Eskilstuna
-        st.session_state["in_eskilstuna"] = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
-        # Fasta
+        st.session_state["in_man"]    = _rand_hist("Män")
+        for f,key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
+                      ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
+            st.session_state[key] = _rand_hist(f)
+        for f,key in [("Pappans vänner","in_pappan"),("Grannar","in_grannar"),
+                      ("Nils vänner","in_nils_vanner"),("Nils familj","in_nils_familj"),
+                      ("Bekanta","in_bekanta")]:
+            st.session_state[key] = _rand_hist(f)
+        st.session_state["in_eskilstuna"]  = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
         st.session_state["in_alskar"] = 8
         st.session_state["in_sover"]  = 1
 
     elif s == "Slumpa scen svart":
-        # Slumpa Svarta + sex-fält
         st.session_state["in_svarta"] = _rand_hist("Svarta")
-        for src, key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),
-                         ("DP","in_dp"),("DPP","in_dpp"),
-                         ("DAP","in_dap"),("TAP","in_tap")]:
-            st.session_state[key] = _rand_hist(src)
-        # Nolla källor, Eskilstuna, bonus/personaldeltagit
-        for key in ["in_pappan","in_grannar","in_nils_vanner","in_nils_familj",
-                    "in_bekanta","in_eskilstuna","in_bonus_deltagit","in_personal_deltagit"]:
-            st.session_state[key] = 0
-        # Fasta
-        st.session_state["in_alskar"] = 8
-        st.session_state["in_sover"]  = 1
+        for f,key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
+                      ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
+            st.session_state[key] = _rand_hist(f)
+        # övriga källor/personaldeltagit 0
 
     elif s == "Vila på jobbet":
-        # Källor (etiketter)
-        for src_lbl, key in [(LBL_PAPPAN,"in_pappan"),(LBL_BEK,"in_bekanta"),
-                             (LBL_GRANNAR,"in_grannar"),(LBL_NV,"in_nils_vanner"),
-                             (LBL_NF,"in_nils_familj")]:
-            st.session_state[key] = _rand_hist(src_lbl)
-        # Eskilstuna
-        st.session_state["in_eskilstuna"] = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
-        # Sex-fält
-        for src, key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),
-                         ("DP","in_dp"),("DPP","in_dpp"),
-                         ("DAP","in_dap"),("TAP","in_tap")]:
-            st.session_state[key] = _rand_hist(src)
-        # Fasta
+        for f,key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
+                      ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
+            st.session_state[key] = _rand_hist(f)
+        for f,key in [("Pappans vänner","in_pappan"),("Bekanta","in_bekanta"),
+                      ("Grannar","in_grannar"),("Nils vänner","in_nils_vanner"),
+                      ("Nils familj","in_nils_familj")]:
+            st.session_state[key] = _rand_hist(f)
+        st.session_state["in_eskilstuna"]  = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
         st.session_state["in_alskar"] = 12
         st.session_state["in_sover"]  = 1
 
     elif s == "Vila i hemmet (dag 1–7)":
-        # Förenklad EN dag
-        for src, key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),
-                         ("DP","in_dp"),("DPP","in_dpp"),
-                         ("DAP","in_dap"),("TAP","in_tap")]:
-            st.session_state[key] = _rand_hist(src)
-        for src_lbl, key in [(LBL_PAPPAN,"in_pappan"),(LBL_GRANNAR,"in_grannar"),
-                             (LBL_NV,"in_nils_vanner"),(LBL_NF,"in_nils_familj"),
-                             (LBL_BEK,"in_bekanta")]:
-            st.session_state[key] = _rand_hist(src_lbl)
+        # Förenklad: EN dag enligt din beskrivning
+        for f,key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
+                      ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
+            st.session_state[key] = _rand_hist(f)
+        for f,key in [("Pappans vänner","in_pappan"),("Grannar","in_grannar"),
+                      ("Nils vänner","in_nils_vanner"),("Nils familj","in_nils_familj"),
+                      ("Bekanta","in_bekanta")]:
+            st.session_state[key] = _rand_hist(f)
         st.session_state["in_eskilstuna"] = random.randint(int(CFG["ESK_MIN"]), int(CFG["ESK_MAX"]))
         st.session_state["in_alskar"] = 6
         st.session_state["in_sover"]  = 0
@@ -303,20 +309,60 @@ with st.sidebar:
     st.write(f"GOOGLE_CREDENTIALS: {'✅' if has_creds else '❌'}")
     st.write(f"SHEET_URL: {'✅' if has_url else '❌'}")
 
-    # Läs in existerande data + inställningar från Sheets
+    # --- Profilväljare ---
+    st.markdown("**Profil**")
+    profile_name = st.session_state.get("PROFILE_NAME", "")
+    profiles = []
+    if has_creds and has_url:
+        try:
+            ss = _get_gspread_client()
+            profiles = _list_profiles(ss)
+        except Exception as e:
+            st.warning(f"Kunde inte läsa profiler: {e}")
+
+    profile_name = st.selectbox("Välj profil", options=profiles or ["(saknas)"],
+                                index=(profiles.index(profile_name) if profile_name in profiles else 0),
+                                key="PROFILE_NAME")
+    cpl1, cpl2 = st.columns(2)
+    with cpl1:
+        if st.button("📥 Läs profil"):
+            try:
+                ss = _get_gspread_client()
+                _load_profile_settings(ss, profile_name)
+                st.success(f"✅ Profil '{profile_name}' inläst.")
+            except Exception as e:
+                st.error(f"Kunde inte läsa profil: {e}")
+    with cpl2:
+        if st.button("💾 Spara profil"):
+            try:
+                ss = _get_gspread_client()
+                ws = _ensure_ws(ss, profile_name)
+                rows = []
+                for k,v in st.session_state[CFG_KEY].items():
+                    if isinstance(v, (date, datetime)):
+                        v = v.strftime("%Y-%m-%d")
+                    rows.append([k, str(v)])
+                ws.clear()
+                ws.update("A1", [["Key","Value"]])
+                if rows:
+                    ws.update(f"A2:B{len(rows)+1}", rows)
+                st.success(f"✅ Profil '{profile_name}' sparad.")
+            except Exception as e:
+                st.error(f"Misslyckades att spara profil: {e}")
+
+    # --- Gemensamma knappar ---
     if st.button("📥 Läs in från Google Sheets"):
         try:
             ss = _get_gspread_client()
             wsD = _ensure_ws(ss, "Data")
             wsI = _ensure_ws(ss, "Inställningar")
-            # Inställningar (key,value i två kolumner)
+            # Inställningar
             inst = wsI.get_all_values()
             if inst:
                 for row in inst:
                     if len(row) >= 2 and row[0]:
                         key = row[0].strip()
                         val = row[1]
-                        # försök typning
                         if key in ("startdatum","fodelsedatum"):
                             try:
                                 y,m,d = [int(x) for x in val.split("-")]
@@ -324,7 +370,6 @@ with st.sidebar:
                             except:
                                 pass
                         elif key in st.session_state[CFG_KEY]:
-                            # int/float/bool autodetect
                             try:
                                 if "." in val:
                                     st.session_state[CFG_KEY][key] = float(val)
@@ -333,7 +378,6 @@ with st.sidebar:
                             except:
                                 st.session_state[CFG_KEY][key] = val
                         else:
-                            # tillåt nya nycklar framåt
                             st.session_state[CFG_KEY][key] = val
 
             # Data
@@ -355,12 +399,10 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Kunde inte läsa från Sheets: {e}")
 
-    # Spara inställningar (nyckel, värde) till flik Inställningar
     if st.button("💾 Spara inställningar till Sheets"):
         try:
             ss = _get_gspread_client()
             wsI = _ensure_ws(ss, "Inställningar")
-            # skriv om allt: key/value
             rows = []
             for k,v in st.session_state[CFG_KEY].items():
                 if isinstance(v, (date, datetime)):
@@ -479,7 +521,7 @@ try:
 except TypeError:
     preview = calc_row_values(base, base["_rad_datum"], st.session_state[CFG_KEY]["fodelsedatum"], st.session_state[CFG_KEY]["starttid"])
 
-# Egen kontrollsumma (inkl källor/bonus/personal/Eskilstuna)
+# Egen kontrollsumma (alla grupper inkl bonus/personal/Eskilstuna)
 tot_men_including = (
     int(base.get("Män",0)) + int(base.get("Svarta",0)) +
     int(base.get(LBL_PAPPAN,0)) + int(base.get(LBL_GRANNAR,0)) +
@@ -540,7 +582,7 @@ with e4:
     st.metric("Vinst", f"${float(preview.get('Vinst',0)):,.2f}")
     st.metric("Älskar (sek)", int(preview.get("Tid Älskar (sek)", 0)))
 
-# Käll-brakeout med dina etiketter + extra totalsiffra
+# Källor (med etiketter)
 st.markdown("**👥 Källor (live)**")
 k1,k2,k3,k4,k5,k6 = st.columns(6)
 with k1: st.metric(LBL_PAPPAN, int(base.get(LBL_PAPPAN,0)))
