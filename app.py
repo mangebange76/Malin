@@ -551,7 +551,7 @@ def _apply_bonus_bookkeeping(preview_row: dict):
     used = int(_base.get("Bonus deltagit", 0))
     st.session_state[BONUS_LEFT_KEY] = max(0, st.session_state[BONUS_LEFT_KEY] + bonus_new - used)
     # spegla i CFG så etikett uppdateras
-    CFG["BONUS_AVAILABLE"] = int(st.session_state[BONUS_LEFT_KEY"])
+    CFG["BONUS_AVAILABLE"] = int(st.session_state[BONUS_LEFT_KEY])
 
 # Knapp-rad
 st.markdown("---")
