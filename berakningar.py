@@ -1,5 +1,6 @@
-# berakningar.py — v0.9.3
-from datetime import datetime, timedelta
+# berakningar.py — v0.9.4 (bakåtkompatibel signatur + Intäkt Känner fix)
+
+from datetime import datetime, timedelta, time as _time
 
 # ---------- Små hjälpmetoder ----------
 
@@ -34,12 +35,12 @@ def _safe_float(x, default=0.0):
 
 
 # ---------- Huvudberäkning (radnivå) ----------
-
-def calc_row_values(grund: dict, rad_datum, starttid):
+# Bakåtkompatibel: accepterar (grund, rad_datum, starttid) ELLER (grund, rad_datum, fodelsedatum, starttid)
+def calc_row_values(grund: dict, rad_datum, *rest):
     """
     Returnerar en dict med alla beräknade fält som appen visar i liven.
 
-    Överenskommet:
+    Överenskommet (kort):
     - Känner (rad) = Pappans vänner + Grannar + Nils vänner + Nils familj
     - Känner sammanlagt (statistik) = SUM(maxvärden) via MAX_* om de skickas in; annars 0.
     - Totalt Män (rad) = Män + Känner + Svarta + Bekanta + Eskilstuna killar + Bonus deltagit + Personal deltagit
@@ -48,18 +49,35 @@ def calc_row_values(grund: dict, rad_datum, starttid):
     - Summa TP (sek)= Tid D * TAP
     - Summa tid (sek) = Summa S + Summa D + Summa TP
     - Hångel per kille = 10800 / (Män + Svarta + Bekanta + Eskilstuna + Bonus + Personal)
-      (Känner ingår inte här.)
     - Tid per kille (sek) = (Summa S + 2*Summa D + 3*Summa TP) / Totalt Män
     - Suger per kille (sek) = Summa tid (sek) / Totalt Män
     - Klockan = starttid + 3h (hångel) + 1h (vila) + Summa tid (sek)
     - Prenumeranter = (DP + DPP + DAP + TAP + Totalt Män) * Hårdhet
     - Intäkter = Prenumeranter * Avgift
     - Utgift män = Summa tid (h) * ((Män + Svarta + Bekanta + Eskilstuna) + PROD_STAFF) * 15
-    - Intäkt Känner = Känner (rad) * 30   <-- FIX: tidigare använde vi Känner sammanlagt
+    - Intäkt Känner = Känner (rad) * 30
     - Intäkt Företaget = Intäkter - Utgift män - Intäkt Känner
     - Lön Malin = min(max(0.08 * Intäkt Företaget, 150), 800) * åldersfaktor
     - Vinst = Intäkt Företaget - Lön Malin
     """
+
+    # --------- plocka ut argument bakåtkompatibelt ---------
+    fodelsedatum = None
+    starttid = None
+    if len(rest) == 2:
+        # (fodelsedatum, starttid)
+        fodelsedatum = rest[0]
+        starttid = rest[1]
+    elif len(rest) == 1:
+        # bara starttid
+        starttid = rest[0]
+
+    # fallback till värden i grund om starttid saknas
+    if starttid is None:
+        starttid = grund.get("_starttid")
+    if starttid is None:
+        # default 07:00
+        starttid = _time(7, 0)
 
     # ---- Plocka in råvärden ----
     man       = _safe_int(grund.get("Män", 0))
@@ -88,7 +106,7 @@ def calc_row_values(grund: dict, rad_datum, starttid):
     tid_s     = _safe_int(grund.get("Tid S", 0))
     tid_d     = _safe_int(grund.get("Tid D", 0))
     dt_tid    = _safe_int(grund.get("DT tid (sek/kille)", 0))
-    # dt_vila = _safe_int(grund.get("DT vila (sek/kille)", 0))  # ej i bruk just nu
+    # dt_vila = _safe_int(grund.get("DT vila (sek/kille)", 0))  # ej i bruk nu
 
     avgift    = _safe_float(grund.get("Avgift", 0.0))
     prod_staff= _safe_int(grund.get("PROD_STAFF", 0))
@@ -123,7 +141,6 @@ def calc_row_values(grund: dict, rad_datum, starttid):
     if dpp  > 0: hardhet += 5
     if dap  > 0: hardhet += 7
     if tap  > 0: hardhet += 9
-    # trösklar på totalt män
     if totalt_man > 100:  hardhet += 1
     if totalt_man > 200:  hardhet += 2
     if totalt_man > 400:  hardhet += 4
@@ -132,7 +149,7 @@ def calc_row_values(grund: dict, rad_datum, starttid):
     if svarta > 0:        hardhet += 3
 
     # ---- Per-kille tider ----
-    base_for_hang = man + svarta + bekanta + esk + bonus_d + pers_d
+    base_for_hang = man + svarta + bekanta + esk + bonus_d + pers_d  # Känner ingår ej
     hang_per_kille_sek = 0 if base_for_hang <= 0 else 10800.0 / base_for_hang
 
     if totalt_man > 0:
@@ -168,24 +185,36 @@ def calc_row_values(grund: dict, rad_datum, starttid):
     kostnadsman_underlag = (man + svarta + bekanta + esk) + prod_staff
     utgift_man = summa_tid_timmar * kostnadsman_underlag * 15.0
 
-    # *** FIX: Intäkt Känner ska använda KÄNNER (rad) ***
+    # Intäkt Känner ska använda KÄNNER (rad)
     intakt_kanner = kanner_rad * 30.0
 
     intakt_foretaget = intakter - utgift_man - intakt_kanner
 
-    # Lön Malin (gränser + åldersfaktor)
-    # Ålder: hämtas via datum i grund om finns, annars 0
-    aldersfaktor = 1.0
-    # åldersintervall definierat av dig
-    # 18:100%, 19–23:90%, 24–27:85%, 28–30:80%, 31–32:75%, 33–35:70%, 36–:60%
+    # ---- Lön Malin (ålder) ----
+    # Försök räkna ut ålder: 1) från fodelsedatum + rad_datum, 2) annars från grund["Ålder"], 3) annars 0
     alder = _safe_int(grund.get("Ålder", 0))
-    if alder >= 36:   aldersfaktor = 0.60
-    elif alder >= 33: aldersfaktor = 0.70
-    elif alder >= 31: aldersfaktor = 0.75
-    elif alder >= 28: aldersfaktor = 0.80
-    elif alder >= 24: aldersfaktor = 0.85
-    elif alder >= 19: aldersfaktor = 0.90
-    else:             aldersfaktor = 1.00
+    try:
+        if fodelsedatum is not None and hasattr(rad_datum, "year"):
+            # rad_datum kan vara date/datetime
+            rd = rad_datum.date() if isinstance(rad_datum, datetime) else rad_datum
+            alder = rd.year - fodelsedatum.year - ((rd.month, rd.day) < (fodelsedatum.month, fodelsedatum.day))
+    except Exception:
+        pass
+
+    if alder >= 36:
+        aldersfaktor = 0.60
+    elif alder >= 33:
+        aldersfaktor = 0.70
+    elif alder >= 31:
+        aldersfaktor = 0.75
+    elif alder >= 28:
+        aldersfaktor = 0.80
+    elif alder >= 24:
+        aldersfaktor = 0.85
+    elif alder >= 19:
+        aldersfaktor = 0.90
+    else:
+        aldersfaktor = 1.00
 
     lon_malin_bas = max(150.0, min(0.08 * intakt_foretaget, 800.0))
     lon_malin = lon_malin_bas * aldersfaktor
@@ -226,7 +255,7 @@ def calc_row_values(grund: dict, rad_datum, starttid):
     out["Prenumeranter"] = int(prenumeranter)
     out["Intäkter"] = float(intakter)
     out["Utgift män"] = float(utgift_man)
-    out["Intäkt Känner"] = float(intakt_kanner)     # <— FIX APPLIED
+    out["Intäkt Känner"] = float(intakt_kanner)
     out["Intäkt Företaget"] = float(intakt_foretaget)
     out["Lön Malin"] = float(lon_malin)
     out["Vinst"] = float(vinst)
@@ -248,11 +277,10 @@ def calc_stats(rows: list, cfg: dict):
     tot_man = sum(_safe_int(r.get("Totalt Män", 0)) for r in rows)
     out["Totalt Män (sum)"] = int(tot_man)
 
-    # Andel svarta (statistikregeln du gav)
+    # Andel svarta (din statistikregel)
     sum_svarta = sum(_safe_int(r.get("Svarta", 0)) for r in rows)
     max_bekanta = _safe_int(cfg.get("MAX_BEKANTA", 0))
     prod_staff  = _safe_int(cfg.get("PROD_STAFF", 0))
-    # Känner sammanlagt här = från maxvärden i cfg
     kanner_sam = (
         _safe_int(cfg.get("MAX_PAPPAN", 0)) +
         _safe_int(cfg.get("MAX_GRANNAR", 0)) +
@@ -269,14 +297,14 @@ def calc_stats(rows: list, cfg: dict):
     andel_svarta = (sum_svarta / denom) * 100.0 if denom > 0 else 0.0
     out["Andel svarta (%)"] = float(andel_svarta)
 
-    # Ekonomi-summor (enkelt)
+    # Ekonomi-summor
     out["Intäkter (sum)"]       = float(sum(_safe_float(r.get("Intäkter", 0.0)) for r in rows))
     out["Intäkt Känner (sum)"]  = float(sum(_safe_float(r.get("Intäkt Känner", 0.0)) for r in rows))
     out["Utgift män (sum)"]     = float(sum(_safe_float(r.get("Utgift män", 0.0)) for r in rows))
     out["Lön Malin (sum)"]      = float(sum(_safe_float(r.get("Lön Malin", 0.0)) for r in rows))
     out["Vinst (sum)"]          = float(sum(_safe_float(r.get("Vinst", 0.0)) for r in rows))
 
-    # Känner sammanlagt (statistik) direkt från cfg-max (enligt dina regler)
+    # Känner sammanlagt (statistik) från cfg-max
     out["Känner sammanlagt (max)"] = int(kanner_sam)
 
     return out
