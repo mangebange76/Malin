@@ -1,4 +1,3 @@
-# app.py — Malin-produktionsapp (lokal + Google Sheets), v2025-08-19-a
 import streamlit as st
 from datetime import date, time, datetime, timedelta
 import random
