@@ -22,7 +22,7 @@ def compute_stats(rows: pd.DataFrame, cfg: dict) -> dict:
     # Totalt antal prenumeranter
     stats["Totalt antal prenumeranter"] = rows.get("Prenumeranter", pd.Series(dtype=int)).sum()
 
-    # BM-mål (utifrån slumptal för prenumeranter)
+    # BM-mål
     if "BM-mål" in cfg:
         stats["BM-mål (snitt)"] = round(cfg["BM-mål"], 2)
     if "Mål vikt" in cfg:
