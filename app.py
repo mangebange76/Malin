@@ -41,6 +41,10 @@ PROFILE_KEY    = "PROFILE"       # vald profil
 BONUS_LEFT_KEY = "BONUS_AVAILABLE"   # alias i CFG
 SUPER_ACC_KEY  = "SUPER_BONUS_ACC"   # ack superbonus i CFG
 
+# BM-ackumulatorer (för BM-mål)
+BM_SUM_KEY   = "BM_SUM"
+BM_COUNT_KEY = "BM_COUNT"
+
 # =========================
 # Input-ordning (EXAKT)
 # =========================
@@ -101,8 +105,12 @@ def _init_cfg_defaults():
         "LBL_BEKANTA": "Bekanta",
         "LBL_ESK": "Eskilstuna killar",
 
-        # Längd (m) för mål-vikt-beräkning (om du vill använda)
-        "HEIGHT_M": 1.64,
+        # Längd i centimeter (inte meter)
+        "HEIGHT_CM": 164,
+
+        # BM-ackumulatorer
+        BM_SUM_KEY: 0.0,
+        BM_COUNT_KEY: 0,
     }
 
 def init_state():
@@ -116,7 +124,10 @@ def init_state():
         st.session_state[SCENARIO_KEY] = "Ny scen"
     if PROFILE_KEY not in st.session_state:
         # välj första profil om finns, annars tom
-        profs = list_profiles()
+        try:
+            profs = list_profiles()
+        except Exception:
+            profs = []
         st.session_state[PROFILE_KEY] = (profs[0] if profs else "")
     # default för tidsfält m.m.
     defaults = {
@@ -183,7 +194,10 @@ def apply_scenario_fill():
     s = st.session_state[SCENARIO_KEY]
 
     # nolla (behåll tidsstandarder och händer aktiv)
-    keep_defaults = {"in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,"in_hander_aktiv":st.session_state.get("in_hander_aktiv",1)}
+    keep_defaults = {
+        "in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,
+        "in_hander_aktiv":st.session_state.get("in_hander_aktiv",1)
+    }
     for k in INPUT_ORDER:
         st.session_state[k] = keep_defaults.get(k, 0)
 
@@ -259,7 +273,7 @@ with st.sidebar:
 
     CFG["BONUS_PCT"]        = st.number_input("Bonus % (decimal, t.ex. 1.0 = 1%)", min_value=0.0, value=float(CFG.get("BONUS_PCT",1.0)), step=0.1)
     CFG["SUPER_BONUS_PCT"]  = st.number_input("Super-bonus % (decimal, t.ex. 0.1 = 0.1%)", min_value=0.0, value=float(CFG.get("SUPER_BONUS_PCT",0.1)), step=0.1)
-    CFG["HEIGHT_M"]         = st.number_input("Längd (m)", min_value=1.40, max_value=2.20, value=float(CFG.get("HEIGHT_M",1.64)), step=0.01)
+    CFG["HEIGHT_CM"]        = st.number_input("Längd (cm)", min_value=140, max_value=220, value=int(CFG.get("HEIGHT_CM",164)), step=1)
 
     st.markdown("---")
     st.subheader("Eskilstuna-intervall")
@@ -299,7 +313,12 @@ with st.sidebar:
     # =========================
     st.markdown("---")
     st.subheader("Profiler (Sheets)")
-    profiles = list_profiles()
+    try:
+        profiles = list_profiles()
+    except Exception as e:
+        profiles = []
+        st.error(f"Kunde inte läsa profil-lista: {e}")
+
     if not profiles:
         st.info("Inga profiler funna i fliken 'Profil'. Lägg till namn i kolumn A i bladet 'Profil'.")
     selected_profile = st.selectbox("Välj profil", options=profiles or ["(saknas)"],
@@ -556,11 +575,13 @@ def _econ_compute(base, preview):
     return out
 
 def _after_save_housekeeping(preview, is_vila: bool, is_superbonus: bool):
-    """Uppdatera BONUS kvar och SUPER_BONUS_ACC enligt regeln.
+    """Uppdatera BONUS kvar, SUPER_BONUS_ACC och BM-ackumulatorer.
        - På vanliga scener: BONUS += prenumeranter*BONUS_PCT - bonus_deltagit
                            SUPER_ACC += prenumeranter*SUPER_BONUS_PCT
-       - På vila/super:    BONUS += 0 - bonus_deltagit (dvs minus)
+                           BM_SUM += sum(slump 12–18 för varje ny pren), BM_COUNT += pren
+       - På vila/super:    BONUS += 0 - bonus_deltagit
                            SUPER_ACC += 0
+                           BM += 0
     """
     CFG = st.session_state[CFG_KEY]
     pren = int(preview.get("Prenumeranter", 0))
@@ -571,9 +592,20 @@ def _after_save_housekeeping(preview, is_vila: bool, is_superbonus: bool):
     add_super = 0 if (is_vila or is_superbonus) else int(pren * sb_pct)
 
     minus_bonus = int(preview.get("Bonus deltagit", 0))
-    # uppdatera
+
+    # BONUS & SUPER BONUS
     CFG[BONUS_LEFT_KEY] = max(0, int(CFG.get(BONUS_LEFT_KEY,0)) - minus_bonus + add_bonus)
     CFG[SUPER_ACC_KEY]  = max(0, int(CFG.get(SUPER_ACC_KEY,0)) + add_super)
+
+    # BM-ackumulatorer
+    if not (is_vila or is_superbonus) and pren > 0:
+        # slumpa 'pren' tal 12–18 och addera
+        bm_sum_add = 0.0
+        # för väldigt stora pren kan detta ta tid; normalt OK
+        for _ in range(pren):
+            bm_sum_add += random.uniform(12.0, 18.0)
+        CFG[BM_SUM_KEY]   = float(CFG.get(BM_SUM_KEY, 0.0)) + bm_sum_add
+        CFG[BM_COUNT_KEY] = int(CFG.get(BM_COUNT_KEY, 0)) + pren
 
 # =========================
 # Live
@@ -627,7 +659,14 @@ else:
 
 fd = CFG["fodelsedatum"]
 alder = _d.year - fd.year - ((_d.month, _d.day) < (fd.month, fd.day))
-top_line = st.columns([2,1,1,1])
+
+# BM-mål & Mål vikt (beräknas från ackumulatorerna + längd cm)
+bm_count = int(CFG.get(BM_COUNT_KEY, 0))
+bm_goal = (float(CFG.get(BM_SUM_KEY, 0.0)) / bm_count) if bm_count > 0 else 0.0
+height_m = float(CFG.get("HEIGHT_CM", 164)) / 100.0
+mal_vikt = (bm_goal * (height_m ** 2)) if bm_goal > 0 else 0.0
+
+top_line = st.columns([2,1,1,1,1,1])
 with top_line[0]:
     st.markdown(f"**Datum/Veckodag:** {rad_datum} / {veckodag} &nbsp;•&nbsp; **Ålder:** {alder} år")
 with top_line[1]:
@@ -636,6 +675,10 @@ with top_line[2]:
     st.metric("Totalt män (beräkningar)", int(preview.get("Totalt Män",0)))
 with top_line[3]:
     st.metric("Super-bonus ack", int(CFG.get(SUPER_ACC_KEY,0)))
+with top_line[4]:
+    st.metric("BM mål (snitt)", f"{bm_goal:.2f}" if bm_goal > 0 else "-")
+with top_line[5]:
+    st.metric("Mål vikt (kg)", f"{mal_vikt:.1f}" if mal_vikt > 0 else "-")
 
 # Tid/Klocka/Män
 c1, c2, c3 = st.columns(3)
@@ -696,9 +739,12 @@ st.markdown("---")
 cL, cR = st.columns([1,1])
 
 def _prepare_row_for_save(_preview: dict) -> dict:
-    # Sätt Profil, och inkludera nuvarande etiketter som egna kolumner + datum osv
+    # Sätt Profil och inkludera nuvarande etiketter som egna kolumner + datum osv
     row = dict(_preview)
     row["Profil"] = st.session_state.get(PROFILE_KEY, "")
+    # Lägg med BM-mål (snitt vid sparögonblicket) och Mål vikt som referens (valfritt)
+    row["BM mål (snitt)"] = round(bm_goal, 2) if bm_goal > 0 else ""
+    row["Mål vikt (kg)"]  = round(mal_vikt, 1) if mal_vikt > 0 else ""
     return row
 
 with cL:
@@ -709,7 +755,7 @@ with cL:
                     LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
             v = int(preview.get(col,0))
             _add_hist_value(col, v)
-        # justera Bonus/ Superbonus enligt scenario
+        # justera Bonus/ Superbonus / BM enligt scenario
         scen_typ = str(base.get("Typ",""))
         is_vila  = "Vila" in scen_typ
         is_super = "Super bonus" in scen_typ
@@ -718,7 +764,7 @@ with cL:
         st.success("✅ Sparad lokalt.")
 
 def _save_to_sheets_for_profile(profile: str, row_dict: dict):
-    # spara i globalt Data (med kolumn “Profil”), annars Data_<Profil>
+    # spara i globalt Data (med kolumn “Profil”), annars Data_<Profil> – styrs i sheets_utils
     append_row_to_profile_data(profile, row_dict)
 
 with cR:
@@ -758,6 +804,7 @@ if _HAS_STATS:
         st.markdown("---")
         st.subheader("📊 Statistik")
         rows_df = pd.DataFrame(st.session_state[ROWS_KEY]) if st.session_state[ROWS_KEY] else pd.DataFrame()
+        # stöd både compute_stats(rows_df, cfg) och compute_stats(rows_df)
         stats = compute_stats(rows_df, CFG) if "cfg" in compute_stats.__code__.co_varnames else compute_stats(rows_df)
         if isinstance(stats, dict) and stats:
             for k,v in stats.items():
