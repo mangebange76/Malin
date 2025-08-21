@@ -1,4 +1,4 @@
-# app.py
+å# app.py
 import streamlit as st
 import random
 import json
@@ -292,7 +292,7 @@ with st.sidebar:
     )
     if st.button("⬇️ Hämta värden"):
         apply_scenario_fill()
-        st.experimental_rerun()
+        st.rerun()
 
     # =========================
     # Profiler & Sheets
