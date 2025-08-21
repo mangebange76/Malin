@@ -1,10 +1,7 @@
 # berakningar.py
 from datetime import datetime, timedelta
 
-# ---------- Hjälpmetoder ----------
-
 def _mmss(total_seconds: float) -> str:
-    """Format: m:ss (avrundar till närmaste sekund, aldrig negativt)."""
     try:
         s = max(0, int(round(total_seconds)))
         m, s = divmod(s, 60)
@@ -13,7 +10,6 @@ def _mmss(total_seconds: float) -> str:
         return "-"
 
 def _hhmm(total_seconds: float) -> str:
-    """Format: HH:MM (avrundar till närmaste minut, aldrig negativt)."""
     try:
         s = max(0, int(round(total_seconds)))
         h, s = divmod(s, 3600)
@@ -26,31 +22,18 @@ def _safe_int(x, default=0):
     try:
         return int(x)
     except Exception:
-        return default
+        try:
+            return int(float(str(x).replace(",", ".").strip()))
+        except Exception:
+            return default
 
 def _safe_float(x, default=0.0):
     try:
-        return float(x)
+        return float(str(x).replace(",", ".").strip())
     except Exception:
         return default
 
-
-# ---------- Huvudberäkning ----------
-
 def calc_row_values(grund: dict, rad_datum, fodelsedatum, starttid):
-    """
-    Returnerar en dict med alla beräknade fält som appen visar i liven.
-    Ekonomin kompletteras i app.py (hårdhet, prenumeranter, intäkter, kostnader, lön, vinst).
-    """
-
-    # ---- Etiketter (för käll-fält) ----
-    lbl_pappan = str(grund.get("LBL_PAPPAN", "Pappans vänner"))
-    lbl_grann  = str(grund.get("LBL_GRANNAR", "Grannar"))
-    lbl_nv     = str(grund.get("LBL_NILS_VANNER", "Nils vänner"))
-    lbl_nf     = str(grund.get("LBL_NILS_FAMILJ", "Nils familj"))
-    lbl_bek    = str(grund.get("LBL_BEKANTA", "Bekanta"))
-    lbl_esk    = str(grund.get("LBL_ESK", "Eskilstuna killar"))
-
     # ---- Inputs ----
     man       = _safe_int(grund.get("Män", 0))
     svarta    = _safe_int(grund.get("Svarta", 0))
@@ -61,12 +44,13 @@ def calc_row_values(grund: dict, rad_datum, fodelsedatum, starttid):
     dap       = _safe_int(grund.get("DAP", 0))
     tap       = _safe_int(grund.get("TAP", 0))
 
-    pappan    = _safe_int(grund.get(lbl_pappan, 0))
-    grannar   = _safe_int(grund.get(lbl_grann, 0))
-    n_vanner  = _safe_int(grund.get(lbl_nv, 0))
-    n_familj  = _safe_int(grund.get(lbl_nf, 0))
-    bekanta   = _safe_int(grund.get(lbl_bek, 0))
-    esk       = _safe_int(grund.get(lbl_esk, 0))
+    # etiketter kan vara omdöpta – stöd både original & labelnycklar
+    pappan    = _safe_int(grund.get("Pappans vänner", grund.get(grund.get("LBL_PAPPAN","Pappans vänner"), 0)))
+    grannar   = _safe_int(grund.get("Grannar",        grund.get(grund.get("LBL_GRANNAR","Grannar"), 0)))
+    n_vanner  = _safe_int(grund.get("Nils vänner",    grund.get(grund.get("LBL_NILS_VANNER","Nils vänner"), 0)))
+    n_familj  = _safe_int(grund.get("Nils familj",    grund.get(grund.get("LBL_NILS_FAMILJ","Nils familj"), 0)))
+    bekanta   = _safe_int(grund.get("Bekanta",        grund.get(grund.get("LBL_BEKANTA","Bekanta"), 0)))
+    esk       = _safe_int(grund.get("Eskilstuna killar", grund.get(grund.get("LBL_ESK","Eskilstuna killar"), 0)))
 
     bonus_d   = _safe_int(grund.get("Bonus deltagit", 0))
     pers_d    = _safe_int(grund.get("Personal deltagit", 0))
@@ -74,23 +58,19 @@ def calc_row_values(grund: dict, rad_datum, fodelsedatum, starttid):
     alskar    = _safe_int(grund.get("Älskar", 0))
     sover     = _safe_int(grund.get("Sover med", 0))
 
-    # Händer (0/1)
     hander_on = _safe_int(grund.get("Händer aktiv", grund.get("Hander aktiv", 1)))
 
-    # Tider (sek)
     tid_s     = _safe_int(grund.get("Tid S", 0))
     tid_d     = _safe_int(grund.get("Tid D", 0))
     dt_tid    = _safe_int(grund.get("DT tid (sek/kille)", 0))
-    # dt_vila   = _safe_int(grund.get("DT vila (sek/kille)", 0))  # ej i användning nu
 
-    # Metadata/övrigt
     avgift    = _safe_float(grund.get("Avgift", 0.0))
     prod_staff= _safe_int(grund.get("PROD_STAFF", 0))
 
     datum_str = grund.get("Datum")
     veckodag  = grund.get("Veckodag", "")
 
-    # ---- Känner (rad) + Känner sammanlagt (från MAX-inställningar) ----
+    # ---- Känner ----
     kanner = pappan + grannar + n_vanner + n_familj
 
     max_pappan   = _safe_int(grund.get("MAX_PAPPAN", 0))
@@ -104,25 +84,23 @@ def calc_row_values(grund: dict, rad_datum, fodelsedatum, starttid):
     if totalt_man < 0:
         totalt_man = 0
 
-    # ---- Summa S/D/TP (sek) & Summa tid (sek) ----
+    # ---- Summa S/D/TP ----
     summa_s  = tid_s * (fitta + rumpa) + (dt_tid * totalt_man)
     summa_d  = tid_d * (dp + dpp + dap)
     summa_tp = tid_d * tap
     summa_tid_sek = max(0, summa_s + summa_d + summa_tp)
 
-    # ---- Hångel ----
-    # 3h = 10800s, per kille fördelas på Män + Svarta + Bekanta + Esk + Bonus + Personal (ej Känner enligt din spec)
-    total_for_hang = man + svarta + bekanta + esk + bonus_d + pers_d
-    hang_per_kille_sek = 0 if total_for_hang <= 0 else 10800.0 / total_for_hang
+    # ---- Hångel (oförändrat) ----
+    total_for_hang = man + svarta + bekanta + esk + bonus_d + pers_d  # (ej Känner enligt spec)
+    hang_per_kille_sek = 0 if total_for_hang <= 0 else 10800.0 / total_for_hang  # 3h = 10800s
 
-    # ---- Tid per kille (sek): S + 2*D + 3*TP fördelat på Totalt män ----
+    # ---- Tid per kille (enligt din tidigare viktning) ----
     if totalt_man > 0:
         tid_per_kille_sek = (summa_s + 2 * summa_d + 3 * summa_tp) / float(totalt_man)
     else:
         tid_per_kille_sek = 0.0
 
-    # ---- Suger/Händer per kille (sek) enligt nya regler ----
-    # Suger/kille = 0.8*(S/tot) + 0.8*(D/tot) + 0.8*(TP/tot)
+    # ---- Suger/Händer per kille enligt ny formel ----
     if totalt_man > 0:
         suger_per_kille = 0.8 * (summa_s / totalt_man) + 0.8 * (summa_d / totalt_man) + 0.8 * (summa_tp / totalt_man)
     else:
@@ -131,7 +109,7 @@ def calc_row_values(grund: dict, rad_datum, fodelsedatum, starttid):
     hander_per_kille = (2.0 * suger_per_kille) if hander_on else 0.0
 
     # ---- Älskar/Sover med (sek) ----
-    tid_alskar_sek = (alskar + sover) * 20 * 60  # 20 min per person
+    tid_alskar_sek = (alskar + sover) * 20 * 60
 
     # ---- Klockan ----
     try:
@@ -149,19 +127,15 @@ def calc_row_values(grund: dict, rad_datum, fodelsedatum, starttid):
     except Exception:
         klockan2_str = "-"
 
-    # ---- Returnera alla fält appen läser ----
+    # ---- Out ----
     out = {}
-
-    # Bas
     out["Datum"] = datum_str if datum_str else (rad_datum.isoformat() if hasattr(rad_datum, "isoformat") else "")
     out["Veckodag"] = veckodag
 
-    # Nyckeltal
     out["Totalt Män"] = totalt_man
     out["Känner"] = kanner
     out["Känner sammanlagt"] = kanner_sammanlagt
 
-    # Tider/summor
     out["Summa S (sek)"]  = int(summa_s)
     out["Summa D (sek)"]  = int(summa_d)
     out["Summa TP (sek)"] = int(summa_tp)
@@ -175,27 +149,25 @@ def calc_row_values(grund: dict, rad_datum, fodelsedatum, starttid):
     out["Hångel (sek/kille)"]  = float(hang_per_kille_sek)
     out["Hångel (m:s/kille)"]  = _mmss(hang_per_kille_sek)
 
-    # Nya fält för din live
-    out["Suger per kille (sek)"]  = float(suger_per_kille)
+    out["Suger per kille (sek)"] = float(suger_per_kille)
     out["Händer per kille (sek)"] = float(hander_per_kille)
     out["Händer aktiv"] = int(1 if hander_on else 0)
 
-    # Behåll “Suger” total som kompatibilitet (används i liven som “Suger (totalt sek)”)
+    # Behåll “Suger” total som tidigare (Summa tid), för kompatibilitet i live:
     out["Suger"] = int(summa_tid_sek)
 
-    # Älskar + klockor
     out["Tid Älskar (sek)"] = int(tid_alskar_sek)
     out["Klockan"] = klockan_str
     out["Klockan inkl älskar/sover"] = klockan2_str
 
-    # Ekonomi – placeholders (sätts i app.py)
-    out["Prenumeranter"]   = 0
-    out["Hårdhet"]         = 0
-    out["Intäkter"]        = 0.0
-    out["Intäkt Känner"]   = 0.0
-    out["Kostnad män"]     = 0.0
-    out["Intäkt företag"]  = 0.0
-    out["Lön Malin"]       = 0.0
-    out["Vinst"]           = 0.0
+    # Ekonomi placeholders (fylls i appen)
+    out["Prenumeranter"]   = int(grund.get("Prenumeranter", 0)) if "Prenumeranter" in grund else 0
+    out["Hårdhet"]         = int(grund.get("Hårdhet", 0)) if "Hårdhet" in grund else 0
+    out["Intäkter"]        = _safe_float(grund.get("Intäkter", 0.0))
+    out["Intäkt Känner"]   = _safe_float(grund.get("Intäkt Känner", 0.0))
+    out["Kostnad män"]     = _safe_float(grund.get("Kostnad män", 0.0))
+    out["Lön Malin"]       = _safe_float(grund.get("Lön Malin", 0.0))
+    out["Intäkt företag"]  = _safe_float(grund.get("Intäkt företag", 0.0))
+    out["Vinst"]           = _safe_float(grund.get("Vinst", 0.0))
 
     return out
