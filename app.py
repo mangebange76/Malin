@@ -24,13 +24,6 @@ try:
 except Exception:
     _HAS_STATS = False
 
-# BM-modul (endast för BM mål / Mål vikt / Super-ack)
-try:
-    from bm_utils import compute_bm_fields
-except Exception as e:
-    st.error(f"Kunde inte importera BM-modul: {e}")
-    st.stop()
-
 # =========================
 # Grundinställningar
 # =========================
@@ -46,6 +39,11 @@ SCENARIO_KEY   = "SCENARIO"      # rullist-valet
 PROFILE_KEY    = "PROFILE"       # vald profil
 BONUS_LEFT_KEY = "BONUS_AVAILABLE"   # alias i CFG
 SUPER_ACC_KEY  = "SUPER_BONUS_ACC"   # ack superbonus i CFG
+
+# >>> BMI-ackumulatorer (nytt)
+BMI_SUM_KEY     = "BMI_SUM"        # summa av individuella slumpade BMI (12–18)
+BMI_CNT_KEY     = "BMI_CNT"        # antal prenumeranter som ingår i BMI-snittet historiskt
+PENDING_BMI_KEY = "PENDING_BMI"    # cache för aktuell rad: {"scene":int,"sum":float,"count":int}
 
 # =========================
 # Input-ordning (EXAKT)
@@ -92,8 +90,8 @@ def _init_cfg_defaults():
         SUPER_ACC_KEY: 0,        # ackumulerat heltal
 
         # BM mål (BMI-mål) + längd (centimeter)
-        "BMI_GOAL": 21.7,
-        "HEIGHT_CM": 164,  # centimeter
+        "BMI_GOAL": 21.7,        # (visas i UI men ignoreras i beräkningen)
+        "HEIGHT_CM": 164,        # centimeter
 
         # Eskilstuna-intervall
         "ESK_MIN": 20, "ESK_MAX": 40,
@@ -124,6 +122,11 @@ def init_state():
     if PROFILE_KEY not in st.session_state:
         profs = list_profiles()
         st.session_state[PROFILE_KEY] = (profs[0] if profs else "")
+    # >>> BMI-ackumulatorer
+    st.session_state.setdefault(BMI_SUM_KEY, 0.0)
+    st.session_state.setdefault(BMI_CNT_KEY, 0)
+    st.session_state.setdefault(PENDING_BMI_KEY, {"scene": None, "sum": 0.0, "count": 0})
+    # default för tidsfält m.m.
     defaults = {
         "in_tid_s":60, "in_tid_d":60, "in_vila":7, "in_dt_tid":60, "in_dt_vila":3,
         "in_sover":0, "in_alskar":0, "in_nils":0, "in_hander_aktiv":1
@@ -345,6 +348,22 @@ with st.sidebar:
                                 LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF,
                                 LBL_BEK, LBL_ESK]:
                         _add_hist_value(col, r.get(col, 0))
+                # >>> Bygg BMI-ackumulatorer från befintliga rader (om fält finns)
+                bmi_sum = 0.0
+                bmi_cnt = 0
+                for r in st.session_state[ROWS_KEY]:
+                    try:
+                        pren = int(float(r.get("Prenumeranter", 0)))
+                        bm   = float(r.get("BM mål", 0))
+                        if pren > 0 and bm > 0:
+                            bmi_sum += bm * pren
+                            bmi_cnt += pren
+                    except Exception:
+                        pass
+                st.session_state[BMI_SUM_KEY] = float(bmi_sum)
+                st.session_state[BMI_CNT_KEY] = int(bmi_cnt)
+                st.session_state[PENDING_BMI_KEY] = {"scene": None, "sum": 0.0, "count": 0}
+
                 st.session_state[SCENEINFO_KEY] = _current_scene_info()
                 st.success(f"✅ Läste in {len(st.session_state[ROWS_KEY])} rader för '{selected_profile}'.")
             except Exception as e:
@@ -587,12 +606,40 @@ try:
 except TypeError:
     preview = calc_row_values(base, base["_rad_datum"], CFG["fodelsedatum"], CFG["starttid"])
 
-# 2) Komplettera ekonomi & hårdhet i appen
+# 2) Ekonomi & hårdhet i appen
 econ = _econ_compute(base, preview)
 preview.update(econ)
 
-# 3) Extra – BM mål + Mål vikt + Super-ack (robust via modul)
-preview.update(compute_bm_fields(CFG))
+# 3) BMI – slump per ny prenumerant (12–18), ackumulerat historiskt
+def _compute_bmi_pending_for_current_row(pren: int, scen_typ: str):
+    if pren <= 0 or ("Vila" in scen_typ) or ("Super bonus" in scen_typ):
+        return 0.0, 0
+    s = 0.0
+    # slumpa 'pren' BMI-värden i intervallet 12–18 och summera
+    for _ in range(pren):
+        s += random.uniform(12.0, 18.0)
+    return s, pren
+
+current_scene = st.session_state[SCENEINFO_KEY][0]
+scen_typ = str(base.get("Typ",""))
+
+pren_now = int(preview.get("Prenumeranter", 0))
+pend_sum, pend_cnt = _compute_bmi_pending_for_current_row(pren_now, scen_typ)
+
+# lägg på historik för att visa “BM mål” live
+hist_sum = float(st.session_state.get(BMI_SUM_KEY, 0.0))
+hist_cnt = int(st.session_state.get(BMI_CNT_KEY, 0))
+total_sum = hist_sum + pend_sum
+total_cnt = hist_cnt + pend_cnt
+bmi_mean  = (total_sum / total_cnt) if total_cnt > 0 else 0.0
+
+height_m = float(CFG.get("HEIGHT_CM", 164)) / 100.0
+preview["BM mål"] = round(bmi_mean, 2)
+preview["Mål vikt (kg)"] = round(bmi_mean * (height_m ** 2), 1)
+preview["Super bonus ack"] = int(CFG.get(SUPER_ACC_KEY, 0))
+
+# spara den “pendande” BMI-summan/räknaren i state, så spar-fasen kan addera samma sample
+st.session_state[PENDING_BMI_KEY] = {"scene": current_scene, "sum": float(pend_sum), "count": int(pend_cnt)}
 
 # Tid/kille inkl händer
 tid_kille_sek = float(preview.get("Tid per kille (sek)", 0.0))
@@ -685,16 +732,6 @@ with mv1:
 with mv2:
     st.metric("Mål vikt (kg)", preview.get("Mål vikt (kg)", "-"))
 
-# Käll-breakout
-st.markdown("**👥 Källor (live)**")
-k1,k2,k3,k4,k5,k6 = st.columns(6)
-with k1: st.metric(LBL_PAPPAN, int(base.get(LBL_PAPPAN,0)))
-with k2: st.metric(LBL_GRANNAR, int(base.get(LBL_GRANNAR,0)))
-with k3: st.metric(LBL_NV, int(base.get(LBL_NV,0)))
-with k4: st.metric(LBL_NF, int(base.get(LBL_NF,0)))
-with k5: st.metric(LBL_BEK, int(base.get(LBL_BEK,0)))
-with k6: st.metric(LBL_ESK, int(base.get(LBL_ESK,0)))
-
 st.caption("Obs: Vila-scenarion och Super bonus genererar inga prenumeranter, intäkter, kostnader eller lön. Bonus kvar minskas dock med 'Bonus deltagit'.")
 
 # =========================
@@ -709,7 +746,7 @@ SAVE_NUM_COLS = [
 ]
 
 def _prepare_row_for_save(_preview: dict, _base: dict, _cfg: dict) -> dict:
-    row = dict(_base)  # börja med base (så vi får alla inmatningar)
+    row = dict(_base)   # börja med base (alla inmatningar)
     row.update(_preview)  # lägg på beräkningar
     # extra metadata
     row["Profil"] = st.session_state.get(PROFILE_KEY, "")
@@ -717,7 +754,7 @@ def _prepare_row_for_save(_preview: dict, _base: dict, _cfg: dict) -> dict:
     row["Mål vikt (kg)"] = _preview.get("Mål vikt (kg)")
     row["Super bonus ack"] = _preview.get("Super bonus ack")
 
-    # sanera None -> 0/"" för vanliga fält så att vi slipper 'None' i DF/Sheets
+    # sanera None -> 0/"" så vi slipper 'None' i DF/Sheets
     for k in SAVE_NUM_COLS:
         if row.get(k) is None:
             row[k] = 0
@@ -736,6 +773,13 @@ with cL:
     if st.button("💾 Spara raden (lokalt)"):
         full_row = _prepare_row_for_save(preview, base, CFG)
         st.session_state[ROWS_KEY].append(full_row)
+
+        # >>> Frys in BMI-samplet i historiken
+        pend = st.session_state.get(PENDING_BMI_KEY, {"scene": None, "sum": 0.0, "count": 0})
+        st.session_state[BMI_SUM_KEY] = float(st.session_state.get(BMI_SUM_KEY, 0.0)) + float(pend.get("sum", 0.0))
+        st.session_state[BMI_CNT_KEY] = int(st.session_state.get(BMI_CNT_KEY, 0)) + int(pend.get("count", 0))
+        st.session_state[PENDING_BMI_KEY] = {"scene": None, "sum": 0.0, "count": 0}
+
         # uppdatera min/max (för slump)
         for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
                     LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
@@ -756,17 +800,27 @@ with cR:
     if st.button("📤 Spara raden till Google Sheets"):
         try:
             full_row = _prepare_row_for_save(preview, base, CFG)
+
+            # >>> Frys in BMI-samplet i historiken (samma sample som i live)
+            pend = st.session_state.get(PENDING_BMI_KEY, {"scene": None, "sum": 0.0, "count": 0})
+            st.session_state[BMI_SUM_KEY] = float(st.session_state.get(BMI_SUM_KEY, 0.0)) + float(pend.get("sum", 0.0))
+            st.session_state[BMI_CNT_KEY] = int(st.session_state.get(BMI_CNT_KEY, 0)) + int(pend.get("count", 0))
+            st.session_state[PENDING_BMI_KEY] = {"scene": None, "sum": 0.0, "count": 0}
+
             _save_to_sheets_for_profile(st.session_state.get(PROFILE_KEY,""), full_row)
+
             # spegla lokalt
             st.session_state[ROWS_KEY].append(full_row)
             for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
                         LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
                 v = int(full_row.get(col,0))
                 _add_hist_value(col, v)
+
             scen_typ = str(base.get("Typ",""))
             is_vila  = "Vila" in scen_typ
             is_super = "Super bonus" in scen_typ
             _after_save_housekeeping(full_row, is_vila=is_vila, is_superbonus=is_super)
+
             st.session_state[SCENEINFO_KEY] = _current_scene_info()
             st.success("✅ Sparad till Google Sheets.")
         except Exception as e:
