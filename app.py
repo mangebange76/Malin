@@ -53,7 +53,7 @@ INPUT_ORDER = [
     "in_pappan","in_grannar","in_nils_vanner","in_nils_familj",
     "in_bekanta","in_eskilstuna",
     "in_bonus_deltagit","in_personal_deltagit",
-    "in_hander_aktiv",  # JA/NEJ -> 1/0
+    "in_hander_aktiv",  # 1/0
     "in_nils"
 ]
 
@@ -67,7 +67,7 @@ def _current_scene_info():
     return (nr, d, veckodagar[d.weekday()])
 
 def _init_cfg_defaults():
-    # Start/födelse + ekonomi + bonusar
+    # Längd i CM (du bytte till centimeter)
     return {
         "startdatum":   date(1990,1,1),
         "starttid":     time(7,0),
@@ -76,20 +76,18 @@ def _init_cfg_defaults():
         "avgift_usd":   30.0,
         "PROD_STAFF":   800,
 
-        # Bonus kvar (kan vara profilspecifikt)
         BONUS_LEFT_KEY: 500,
-        # Bonus-andel (decimal %): 1.0 = 1%, 0.5 = 0.5%, 1.5 = 1.5%
-        "BONUS_PCT": 1.0,
+        "BONUS_PCT": 1.0,          # decimal-procent för bonuskillar (1.0 = 1%)
 
-        # Super-bonus
-        "SUPER_BONUS_PCT": 0.1,  # decimal % av prenumeranter
-        SUPER_ACC_KEY: 0,        # ackumulerat heltal
+        "SUPER_BONUS_PCT": 0.1,    # decimal-procent av prenumeranter
+        SUPER_ACC_KEY: 0,          # ackumulerat heltal
 
-        # BM mål (BMI-mål) + längd (centimeter)
-        "BMI_GOAL": 21.7,
-        "HEIGHT_CM": 164,  # centimeter
+        # BM-ackumulatorer (för alla pren hittills)
+        "BM_SUM": 0,               # summa av alla slumpade BM (12–18) hittills
+        "BM_COUNT": 0,             # antal prenumeranter som fått BM-släp hittills
+        "HEIGHT_CM": 164,          # längd i cm
 
-        # Eskilstuna-intervall
+        # Esk-intervall
         "ESK_MIN": 20, "ESK_MAX": 40,
 
         # Maxvärden (källor)
@@ -97,7 +95,7 @@ def _init_cfg_defaults():
         "MAX_NILS_VANNER": 100, "MAX_NILS_FAMILJ": 100,
         "MAX_BEKANTA": 100,
 
-        # Etiketter (kan döpas om i sidopanel)
+        # Etiketter
         "LBL_PAPPAN": "Pappans vänner",
         "LBL_GRANNAR": "Grannar",
         "LBL_NILS_VANNER": "Nils vänner",
@@ -135,7 +133,7 @@ init_state()
 def _add_hist_value(col, v):
     try:
         v = int(v)
-    except Exception:
+    except:
         v = 0
     mm = st.session_state[HIST_MM_KEY].get(col)
     if mm:
@@ -151,7 +149,7 @@ def _minmax_from_hist(colname: str):
     for r in st.session_state[ROWS_KEY]:
         try:
             vals.append(int(r.get(colname, 0)))
-        except Exception:
+        except:
             pass
     if vals:
         mm = (min(vals), max(vals))
@@ -185,7 +183,6 @@ def apply_scenario_fill():
     for k in INPUT_ORDER:
         st.session_state[k] = keep_defaults.get(k, 0)
 
-    # gemensam slumpning för sex + källor där det ska slumpas
     def _slumpa_sexfalt():
         for f,key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),
                       ("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
@@ -216,13 +213,13 @@ def apply_scenario_fill():
     elif s == "Slumpa scen svart":
         st.session_state["in_svarta"] = _rand_1_to_max("Svarta")
         _slumpa_sexfalt()
-        # Källor -> 0 enligt din begäran
+        # KÄLLOR = 0 enligt din senaste instruktion
         st.session_state["in_pappan"] = 0
         st.session_state["in_grannar"] = 0
         st.session_state["in_nils_vanner"] = 0
         st.session_state["in_nils_familj"] = 0
         st.session_state["in_bekanta"] = 0
-        st.session_state["in_eskilstuna"] = _rand_esk(CFG)
+        st.session_state["in_eskilstuna"]  = _rand_esk(CFG)
         st.session_state["in_alskar"] = 8
         st.session_state["in_sover"]  = 1
 
@@ -240,10 +237,8 @@ def apply_scenario_fill():
         st.session_state["in_nils"]   = 0
 
     elif s == "Super bonus":
-        # Lägg hela ackumulerade superbonusen i Svarta, resten styr du manuellt
         st.session_state["in_svarta"] = int(st.session_state[CFG_KEY].get(SUPER_ACC_KEY, 0))
 
-    # uppdatera sceninfo (datum/veckodag i liven)
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
 # =========================
@@ -263,7 +258,6 @@ with st.sidebar:
 
     CFG["BONUS_PCT"]        = st.number_input("Bonus % (decimal, t.ex. 1.0 = 1%)", min_value=0.0, value=float(CFG.get("BONUS_PCT",1.0)), step=0.1)
     CFG["SUPER_BONUS_PCT"]  = st.number_input("Super-bonus % (decimal, t.ex. 0.1 = 0.1%)", min_value=0.0, value=float(CFG.get("SUPER_BONUS_PCT",0.1)), step=0.1)
-    CFG["BMI_GOAL"]         = st.number_input("BM mål (BMI)", min_value=10.0, max_value=40.0, value=float(CFG.get("BMI_GOAL",21.7)), step=0.1)
     CFG["HEIGHT_CM"]        = st.number_input("Längd (cm)", min_value=140, max_value=220, value=int(CFG.get("HEIGHT_CM",164)), step=1)
 
     st.markdown("---")
@@ -331,13 +325,10 @@ with st.sidebar:
                 st.session_state[ROWS_KEY] = df.to_dict(orient="records") if not df.empty else []
                 # bygg min/max för slump
                 st.session_state[HIST_MM_KEY] = {}
-                LBL_PAPPAN = CFG["LBL_PAPPAN"]; LBL_GRANNAR = CFG["LBL_GRANNAR"]
-                LBL_NV = CFG["LBL_NILS_VANNER"]; LBL_NF = CFG["LBL_NILS_FAMILJ"]
-                LBL_BEK = CFG["LBL_BEKANTA"]; LBL_ESK = CFG["LBL_ESK"]
                 for r in st.session_state[ROWS_KEY]:
                     for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
-                                LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF,
-                                LBL_BEK, LBL_ESK]:
+                                CFG["LBL_PAPPAN"], CFG["LBL_GRANNAR"], CFG["LBL_NILS_VANNER"], CFG["LBL_NILS_FAMILJ"],
+                                CFG["LBL_BEKANTA"], CFG["LBL_ESK"]]:
                         _add_hist_value(col, r.get(col, 0))
                 st.session_state[SCENEINFO_KEY] = _current_scene_info()
                 st.success(f"✅ Läste in {len(st.session_state[ROWS_KEY])} rader för '{selected_profile}'.")
@@ -440,7 +431,7 @@ def build_base_from_inputs():
         "Avgift":  float(CFG["avgift_usd"]),
         "PROD_STAFF": int(CFG["PROD_STAFF"]),
 
-        # labels och max in som referens till beräkningsmodul (om den vill)
+        # referenser till beräkningsmodul
         "MAX_PAPPAN": int(CFG["MAX_PAPPAN"]),
         "MAX_GRANNAR": int(CFG["MAX_GRANNAR"]),
         "MAX_NILS_VANNER": int(CFG["MAX_NILS_VANNER"]),
@@ -453,19 +444,18 @@ def build_base_from_inputs():
         "LBL_BEKANTA": CFG["LBL_BEKANTA"],
         "LBL_ESK": CFG["LBL_ESK"],
     }
-    # Känner = summa av käll-etiketter (radnivå)
+    # Känner = summa käll-etiketter (radnivå)
     base["Känner"] = (
         int(base[CFG["LBL_PAPPAN"]]) + int(base[CFG["LBL_GRANNAR"]]) +
         int(base[CFG["LBL_NILS_VANNER"]]) + int(base[CFG["LBL_NILS_FAMILJ"]])
     )
-    # meta till beräkning
     base["_rad_datum"]    = d
     base["_fodelsedatum"] = CFG["fodelsedatum"]
     base["_starttid"]     = CFG["starttid"]
     return base
 
 # =========================
-# Ekonomiberäkningar (i appen) – kompletterar preview
+# Ekonomi i appen
 # =========================
 def _hardhet_from(base, preview):
     hard = 0
@@ -480,7 +470,6 @@ def _hardhet_from(base, preview):
     if tm > 700: hard += 7
     if tm > 1000: hard += 10
     if int(base.get("Svarta",0)) > 0: hard += 3
-    # vila/super -> 0
     typ = str(base.get("Typ",""))
     if "Vila" in typ or "Super bonus" in typ:
         hard = 0
@@ -493,7 +482,6 @@ def _econ_compute(base, preview):
     hardhet = _hardhet_from(base, preview)
     out["Hårdhet"] = hardhet
 
-    # Prenumeranter
     if "Vila" in typ or "Super bonus" in typ:
         pren = 0
     else:
@@ -501,17 +489,14 @@ def _econ_compute(base, preview):
                  int(base.get("TAP",0)) + int(preview.get("Totalt Män",0)) ) * hardhet
     out["Prenumeranter"] = int(pren)
 
-    # Intäkter
     avg = float(base.get("Avgift", 0.0))
     out["Intäkter"] = float(pren) * avg
 
-    # Intäkt Känner
     ksam = int(preview.get("Känner sammanlagt", 0))
     if ksam == 0:
         ksam = int(preview.get("Känner", 0))
     out["Intäkt Känner"] = float(ksam) * 30.0 if not ("Vila" in typ or "Super bonus" in typ) else 0.0
 
-    # Kostnad män
     if "Vila" in typ or "Super bonus" in typ:
         kost = 0.0
     else:
@@ -521,10 +506,9 @@ def _econ_compute(base, preview):
         kost = timmar * tot_personer * 15.0
     out["Kostnad män"] = float(kost)
 
-    # Intäkt företag, Lön, Vinst
     out["Intäkt företag"] = float(out["Intäkter"]) - float(out["Kostnad män"]) - float(out["Intäkt Känner"])
 
-    # Åldersfaktor
+    # Lön Malin
     try:
         rad_dat = base["_rad_datum"]
         fd = base["_fodelsedatum"]
@@ -532,29 +516,51 @@ def _econ_compute(base, preview):
     except Exception:
         alder = 30
     grund_lon = max(150.0, min(800.0, 0.08 * float(out["Intäkt företag"])))
-    if alder <= 18:
-        faktor = 1.00
-    elif 19 <= alder <= 23:
-        faktor = 0.90
-    elif 24 <= alder <= 27:
-        faktor = 0.85
-    elif 28 <= alder <= 30:
-        faktor = 0.80
-    elif 31 <= alder <= 32:
-        faktor = 0.75
-    elif 33 <= alder <= 35:
-        faktor = 0.70
-    else:
-        faktor = 0.60
+    if alder <= 18: faktor = 1.00
+    elif 19 <= alder <= 23: faktor = 0.90
+    elif 24 <= alder <= 27: faktor = 0.85
+    elif 28 <= alder <= 30: faktor = 0.80
+    elif 31 <= alder <= 32: faktor = 0.75
+    elif 33 <= alder <= 35: faktor = 0.70
+    else: faktor = 0.60
     lon = grund_lon * faktor
     if "Vila" in typ or "Super bonus" in typ:
         lon = 0.0
     out["Lön Malin"] = float(lon)
+
     out["Vinst"] = float(out["Intäkt företag"]) - float(out["Lön Malin"])
     return out
 
+# =========================
+# BM-mål / Mål vikt (live + spar)
+# =========================
+def _compute_bm_preview(pren_new: int, cfg: dict):
+    """
+    Returnerar:
+      bm_goal (float), mal_vikt_kg (float), bm_new_sum (int), bm_new_cnt (int)
+    pren_new slumpas med 12–18/st och adderas bara i preview. Vid spar uppdaterar vi ack.
+    """
+    bm_sum = int(cfg.get("BM_SUM", 0))
+    bm_cnt = int(cfg.get("BM_COUNT", 0))
+
+    if pren_new > 0:
+        bm_new_sum = sum(random.randint(12, 18) for _ in range(pren_new))
+        bm_new_cnt = pren_new
+    else:
+        bm_new_sum = 0
+        bm_new_cnt = 0
+
+    tot_sum = bm_sum + bm_new_sum
+    tot_cnt = bm_cnt + bm_new_cnt
+    bm_goal = (tot_sum / tot_cnt) if tot_cnt > 0 else 0.0
+
+    h_m = float(cfg.get("HEIGHT_CM", 164)) / 100.0
+    mal_vikt_kg = bm_goal * (h_m ** 2)
+
+    return round(bm_goal, 2), round(mal_vikt_kg, 1), bm_new_sum, bm_new_cnt
+
 def _after_save_housekeeping(preview, is_vila: bool, is_superbonus: bool):
-    """Uppdatera BONUS kvar och SUPER_BONUS_ACC enligt regeln."""
+    """Bonus/Superbonus + BM-ack uppdateringar efter spar."""
     CFG = st.session_state[CFG_KEY]
     pren = int(preview.get("Prenumeranter", 0))
     bonus_pct = float(CFG.get("BONUS_PCT", 1.0)) / 100.0
@@ -562,10 +568,15 @@ def _after_save_housekeeping(preview, is_vila: bool, is_superbonus: bool):
 
     add_bonus = 0 if (is_vila or is_superbonus) else int(pren * bonus_pct)
     add_super = 0 if (is_vila or is_superbonus) else int(pren * sb_pct)
-
     minus_bonus = int(preview.get("Bonus deltagit", 0))
+
+    # BONUS
     CFG[BONUS_LEFT_KEY] = max(0, int(CFG.get(BONUS_LEFT_KEY,0)) - minus_bonus + add_bonus)
+    # SUPER
     CFG[SUPER_ACC_KEY]  = max(0, int(CFG.get(SUPER_ACC_KEY,0)) + add_super)
+    # BM ack
+    CFG["BM_SUM"]   = int(CFG.get("BM_SUM", 0)) + int(preview.get("_BM_NEW_SUM", 0))
+    CFG["BM_COUNT"] = int(CFG.get("BM_COUNT", 0)) + int(preview.get("_BM_NEW_CNT", 0))
 
 # =========================
 # Live
@@ -581,18 +592,19 @@ try:
 except TypeError:
     preview = calc_row_values(base, base["_rad_datum"], CFG["fodelsedatum"], CFG["starttid"])
 
-# 2) Komplettera ekonomi & hårdhet i appen
+# 2) Ekonomi
 econ = _econ_compute(base, preview)
 preview.update(econ)
 
-# 3) Extra – BM mål + Mål vikt + Super-ack till preview för att alltid sparas/visas
-height_m = float(CFG.get("HEIGHT_CM", 164)) / 100.0
-bmi_goal = float(CFG.get("BMI_GOAL", 21.7))
-preview["BM mål"] = bmi_goal
-preview["Mål vikt (kg)"] = round(bmi_goal * (height_m ** 2), 1)
-preview["Super bonus ack"] = int(CFG.get(SUPER_ACC_KEY, 0))
+# 3) BM-mål / Mål vikt (preview, baserat på dagens nya pren)
+bm_goal, mal_vikt, bm_new_sum, bm_new_cnt = _compute_bm_preview(preview.get("Prenumeranter", 0), CFG)
+preview["BM-mål"] = bm_goal
+preview["Mål vikt (kg)"] = mal_vikt
+# spara med i preview för att kunna uppdatera ack exakt vid spar
+preview["_BM_NEW_SUM"] = bm_new_sum
+preview["_BM_NEW_CNT"] = bm_new_cnt
 
-# Tid/kille inkl händer
+# Extra: Tid/kille inkl händer
 tid_kille_sek = float(preview.get("Tid per kille (sek)", 0.0))
 hander_kille_sek = float(preview.get("Händer per kille (sek)", 0.0))
 def _mmss(total_seconds: float) -> str:
@@ -604,7 +616,7 @@ def _mmss(total_seconds: float) -> str:
         return "-"
 tid_kille_inkl_hander = _mmss(tid_kille_sek + (hander_kille_sek if int(base.get("Händer aktiv",1))==1 else 0))
 
-# Egen totalsiffra inkl källor/bonus/personal/Eskilstuna
+# totalsiffra inkl alla
 tot_men_including = (
     int(base.get("Män",0)) + int(base.get("Svarta",0)) +
     int(base.get(CFG["LBL_PAPPAN"],0)) + int(base.get(CFG["LBL_GRANNAR"],0)) +
@@ -626,6 +638,7 @@ else:
 
 fd = CFG["fodelsedatum"]
 alder = _d.year - fd.year - ((_d.month, _d.day) < (fd.month, fd.day))
+
 top_line = st.columns([2,1,1,1])
 with top_line[0]:
     st.markdown(f"**Datum/Veckodag:** {rad_datum} / {veckodag} &nbsp;•&nbsp; **Ålder:** {alder} år")
@@ -657,8 +670,8 @@ with c5:
     st.metric("Suger/kille (sek)", int(preview.get("Suger per kille (sek)", 0)))
     st.metric("Händer/kille (sek)", int(preview.get("Händer per kille (sek)", 0)))
 with c6:
-    st.metric("Älskar (sek)", int(preview.get("Tid Älskar (sek)", 0)))
-    st.metric("Klockan + älskar/sover", preview.get("Klockan inkl älskar/sover","-"))
+    st.metric("BM-mål (snitt)", preview.get("BM-mål", 0.0))
+    st.metric("Mål vikt (kg)", preview.get("Mål vikt (kg)", 0.0))
 
 # Ekonomi
 st.markdown("**💵 Ekonomi (live)**")
@@ -676,16 +689,11 @@ with e4:
     st.metric("Vinst", f"${float(preview.get('Vinst',0)):,.2f}")
     st.metric("Bonus kvar", int(CFG.get(BONUS_LEFT_KEY,0)))
 
-# BM mål / Mål vikt
-mv1, mv2 = st.columns(2)
-with mv1:
-    st.metric("BM mål (BMI)", preview.get("BM mål", "-"))
-with mv2:
-    st.metric("Mål vikt (kg)", preview.get("Mål vikt (kg)", "-"))
-
 # Käll-breakout
 st.markdown("**👥 Källor (live)**")
 k1,k2,k3,k4,k5,k6 = st.columns(6)
+LBL_PAPPAN = CFG["LBL_PAPPAN"]; LBL_GRANNAR = CFG["LBL_GRANNAR"]; LBL_NV = CFG["LBL_NILS_VANNER"]
+LBL_NF = CFG["LBL_NILS_FAMILJ"]; LBL_BEK = CFG["LBL_BEKANTA"]; LBL_ESK = CFG["LBL_ESK"]
 with k1: st.metric(LBL_PAPPAN, int(base.get(LBL_PAPPAN,0)))
 with k2: st.metric(LBL_GRANNAR, int(base.get(LBL_GRANNAR,0)))
 with k3: st.metric(LBL_NV, int(base.get(LBL_NV,0)))
@@ -696,54 +704,34 @@ with k6: st.metric(LBL_ESK, int(base.get(LBL_ESK,0)))
 st.caption("Obs: Vila-scenarion och Super bonus genererar inga prenumeranter, intäkter, kostnader eller lön. Bonus kvar minskas dock med 'Bonus deltagit'.")
 
 # =========================
-# Sparrad – full rad (base + preview) och nollställ None
-# =========================
-SAVE_NUM_COLS = [
-    "Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
-    "Tid S","Tid D","Vila","DT tid (sek/kille)","DT vila (sek/kille)",
-    "Älskar","Sover med",
-    LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK,
-    "Bonus deltagit","Personal deltagit","Händer aktiv","Nils"
-]
-
-def _prepare_row_for_save(_preview: dict, _base: dict, _cfg: dict) -> dict:
-    row = dict(_base)  # börja med base (så vi får alla inmatningar)
-    row.update(_preview)  # lägg på beräkningar
-    # extra metadata
-    row["Profil"] = st.session_state.get(PROFILE_KEY, "")
-    row["BM mål"] = _preview.get("BM mål")
-    row["Mål vikt (kg)"] = _preview.get("Mål vikt (kg)")
-    row["Super bonus ack"] = _preview.get("Super bonus ack")
-
-    # sanera None -> 0/"" för vanliga fält så att vi slipper 'None' i DF/Sheets
-    for k in SAVE_NUM_COLS:
-        if row.get(k) is None:
-            row[k] = 0
-    for k in ["Datum","Veckodag","Typ","Scen","Klockan","Klockan inkl älskar/sover"]:
-        if row.get(k) is None:
-            row[k] = ""
-    return row
-
-# =========================
 # Spara lokalt & till Sheets
 # =========================
 st.markdown("---")
 cL, cR = st.columns([1,1])
 
+def _prepare_row_for_save(_preview: dict) -> dict:
+    row = dict(_preview)
+    row["Profil"] = st.session_state.get(PROFILE_KEY, "")
+    # Rensa None → 0/"" (här sätter vi 0 – funkar för nästan alla dina kolumner)
+    for k,v in list(row.items()):
+        if v is None:
+            row[k] = 0
+    # ta bort interna nycklar om du inte vill spara dem
+    row.pop("_BM_NEW_SUM", None)
+    row.pop("_BM_NEW_CNT", None)
+    return row
+
 with cL:
     if st.button("💾 Spara raden (lokalt)"):
-        full_row = _prepare_row_for_save(preview, base, CFG)
-        st.session_state[ROWS_KEY].append(full_row)
-        # uppdatera min/max (för slump)
+        st.session_state[ROWS_KEY].append(_prepare_row_for_save(preview))
         for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
                     LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
-            v = int(full_row.get(col,0))
+            v = int(preview.get(col,0))
             _add_hist_value(col, v)
-        # justera Bonus/ Superbonus
         scen_typ = str(base.get("Typ",""))
         is_vila  = "Vila" in scen_typ
         is_super = "Super bonus" in scen_typ
-        _after_save_housekeeping(full_row, is_vila=is_vila, is_superbonus=is_super)
+        _after_save_housekeeping(preview, is_vila=is_vila, is_superbonus=is_super)
         st.session_state[SCENEINFO_KEY] = _current_scene_info()
         st.success("✅ Sparad lokalt.")
 
@@ -753,18 +741,16 @@ def _save_to_sheets_for_profile(profile: str, row_dict: dict):
 with cR:
     if st.button("📤 Spara raden till Google Sheets"):
         try:
-            full_row = _prepare_row_for_save(preview, base, CFG)
-            _save_to_sheets_for_profile(st.session_state.get(PROFILE_KEY,""), full_row)
-            # spegla lokalt
-            st.session_state[ROWS_KEY].append(full_row)
+            _save_to_sheets_for_profile(st.session_state.get(PROFILE_KEY,""), _prepare_row_for_save(preview))
+            st.session_state[ROWS_KEY].append(_prepare_row_for_save(preview))
             for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
                         LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
-                v = int(full_row.get(col,0))
+                v = int(preview.get(col,0))
                 _add_hist_value(col, v)
             scen_typ = str(base.get("Typ",""))
             is_vila  = "Vila" in scen_typ
             is_super = "Super bonus" in scen_typ
-            _after_save_housekeeping(full_row, is_vila=is_vila, is_superbonus=is_super)
+            _after_save_housekeeping(preview, is_vila=is_vila, is_superbonus=is_super)
             st.session_state[SCENEINFO_KEY] = _current_scene_info()
             st.success("✅ Sparad till Google Sheets.")
         except Exception as e:
@@ -775,24 +761,18 @@ with cR:
 # =========================
 st.markdown("---")
 st.subheader("📋 Lokala rader (förhandslagrade)")
-
 if st.session_state[ROWS_KEY]:
     df = pd.DataFrame(st.session_state[ROWS_KEY])
-    st.dataframe(df, use_container_width=True, height=340)
+    st.dataframe(df, use_container_width=True, height=320)
 else:
     st.info("Inga lokala rader ännu.")
 
-# (valfri) Statistik
 if _HAS_STATS:
     try:
         st.markdown("---")
         st.subheader("📊 Statistik")
         rows_df = pd.DataFrame(st.session_state[ROWS_KEY]) if st.session_state[ROWS_KEY] else pd.DataFrame()
-        # stöd både compute_stats(rows) och compute_stats(rows, cfg)
-        if "cfg" in compute_stats.__code__.co_varnames or compute_stats.__code__.co_argcount >= 2:
-            stats = compute_stats(rows_df, CFG)
-        else:
-            stats = compute_stats(rows_df)
+        stats = compute_stats(rows_df, CFG) if "cfg" in compute_stats.__code__.co_varnames else compute_stats(rows_df)
         if isinstance(stats, dict) and stats:
             for k,v in stats.items():
                 st.write(f"**{k}**: {v}")
