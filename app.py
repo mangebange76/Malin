@@ -101,14 +101,12 @@ def _read_profile_settings(ss, profile_name):
             except:
                 settings[k] = v
         else:
-            # int/float
             try:
                 if "." in v:
                     settings[k] = float(v)
                 else:
                     settings[k] = int(v)
             except:
-                # bool?
                 vv = v.strip().lower()
                 if vv in ("true","ja","1","on","yes"):
                     settings[k] = 1
@@ -147,15 +145,66 @@ def _find_profile_data_ws(ss, profile_name):
     return ws, f"Data_{profile_name}"
 
 def _read_profile_data(ss, profile_name):
-    """Läser rader från profilens data-blad (utan att blanda andra profiler)."""
+    """
+    ROBUST: läser alla rader från profilens data-blad.
+    - Hittar header-raden automatiskt (första rad med >=3 kända kolumnnamn)
+    - Bygger records från alla efterföljande rader som inte är helt tomma
+    - Om vi hamnar i gemensamma 'Data' filtrerar vi på Profil-kolumnen
+    """
     ws, title = _find_profile_data_ws(ss, profile_name)
-    records = ws.get_all_records()
+    values = ws.get_all_values()
+    if not values:
+        return pd.DataFrame()
+
+    # kända kolumnnamn som brukar finnas
+    KNOWN = set([
+        "Datum","Veckodag","Typ","Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
+        "Tid S","Tid D","DT tid (sek/kille)","DT vila (sek/kille)","Vila",
+        "Älskar","Sover med","Bonus deltagit","Personal deltagit","Händer aktiv",
+        "Känner","Totalt Män","Prenumeranter","Hårdhet","Intäkter","Intäkt Känner",
+        "Kostnad män","Intäkt företag","Lön Malin","Vinst","Profil"
+    ])
+
+    # hitta header-rad
+    header_idx = None
+    header = None
+    for i, row in enumerate(values):
+        row_stripped = [c.strip() for c in row]
+        hits = sum(1 for c in row_stripped if c in KNOWN)
+        if hits >= 3:  # heuristik
+            header_idx = i
+            header = row_stripped
+            break
+
+    if header_idx is None:
+        # fallback: anta första raden som header
+        header_idx = 0
+        header = [c.strip() for c in values[0]]
+
+    data_rows = values[header_idx+1:]
+    records = []
+    for r in data_rows:
+        if not any(str(c).strip() for c in r):
+            continue
+        # pad korta rader
+        row = list(r) + [""] * (len(header) - len(r))
+        row = [str(c).strip() for c in row[:len(header)]]
+        rec = {header[j]: row[j] for j in range(len(header))}
+        records.append(rec)
+
     df = pd.DataFrame(records)
-    if df.empty:
-        return df
-    # Om det är generella "Data" utan per-profil-flik, filtrera Profil-kolumnen
-    if title == "Data" and "Profil" in df.columns:
-        df = df[df["Profil"].astype(str) == str(profile_name)]
+
+    # Om vi läser från gemensamma "Data", filtrera på Profil
+    if not df.empty and title == "Data" and "Profil" in df.columns:
+        df["Profil_norm"] = df["Profil"].astype(str).str.strip().str.lower()
+        prof_norm = str(profile_name).strip().lower()
+        df = df[df["Profil_norm"] == prof_norm].drop(columns=["Profil_norm"])
+
+    # Trimma header-skjol: ta bort helt tomma kolumner
+    if not df.empty:
+        empty_cols = [c for c in df.columns if df[c].astype(str).str.strip().eq("").all()]
+        df = df.drop(columns=empty_cols)
+
     return df.reset_index(drop=True)
 
 def _save_settings_to_profile(ss, profile_name, cfg: dict):
@@ -315,8 +364,7 @@ def apply_scenario_fill():
     LBL_NV = CFG["LBL_NILS_VANNER"]
     LBL_NF = CFG["LBL_NILS_FAMILJ"]
     LBL_BEK = CFG["LBL_BEKANTA"]
-    # OBS: inputs använder keys in_pappan etc, så slumpa via kolumnnamn:
-    # (hist byggs från Data-rader som redan använder etiketter som kolumnnamn)
+
     def _slumpa_kallor():
         st.session_state["in_pappan"]      = _rand_up_to_max(LBL_PAPPAN)
         st.session_state["in_grannar"]     = _rand_up_to_max(LBL_GRANNAR)
@@ -344,7 +392,7 @@ def apply_scenario_fill():
     elif s == "Slumpa scen svart":
         st.session_state["in_svarta"] = _rand_up_to_max("Svarta")
         _slumpa_sex()
-        _slumpa_kallor()  # du ville även källor slumpas? (lämna annars bort)
+        _slumpa_kallor()
         st.session_state["in_alskar"] = 8
         st.session_state["in_sover"]  = 1
 
@@ -419,8 +467,8 @@ with st.sidebar:
                                 CFG["LBL_NILS_FAMILJ"], CFG["LBL_BEKANTA"], CFG["LBL_ESK"]]:
                         _add_hist_value(col, r.get(col, 0))
                 st.session_state[SCENEINFO_KEY] = _current_scene_info()
-                st.success(f"✅ Läste {len(st.session_state[ROWS_KEY])} rader för profilen.")
-    st.caption("Tips: Spara inställningar per profil i ett blad med samma namn som profilen.")
+                st.success(f"✅ Läste {len(st.session_state[ROWS_KEY])} rader för profilen (från blad: {_find_profile_data_ws(ss, sel)[1]}).")
+    st.caption("Tips: Spara inställningar per profil i ett blad med samma namn som profilen. Data går till Data_<Profil>.")
 
     st.markdown("---")
     st.header("Inställningar (lokalt)")
@@ -522,16 +570,17 @@ with c1:
         st.number_input(labels[key], min_value=0, step=1, key=key)
 
 with c2:
-    for key in ["in_dt_tid","in_dt_vila","in_alskar"]:
-        st.number_input(labels[key], min_value=0, step=1, key=key)
+    st.number_input(labels["in_dt_tid"], min_value=0, step=1, key="in_dt_tid")
+    st.number_input(labels["in_dt_vila"], min_value=0, step=1, key="in_dt_vila")
+    st.number_input(labels["in_alskar"], min_value=0, step=1, key="in_alskar")
     st.number_input(labels["in_sover"], min_value=0, max_value=1, step=1, key="in_sover")
-    for key in [
-        "in_pappan","in_grannar","in_nils_vanner","in_nils_familj",
-        "in_bekanta","in_eskilstuna",
-        "in_bonus_deltagit","in_personal_deltagit",
-        "in_hander","in_nils"
-    ]:
-        st.number_input(labels[key], min_value=0, max_value=1 if key=="in_hander" else None, step=1, key=key)
+    for key in ["in_pappan","in_grannar","in_nils_vanner","in_nils_familj","in_bekanta","in_eskilstuna"]:
+        st.number_input(labels[key], min_value=0, step=1, key=key)
+    st.number_input(labels["in_bonus_deltagit"], min_value=0, step=1, key="in_bonus_deltagit")
+    st.number_input(labels["in_personal_deltagit"], min_value=0, step=1, key="in_personal_deltagit")
+    # Viktigt: separat input med max_value=1
+    st.number_input(labels["in_hander"], min_value=0, max_value=1, step=1, key="in_hander")
+    st.number_input(labels["in_nils"], min_value=0, step=1, key="in_nils")
 
 # =========================
 # Bygg basrad från inputs
@@ -551,12 +600,12 @@ def build_base_from_inputs():
         "DT tid (sek/kille)": st.session_state["in_dt_tid"], "DT vila (sek/kille)": st.session_state["in_dt_vila"],
         "Älskar": st.session_state["in_alskar"], "Sover med": st.session_state["in_sover"],
 
-        LBL_PAPPAN: st.session_state["in_pappan"],
-        LBL_GRANNAR: st.session_state["in_grannar"],
-        LBL_NV:      st.session_state["in_nils_vanner"],
-        LBL_NF:      st.session_state["in_nils_familj"],
-        LBL_BEK:     st.session_state["in_bekanta"],
-        LBL_ESK:     st.session_state["in_eskilstuna"],
+        CFG["LBL_PAPPAN"]: st.session_state["in_pappan"],
+        CFG["LBL_GRANNAR"]: st.session_state["in_grannar"],
+        CFG["LBL_NILS_VANNER"]: st.session_state["in_nils_vanner"],
+        CFG["LBL_NILS_FAMILJ"]: st.session_state["in_nils_familj"],
+        CFG["LBL_BEKANTA"]: st.session_state["in_bekanta"],
+        CFG["LBL_ESK"]: st.session_state["in_eskilstuna"],
 
         "Bonus deltagit":    st.session_state["in_bonus_deltagit"],
         "Personal deltagit": st.session_state["in_personal_deltagit"],
@@ -575,8 +624,8 @@ def build_base_from_inputs():
     }
     # Känner = summa av käll-etiketter (används för egen kontroll)
     base["Känner"] = (
-        int(base[LBL_PAPPAN]) + int(base[LBL_GRANNAR]) +
-        int(base[LBL_NV]) + int(base[LBL_NF])
+        int(base[CFG["LBL_PAPPAN"]]) + int(base[CFG["LBL_GRANNAR"]]) +
+        int(base[CFG["LBL_NILS_VANNER"]]) + int(base[CFG["LBL_NILS_FAMILJ"]])
     )
     # meta till beräkning
     base["_rad_datum"]    = st.session_state[SCENEINFO_KEY][1]
@@ -599,9 +648,9 @@ except TypeError:
 # Totalt män inkl alla källor/bonus/personal/Eskilstuna (egen kontroll)
 tot_men_including = (
     int(base.get("Män",0)) + int(base.get("Svarta",0)) +
-    int(base.get(LBL_PAPPAN,0)) + int(base.get(LBL_GRANNAR,0)) +
-    int(base.get(LBL_NV,0)) + int(base.get(LBL_NF,0)) +
-    int(base.get(LBL_BEK,0)) + int(base.get(LBL_ESK,0)) +
+    int(base.get(CFG["LBL_PAPPAN"],0)) + int(base.get(CFG["LBL_GRANNAR"],0)) +
+    int(base.get(CFG["LBL_NILS_VANNER"],0)) + int(base.get(CFG["LBL_NILS_FAMILJ"],0)) +
+    int(base.get(CFG["LBL_BEKANTA"],0)) + int(base.get(CFG["LBL_ESK"],0)) +
     int(base.get("Bonus deltagit",0)) + int(base.get("Personal deltagit",0))
 )
 
@@ -661,12 +710,12 @@ with e4:
 # Käll-brakeout med dina etiketter + extra totalsiffra
 st.markdown("**👥 Källor (live)**")
 k1,k2,k3,k4,k5,k6 = st.columns(6)
-with k1: st.metric(LBL_PAPPAN, int(base.get(LBL_PAPPAN,0)))
-with k2: st.metric(LBL_GRANNAR, int(base.get(LBL_GRANNAR,0)))
-with k3: st.metric(LBL_NV, int(base.get(LBL_NV,0)))
-with k4: st.metric(LBL_NF, int(base.get(LBL_NF,0)))
-with k5: st.metric(LBL_BEK, int(base.get(LBL_BEK,0)))
-with k6: st.metric(LBL_ESK, int(base.get(LBL_ESK,0)))
+with k1: st.metric(CFG["LBL_PAPPAN"], int(base.get(CFG["LBL_PAPPAN"],0)))
+with k2: st.metric(CFG["LBL_GRANNAR"], int(base.get(CFG["LBL_GRANNAR"],0)))
+with k3: st.metric(CFG["LBL_NILS_VANNER"], int(base.get(CFG["LBL_NILS_VANNER"],0)))
+with k4: st.metric(CFG["LBL_NILS_FAMILJ"], int(base.get(CFG["LBL_NILS_FAMILJ"],0)))
+with k5: st.metric(CFG["LBL_BEKANTA"], int(base.get(CFG["LBL_BEKANTA"],0)))
+with k6: st.metric(CFG["LBL_ESK"], int(base.get(CFG["LBL_ESK"],0)))
 st.metric("Totalt män (inkl. källor/bonus/personal/Eskilstuna)", tot_men_including)
 
 st.caption("Obs: Älskar/Sover-med-tider ingår **inte** i scenens 'Summa tid', men lägger på klockan. 'Vila' nollar ekonomin.")
@@ -680,7 +729,8 @@ def _after_save_housekeeping(preview_row: dict, profile: str):
     """Uppdatera min/max, bonus-kvar och sceninfo efter spar."""
     # uppdatera min/max
     for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
-                LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
+                CFG["LBL_PAPPAN"], CFG["LBL_GRANNAR"], CFG["LBL_NILS_VANNER"],
+                CFG["LBL_NILS_FAMILJ"], CFG["LBL_BEKANTA"], CFG["LBL_ESK"]]:
         v = int(preview_row.get(col,0))
         _add_hist_value(col, v)
 
@@ -693,8 +743,8 @@ def _after_save_housekeeping(preview_row: dict, profile: str):
     used = int(preview_row.get("Bonus deltagit",0))
     CFG["BONUS_AVAILABLE"] = max(0, int(CFG.get("BONUS_AVAILABLE",0)) + add_from_pren - used)
 
-    # uppdatera labeln i input för live nästa gång
-    st.session_state["in_bonus_deltagit"] = 0  # nollställ för nästa rad
+    # nollställ för nästa rad (så man inte råkar dra igen)
+    st.session_state["in_bonus_deltagit"] = 0
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
 cL, cR = st.columns([1,1])
