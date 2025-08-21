@@ -610,14 +610,20 @@ except TypeError:
 econ = _econ_compute(base, preview)
 preview.update(econ)
 
-# 3) BMI – slump per ny prenumerant (12–18), ackumulerat historiskt
+# 3) BMI – slump per ny prenumerant (12–18) med VIKTAD FÖRDELNING, ackumulerat historiskt
 def _compute_bmi_pending_for_current_row(pren: int, scen_typ: str):
+    """
+    Slumpar BMI per ny prenumerant enligt viktad diskret fördelning:
+    12:10%, 13:14%, 14:19%, 15:17%, 16:15%, 17:13%, 18:12%.
+    Returnerar (summa_BMI, antal) för aktuell rad.
+    """
     if pren <= 0 or ("Vila" in scen_typ) or ("Super bonus" in scen_typ):
         return 0.0, 0
-    s = 0.0
-    # slumpa 'pren' BMI-värden i intervallet 12–18 och summera
-    for _ in range(pren):
-        s += random.uniform(12.0, 18.0)
+
+    values  = [12, 13, 14, 15, 16, 17, 18]
+    weights = [10, 14, 19, 17, 15, 13, 12]  # summerar till 100
+    draws = random.choices(values, weights=weights, k=pren)
+    s = float(sum(draws))
     return s, pren
 
 current_scene = st.session_state[SCENEINFO_KEY][0]
