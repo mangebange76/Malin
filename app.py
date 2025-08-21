@@ -24,6 +24,13 @@ try:
 except Exception:
     _HAS_STATS = False
 
+# BM-modul (endast för BM mål / Mål vikt / Super-ack)
+try:
+    from bm_utils import compute_bm_fields
+except Exception as e:
+    st.error(f"Kunde inte importera BM-modul: {e}")
+    st.stop()
+
 # =========================
 # Grundinställningar
 # =========================
@@ -584,20 +591,8 @@ except TypeError:
 econ = _econ_compute(base, preview)
 preview.update(econ)
 
-# 3) Extra – BM mål + Mål vikt + Super-ack till preview (cm-baserat)
-def _to_float(x, default):
-    try:
-        return float(str(x).replace(",", "."))
-    except Exception:
-        return default
-
-height_cm = _to_float(CFG.get("HEIGHT_CM", 164), 164.0)   # t.ex. 164
-height_m  = height_cm / 100.0
-bmi_goal  = _to_float(CFG.get("BMI_GOAL", 21.7), 21.7)
-
-preview["BM mål"] = round(bmi_goal, 1)
-preview["Mål vikt (kg)"] = round(bmi_goal * (height_m ** 2), 1)
-preview["Super bonus ack"] = int(CFG.get(SUPER_ACC_KEY, 0))
+# 3) Extra – BM mål + Mål vikt + Super-ack (robust via modul)
+preview.update(compute_bm_fields(CFG))
 
 # Tid/kille inkl händer
 tid_kille_sek = float(preview.get("Tid per kille (sek)", 0.0))
