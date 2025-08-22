@@ -656,6 +656,15 @@ def _mmss(total_seconds: float) -> str:
         return f"{m}:{s:02d}"
     except Exception:
         return "-"
+def _hhmm(total_seconds: float) -> str:
+    try:
+        s = max(0, int(round(total_seconds)))
+        h, rem = divmod(s, 3600)
+        m = rem // 60
+        return f"{h}:{m:02d}"
+    except Exception:
+        return "-"
+
 tid_kille_inkl_hander = _mmss(tid_kille_sek + (hander_kille_sek if int(base.get("Händer aktiv",1))==1 else 0))
 
 # Egen totalsiffra inkl källor/bonus/personal/Eskilstuna
@@ -667,52 +676,57 @@ tot_men_including = (
     int(base.get("Bonus deltagit",0)) + int(base.get("Personal deltagit",0))
 )
 
-# Datum/ålder
-rad_datum = preview.get("Datum", base["Datum"])
-veckodag = preview.get("Veckodag", "-")
-if isinstance(rad_datum, str):
-    try:
-        _d = datetime.fromisoformat(rad_datum).date()
-    except Exception:
-        _d = datetime.today().date()
-else:
-    _d = base["_rad_datum"] if isinstance(base["_rad_datum"], date) else datetime.today().date()
-
-fd = CFG["fodelsedatum"]
-alder = _d.year - fd.year - ((_d.month, _d.day) < (fd.month, fd.day))
-top_line = st.columns([2,1,1,1])
-with top_line[0]:
-    st.markdown(f"**Datum/Veckodag:** {rad_datum} / {veckodag} &nbsp;•&nbsp; **Ålder:** {alder} år")
-with top_line[1]:
+# ===== NY LIVE-ORDNING =====
+st.markdown("**🕒 Tider (live)**")
+rowA = st.columns(2)
+with rowA[0]:
     st.metric("Klockan", preview.get("Klockan","-"))
-with top_line[2]:
-    st.metric("Totalt män (beräkningar)", int(preview.get("Totalt Män",0)))
-with top_line[3]:
-    st.metric("Super-bonus ack", int(CFG.get(SUPER_ACC_KEY,0)))
+with rowA[1]:
+    st.metric("Klockan + älskar/sover med", preview.get("Klockan inkl älskar/sover","-"))
 
-# Tid/Klocka/Män
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.metric("Summa tid", preview.get("Summa tid","-"))
-    st.metric("Summa tid (sek)", int(preview.get("Summa tid (sek)",0)))
-with c2:
-    st.metric("Tid/kille", preview.get("Tid per kille","-"))
-    st.metric("Tid/kille inkl händer", tid_kille_inkl_hander)
-with c3:
-    st.metric("Hårdhet", int(preview.get("Hårdhet",0)))
+rowB = st.columns(2)
+with rowB[0]:
+    st.metric("Summa tid (timmar:minuter)", _hhmm(float(preview.get("Summa tid (sek)",0))))
+with rowB[1]:
+    st.write("")
+
+rowC = st.columns(2)
+with rowC[0]:
+    st.metric("Totalt män", int(preview.get("Totalt Män",0)))
+with rowC[1]:
     st.metric("Totalt män (inkl alla)", int(tot_men_including))
 
-# Hångel/Sug/Händer
-c4, c5, c6 = st.columns(3)
-with c4:
-    st.metric("Hångel (m:s/kille)", preview.get("Hångel (m:s/kille)", "-"))
-    st.metric("Hångel (sek/kille)", int(preview.get("Hångel (sek/kille)", 0)))
-with c5:
+rowD = st.columns(2)
+with rowD[0]:
+    st.metric("Tid/kille inkl händer", tid_kille_inkl_hander)
+with rowD[1]:
+    st.metric("Tid/kille ex händer", _mmss(tid_kille_sek))
+
+rowE = st.columns(2)
+with rowE[0]:
     st.metric("Suger/kille (sek)", int(preview.get("Suger per kille (sek)", 0)))
+with rowE[1]:
     st.metric("Händer/kille (sek)", int(preview.get("Händer per kille (sek)", 0)))
-with c6:
+
+rowF = st.columns(2)
+with rowF[0]:
+    st.metric("Hångel (m:s/kille)", preview.get("Hångel (m:s/kille)", "-"))
+with rowF[1]:
+    st.metric("Hångel (sek/kille)", int(preview.get("Hångel (sek/kille)", 0)))
+
+rowG = st.columns(2)
+with rowG[0]:
     st.metric("Älskar (sek)", int(preview.get("Tid Älskar (sek)", 0)))
-    st.metric("Klockan + älskar/sover", preview.get("Klockan inkl älskar/sover","-"))
+with rowG[1]:
+    st.metric("Älskar (timmar:minuter)", _hhmm(float(preview.get("Tid Älskar (sek)", 0))))
+
+rowH = st.columns(3)
+with rowH[0]:
+    st.metric("Bonus kvar", int(CFG.get(BONUS_LEFT_KEY,0)))
+with rowH[1]:
+    st.metric("BM mål (BMI)", preview.get("BM mål", "-"))
+with rowH[2]:
+    st.metric("Mål vikt (kg)", preview.get("Mål vikt (kg)", "-"))
 
 # Ekonomi
 st.markdown("**💵 Ekonomi (live)**")
@@ -730,12 +744,20 @@ with e4:
     st.metric("Vinst", f"${float(preview.get('Vinst',0)):,.2f}")
     st.metric("Bonus kvar", int(CFG.get(BONUS_LEFT_KEY,0)))
 
-# BM mål / Mål vikt
+# BM mål / Mål vikt (redan visat ovan – behåller dessa två rader för bakåtkomp.)
 mv1, mv2 = st.columns(2)
 with mv1:
     st.metric("BM mål (BMI)", preview.get("BM mål", "-"))
 with mv2:
     st.metric("Mål vikt (kg)", preview.get("Mål vikt (kg)", "-"))
+
+# ===== Nils – längst ner i liven =====
+try:
+    nils_total = int(base.get("Nils",0)) + sum(int(r.get("Nils",0) or 0) for r in st.session_state[ROWS_KEY])
+except Exception:
+    nils_total = int(base.get("Nils",0))
+st.markdown("**👤 Nils (live)**")
+st.metric("Nils (total)", nils_total)
 
 st.caption("Obs: Vila-scenarion genererar inga prenumeranter, intäkter, kostnader eller lön. Bonus kvar minskas dock med 'Bonus deltagit'.")
 
