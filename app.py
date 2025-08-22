@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import random
 import json
@@ -63,7 +62,8 @@ INPUT_ORDER = [
     "in_bekanta","in_eskilstuna",
     "in_bonus_deltagit","in_personal_deltagit",
     "in_hander_aktiv",
-    "in_nils"
+    "in_nils",
+    "in_somn_h"  # <<< NYTT: sömn per rad
 ]
 
 # =========================
@@ -139,9 +139,11 @@ def init_state():
     st.session_state.setdefault(PENDING_BMI_KEY, {"scene": None, "sum": 0.0, "count": 0})
 
     # Defaults till inputs
+    cfg = st.session_state[CFG_KEY]
     defaults = {
         "in_tid_s":60, "in_tid_d":60, "in_vila":7, "in_dt_tid":60, "in_dt_vila":3,
-        "in_sover":0, "in_alskar":0, "in_nils":0, "in_hander_aktiv":1
+        "in_sover":0, "in_alskar":0, "in_nils":0, "in_hander_aktiv":1,
+        "in_somn_h": float(cfg.get(EXTRA_SLEEP_KEY, 7))  # <<< standard 7h
     }
     for k in INPUT_ORDER:
         st.session_state.setdefault(k, defaults.get(k, 0))
@@ -191,7 +193,8 @@ def apply_scenario_fill():
     CFG = st.session_state[CFG_KEY]
     s = st.session_state[SCENARIO_KEY]
 
-    keep_defaults = {"in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,"in_hander_aktiv":st.session_state.get("in_hander_aktiv",1)}
+    keep_defaults = {"in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,"in_hander_aktiv":st.session_state.get("in_hander_aktiv",1),
+                     "in_somn_h": st.session_state.get("in_somn_h", float(CFG.get(EXTRA_SLEEP_KEY,7)))}
     for k in INPUT_ORDER: st.session_state[k] = keep_defaults.get(k, 0)
 
     def _slumpa_sexfalt():
@@ -254,8 +257,8 @@ with st.sidebar:
     CFG["BMI_GOAL"]         = st.number_input("BM mål (BMI)", min_value=10.0, max_value=40.0, value=float(CFG.get("BMI_GOAL",21.7)), step=0.1)
     CFG["HEIGHT_CM"]        = st.number_input("Längd (cm)", min_value=140, max_value=220, value=int(CFG.get("HEIGHT_CM",164)), step=1)
 
-    # >>> NYTT: Sömn efter scen (timmar) – används i tvingad schemaläggning
-    CFG[EXTRA_SLEEP_KEY]    = st.number_input("Sömn efter scen (timmar)", min_value=0.0, step=0.5, value=float(CFG.get(EXTRA_SLEEP_KEY,7)))
+    # >>> NYTT: Sömn efter scen (timmar) – standard (kan överstyras per rad)
+    CFG[EXTRA_SLEEP_KEY]    = st.number_input("Sömn efter scen – standard (timmar)", min_value=0.0, step=0.5, value=float(CFG.get(EXTRA_SLEEP_KEY,7)))
 
     st.markdown("---")
     st.subheader("Eskilstuna-intervall")
@@ -417,7 +420,8 @@ labels = {
     "in_bonus_deltagit":f"Bonus deltagit (kvar {int(CFG[BONUS_LEFT_KEY])})",
     "in_personal_deltagit":f"Personal deltagit (av {int(CFG['PROD_STAFF'])})",
     "in_hander_aktiv":"Händer aktiv (1=Ja, 0=Nej)",
-    "in_nils":"Nils (0/1/2)"
+    "in_nils":"Nils (0/1/2)",
+    "in_somn_h":"Sömn (h) – rad"  # <<< etikett
 }
 
 with c1:
@@ -440,6 +444,8 @@ with c2:
         st.number_input(labels[key], min_value=0, step=1, key=key)
     st.number_input(labels["in_hander_aktiv"], min_value=0, max_value=1, step=1, key="in_hander_aktiv")
     st.number_input(labels["in_nils"], min_value=0, step=1, key="in_nils")
+    # <<< NYTT: sömn per rad (float)
+    st.number_input(labels["in_somn_h"], min_value=0.0, step=0.5, key="in_somn_h")
 
 # =========================
 # Bygg basrad från inputs
@@ -486,9 +492,12 @@ def build_base_from_inputs():
         "LBL_PAPPAN": CFG["LBL_PAPPAN"],
         "LBL_GRANNAR": CFG["LBL_GRANNAR"],
         "LBL_NILS_VANNER": CFG["LBL_NILS_VANNER"],
-        "LBL_NILS_FAMILJ": CFG["LBL_NILS_FAMILJ"],
+        "LBL_NILS_FAMILJ"] : CFG["LBL_NILS_FAMILJ"],
         "LBL_BEKANTA": CFG["LBL_BEKANTA"],
         "LBL_ESK": CFG["LBL_ESK"],
+
+        # <<< NYTT: sömn per rad (sparas i raden också)
+        "Sömn (h)": float(st.session_state.get("in_somn_h", CFG.get(EXTRA_SLEEP_KEY, 7)))
     }
     # Känner = summa av käll-etiketter (radnivå)
     base["Känner"] = (
@@ -660,7 +669,8 @@ def _compute_end_and_next(start_dt: datetime, base: dict, preview: dict, sleep_h
     return end_incl, end_sleep, next_start
 
 start_dt = st.session_state[NEXT_START_DT_KEY]
-sleep_h  = float(CFG.get(EXTRA_SLEEP_KEY, 7))
+# <<< NYTT: använd radens egen sömn om angiven
+sleep_h  = float(st.session_state.get("in_somn_h", CFG.get(EXTRA_SLEEP_KEY, 7)))
 end_incl, end_sleep, forced_next = _compute_end_and_next(start_dt, base, preview, sleep_h)
 
 # Liten varning om extrem längd (>36h innan sömn)
@@ -783,7 +793,8 @@ SAVE_NUM_COLS = [
     "Tid S","Tid D","Vila","DT tid (sek/kille)","DT vila (sek/kille)",
     "Älskar","Sover med",
     LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK,
-    "Bonus deltagit","Personal deltagit","Händer aktiv","Nils"
+    "Bonus deltagit","Personal deltagit","Händer aktiv","Nils",
+    "Sömn (h)"  # <<< så den inte blir None
 ]
 
 def _prepare_row_for_save(_preview: dict, _base: dict, _cfg: dict) -> dict:
@@ -793,8 +804,8 @@ def _prepare_row_for_save(_preview: dict, _base: dict, _cfg: dict) -> dict:
     row["BM mål"] = _preview.get("BM mål")
     row["Mål vikt (kg)"] = _preview.get("Mål vikt (kg)")
     row["Super bonus ack"] = _preview.get("Super bonus ack")
-    # Spara även sömn(h) för historik-återspelning
-    row["Sömn (h)"] = float(_cfg.get(EXTRA_SLEEP_KEY, 7))
+    # Spara även sömn(h) för historik-återspelning (per rad, inte bara standard)
+    row["Sömn (h)"] = float(st.session_state.get("in_somn_h", _cfg.get(EXTRA_SLEEP_KEY, 7)))
 
     for k in SAVE_NUM_COLS:
         if row.get(k) is None: row[k] = 0
