@@ -47,7 +47,7 @@ PENDING_BMI_KEY = "PENDING_BMI"
 
 # >>> Nycklar för tvingad scenstart
 NEXT_START_DT_KEY = "NEXT_START_DT"   # datetime för nästa scenstart (tvingad)
-EXTRA_SLEEP_KEY   = "EXTRA_SLEEP_H"   # timmar
+EXTRA_SLEEP_KEY   = "EXTRA_SLEEP_H"   # timmar (standard/sidopanel)
 
 # =========================
 # Input-ordning (EXAKT)
@@ -63,7 +63,7 @@ INPUT_ORDER = [
     "in_bonus_deltagit","in_personal_deltagit",
     "in_hander_aktiv",
     "in_nils",
-    "in_somn_h"  # <<< NYTT: sömn per rad
+    "in_somn_h",  # NYTT: sömn per rad
 ]
 
 # =========================
@@ -87,7 +87,7 @@ def _init_cfg_defaults():
         "BMI_GOAL": 21.7,
         "HEIGHT_CM": 164,
 
-        # Standard SÖMN efter scen (timmar)
+        # Standard SÖMN efter scen (timmar) – kan ändras i sidopanel
         EXTRA_SLEEP_KEY: 7,
 
         # Eskilstuna-intervall
@@ -139,11 +139,10 @@ def init_state():
     st.session_state.setdefault(PENDING_BMI_KEY, {"scene": None, "sum": 0.0, "count": 0})
 
     # Defaults till inputs
-    cfg = st.session_state[CFG_KEY]
     defaults = {
         "in_tid_s":60, "in_tid_d":60, "in_vila":7, "in_dt_tid":60, "in_dt_vila":3,
         "in_sover":0, "in_alskar":0, "in_nils":0, "in_hander_aktiv":1,
-        "in_somn_h": float(cfg.get(EXTRA_SLEEP_KEY, 7))  # <<< standard 7h
+        "in_somn_h": 7.0,
     }
     for k in INPUT_ORDER:
         st.session_state.setdefault(k, defaults.get(k, 0))
@@ -193,8 +192,11 @@ def apply_scenario_fill():
     CFG = st.session_state[CFG_KEY]
     s = st.session_state[SCENARIO_KEY]
 
-    keep_defaults = {"in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,"in_hander_aktiv":st.session_state.get("in_hander_aktiv",1),
-                     "in_somn_h": st.session_state.get("in_somn_h", float(CFG.get(EXTRA_SLEEP_KEY,7)))}
+    keep_defaults = {
+        "in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,
+        "in_hander_aktiv":st.session_state.get("in_hander_aktiv",1),
+        "in_somn_h": st.session_state.get("in_somn_h", CFG.get(EXTRA_SLEEP_KEY, 7))
+    }
     for k in INPUT_ORDER: st.session_state[k] = keep_defaults.get(k, 0)
 
     def _slumpa_sexfalt():
@@ -257,8 +259,8 @@ with st.sidebar:
     CFG["BMI_GOAL"]         = st.number_input("BM mål (BMI)", min_value=10.0, max_value=40.0, value=float(CFG.get("BMI_GOAL",21.7)), step=0.1)
     CFG["HEIGHT_CM"]        = st.number_input("Längd (cm)", min_value=140, max_value=220, value=int(CFG.get("HEIGHT_CM",164)), step=1)
 
-    # >>> NYTT: Sömn efter scen (timmar) – standard (kan överstyras per rad)
-    CFG[EXTRA_SLEEP_KEY]    = st.number_input("Sömn efter scen – standard (timmar)", min_value=0.0, step=0.5, value=float(CFG.get(EXTRA_SLEEP_KEY,7)))
+    # >>> NYTT: Sömn efter scen (timmar) – standard, kan omskrivas per rad
+    CFG[EXTRA_SLEEP_KEY]    = st.number_input("Sömn efter scen (timmar) – standard", min_value=0.0, step=0.5, value=float(CFG.get(EXTRA_SLEEP_KEY,7)))
 
     st.markdown("---")
     st.subheader("Eskilstuna-intervall")
@@ -377,7 +379,7 @@ with st.sidebar:
                 st.session_state[BMI_CNT_KEY] = int(bmi_cnt)
                 st.session_state[PENDING_BMI_KEY] = {"scene": None, "sum": 0.0, "count": 0}
 
-                # >>> Tvingad nästa start beräknas från historiken
+                # >>> Tvingad nästa start beräknas från historiken (använder sparad "Sömn (h)")
                 st.session_state[NEXT_START_DT_KEY] = _recompute_next_start_from_rows(st.session_state[ROWS_KEY])
 
                 st.session_state[SCENEINFO_KEY] = _current_scene_info()
@@ -421,7 +423,7 @@ labels = {
     "in_personal_deltagit":f"Personal deltagit (av {int(CFG['PROD_STAFF'])})",
     "in_hander_aktiv":"Händer aktiv (1=Ja, 0=Nej)",
     "in_nils":"Nils (0/1/2)",
-    "in_somn_h":"Sömn (h) – rad"  # <<< etikett
+    "in_somn_h":"Sömn (h, rad)",  # NYTT
 }
 
 with c1:
@@ -444,8 +446,8 @@ with c2:
         st.number_input(labels[key], min_value=0, step=1, key=key)
     st.number_input(labels["in_hander_aktiv"], min_value=0, max_value=1, step=1, key="in_hander_aktiv")
     st.number_input(labels["in_nils"], min_value=0, step=1, key="in_nils")
-    # <<< NYTT: sömn per rad (float)
-    st.number_input(labels["in_somn_h"], min_value=0.0, step=0.5, key="in_somn_h")
+    # NYTT: sömn per rad (float)
+    st.number_input(labels["in_somn_h"], min_value=0.0, step=0.5, key="in_somn_h", value=float(st.session_state.get("in_somn_h", CFG.get(EXTRA_SLEEP_KEY,7))))
 
 # =========================
 # Bygg basrad från inputs
@@ -492,11 +494,11 @@ def build_base_from_inputs():
         "LBL_PAPPAN": CFG["LBL_PAPPAN"],
         "LBL_GRANNAR": CFG["LBL_GRANNAR"],
         "LBL_NILS_VANNER": CFG["LBL_NILS_VANNER"],
-        "LBL_NILS_FAMILJ"] : CFG["LBL_NILS_FAMILJ"],
+        "LBL_NILS_FAMILJ": CFG["LBL_NILS_FAMILJ"],
         "LBL_BEKANTA": CFG["LBL_BEKANTA"],
         "LBL_ESK": CFG["LBL_ESK"],
 
-        # <<< NYTT: sömn per rad (sparas i raden också)
+        # sömn per rad
         "Sömn (h)": float(st.session_state.get("in_somn_h", CFG.get(EXTRA_SLEEP_KEY, 7)))
     }
     # Känner = summa av käll-etiketter (radnivå)
@@ -504,10 +506,10 @@ def build_base_from_inputs():
         int(base[CFG["LBL_PAPPAN"]]) + int(base[CFG["LBL_GRANNAR"]]) +
         int(base[CFG["LBL_NILS_VANNER"]]) + int(base[CFG["LBL_NILS_FAMILJ"]])
     )
-    # meta till beräkning
+    # meta till beräkning (tvingad start)
     base["_rad_datum"]    = start_dt.date()
     base["_fodelsedatum"] = CFG["fodelsedatum"]
-    base["_starttid"]     = start_dt.time()  # T V I N G A D starttid
+    base["_starttid"]     = start_dt.time()
     return base
 
 # =========================
@@ -669,8 +671,7 @@ def _compute_end_and_next(start_dt: datetime, base: dict, preview: dict, sleep_h
     return end_incl, end_sleep, next_start
 
 start_dt = st.session_state[NEXT_START_DT_KEY]
-# <<< NYTT: använd radens egen sömn om angiven
-sleep_h  = float(st.session_state.get("in_somn_h", CFG.get(EXTRA_SLEEP_KEY, 7)))
+sleep_h  = float(base.get("Sömn (h)", CFG.get(EXTRA_SLEEP_KEY, 7)))  # per rad
 end_incl, end_sleep, forced_next = _compute_end_and_next(start_dt, base, preview, sleep_h)
 
 # Liten varning om extrem längd (>36h innan sömn)
@@ -793,8 +794,7 @@ SAVE_NUM_COLS = [
     "Tid S","Tid D","Vila","DT tid (sek/kille)","DT vila (sek/kille)",
     "Älskar","Sover med",
     LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK,
-    "Bonus deltagit","Personal deltagit","Händer aktiv","Nils",
-    "Sömn (h)"  # <<< så den inte blir None
+    "Bonus deltagit","Personal deltagit","Händer aktiv","Nils"
 ]
 
 def _prepare_row_for_save(_preview: dict, _base: dict, _cfg: dict) -> dict:
@@ -804,8 +804,8 @@ def _prepare_row_for_save(_preview: dict, _base: dict, _cfg: dict) -> dict:
     row["BM mål"] = _preview.get("BM mål")
     row["Mål vikt (kg)"] = _preview.get("Mål vikt (kg)")
     row["Super bonus ack"] = _preview.get("Super bonus ack")
-    # Spara även sömn(h) för historik-återspelning (per rad, inte bara standard)
-    row["Sömn (h)"] = float(st.session_state.get("in_somn_h", _cfg.get(EXTRA_SLEEP_KEY, 7)))
+    # Spara även sömn(h) för historik-återspelning (per rad)
+    row["Sömn (h)"] = float(_base.get("Sömn (h)", _cfg.get(EXTRA_SLEEP_KEY, 7)))
 
     for k in SAVE_NUM_COLS:
         if row.get(k) is None: row[k] = 0
