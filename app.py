@@ -384,6 +384,7 @@ with st.sidebar:
 st.subheader("Input (exakt ordning)")
 c1,c2 = st.columns(2)
 
+CFG = st.session_state[CFG_KEY]
 LBL_PAPPAN = CFG["LBL_PAPPAN"]
 LBL_GRANNAR = CFG["LBL_GRANNAR"]
 LBL_NV = CFG["LBL_NILS_VANNER"]
@@ -505,9 +506,9 @@ def _hardhet_from(base, preview):
     if tm > 700: hard += 7
     if tm > 1000: hard += 10
     if int(base.get("Svarta",0)) > 0: hard += 3
-    # vila/super -> 0
+    # ENDA undantaget: Vila -> 0
     typ = str(base.get("Typ",""))
-    if "Vila" in typ or "Super bonus" in typ:
+    if "Vila" in typ:
         hard = 0
     return hard
 
@@ -518,8 +519,8 @@ def _econ_compute(base, preview):
     hardhet = _hardhet_from(base, preview)
     out["Hårdhet"] = hardhet
 
-    # Prenumeranter
-    if "Vila" in typ or "Super bonus" in typ:
+    # Prenumeranter (bara Vila nollar)
+    if "Vila" in typ:
         pren = 0
     else:
         pren = ( int(base.get("DP",0)) + int(base.get("DPP",0)) + int(base.get("DAP",0)) +
@@ -534,10 +535,10 @@ def _econ_compute(base, preview):
     ksam = int(preview.get("Känner sammanlagt", 0))
     if ksam == 0:
         ksam = int(preview.get("Känner", 0))
-    out["Intäkt Känner"] = float(ksam) * 30.0 if not ("Vila" in typ or "Super bonus" in typ) else 0.0
+    out["Intäkt Känner"] = 0.0 if "Vila" in typ else float(ksam) * 30.0
 
     # Kostnad män
-    if "Vila" in typ or "Super bonus" in typ:
+    if "Vila" in typ:
         kost = 0.0
     else:
         timmar = float(preview.get("Summa tid (sek)", 0)) / 3600.0
@@ -571,9 +572,7 @@ def _econ_compute(base, preview):
         faktor = 0.70
     else:
         faktor = 0.60
-    lon = grund_lon * faktor
-    if "Vila" in typ or "Super bonus" in typ:
-        lon = 0.0
+    lon = 0.0 if "Vila" in typ else grund_lon * faktor
     out["Lön Malin"] = float(lon)
     out["Vinst"] = float(out["Intäkt företag"]) - float(out["Lön Malin"])
     return out
@@ -617,7 +616,7 @@ def _compute_bmi_pending_for_current_row(pren: int, scen_typ: str):
     12:10%, 13:14%, 14:19%, 15:17%, 16:15%, 17:13%, 18:12%.
     Returnerar (summa_BMI, antal) för aktuell rad.
     """
-    if pren <= 0 or ("Vila" in scen_typ) or ("Super bonus" in scen_typ):
+    if pren <= 0 or ("Vila" in scen_typ):
         return 0.0, 0
 
     values  = [12, 13, 14, 15, 16, 17, 18]
@@ -647,7 +646,7 @@ preview["Super bonus ack"] = int(CFG.get(SUPER_ACC_KEY, 0))
 # spara den “pendande” BMI-summan/räknaren i state, så spar-fasen kan addera samma sample
 st.session_state[PENDING_BMI_KEY] = {"scene": current_scene, "sum": float(pend_sum), "count": int(pend_cnt)}
 
-# Tid/kille inkl händer
+# Tid/kille inkl händer (endast visning, exkludera händer om inaktiv)
 tid_kille_sek = float(preview.get("Tid per kille (sek)", 0.0))
 hander_kille_sek = float(preview.get("Händer per kille (sek)", 0.0))
 def _mmss(total_seconds: float) -> str:
@@ -738,7 +737,7 @@ with mv1:
 with mv2:
     st.metric("Mål vikt (kg)", preview.get("Mål vikt (kg)", "-"))
 
-st.caption("Obs: Vila-scenarion och Super bonus genererar inga prenumeranter, intäkter, kostnader eller lön. Bonus kvar minskas dock med 'Bonus deltagit'.")
+st.caption("Obs: Vila-scenarion genererar inga prenumeranter, intäkter, kostnader eller lön. Bonus kvar minskas dock med 'Bonus deltagit'.")
 
 # =========================
 # Sparrad – full rad (base + preview) och nollställ None
