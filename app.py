@@ -129,7 +129,8 @@ def init_state():
     # default för tidsfält m.m.
     defaults = {
         "in_tid_s":60, "in_tid_d":60, "in_vila":7, "in_dt_tid":60, "in_dt_vila":3,
-        "in_sover":0, "in_alskar":0, "in_nils":0, "in_hander_aktiv":1
+        "in_sover":0, "in_alskar":0, "in_nils":0, "in_hander_aktiv":1,
+        "in_somn_timmar":7  # <-- standard sömn
     }
     for k in INPUT_ORDER:
         st.session_state.setdefault(k, defaults.get(k, 0))
@@ -190,7 +191,11 @@ def apply_scenario_fill():
     s = st.session_state[SCENARIO_KEY]
 
     # nolla (behåll tidsstandarder och händer aktiv)
-    keep_defaults = {"in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,"in_hander_aktiv":st.session_state.get("in_hander_aktiv",1)}
+    keep_defaults = {
+        "in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,
+        "in_hander_aktiv":st.session_state.get("in_hander_aktiv",1),
+        "in_somn_timmar":7  # <-- standard sömn vid scenariobyte
+    }
     for k in INPUT_ORDER:
         st.session_state[k] = keep_defaults.get(k, 0)
 
