@@ -1,62 +1,61 @@
-# statistik.py
-import pandas as pd
+# -*- coding: utf-8 -*-
+import math
 
-def _num(series, as_int=False):
-    s = pd.to_numeric(series, errors="coerce").fillna(0)
-    return s.astype(int) if as_int else s.astype(float)
+def _sum_col(df, col):
+    try:
+        return int(df[col].fillna(0).astype(float).sum())
+    except Exception:
+        return 0
 
-def compute_stats(rows: pd.DataFrame, cfg: dict) -> dict:
+def compute_stats(rows_df, cfg=None):
     """
-    Minimal, robust statistik tills vi bygger ut.
-    - Summerar intäkter/kostnader/vinst
-    - Totalt antal prenumeranter
-    - BM-mål & mål-vikt från ackumulerade värden i cfg (BM_ACC_SUM, BM_ACC_N) + HEIGHT_M
+    Minimal statistik enligt dina definitioner:
+    - Känner sammanlagt: sum av maxvärden (från cfg)
+    - Totalt män (statistik):
+        SUM över rader av (Män + Svarta + Bonus deltagit + [Eskilstuna-etikett])
+        + (MAX_PAPPAN + MAX_GRANNAR + MAX_NILS_VANNER + MAX_NILS_FAMILJ + MAX_BEKANTA + PROD_STAFF)
+      (den sista parentesen läggs EN gång)
+    - Svarta (statistik): SUM (Svarta + Eskilstuna + Bonus deltagit) för rader där Svarta > 0
     """
-    stats = {}
-    if rows is None or rows.empty:
-        # visa i alla fall BM-mål om det finns i cfg
-        bm_sum = float(cfg.get("BM_ACC_SUM", 0))
-        bm_n   = int(cfg.get("BM_ACC_N", 0))
-        bm_avg = round(bm_sum / bm_n, 2) if bm_n > 0 else 0.0
-        height_m = float(cfg.get("HEIGHT_M", 1.64))
-        target_w = round(bm_avg * (height_m ** 2), 1) if bm_avg > 0 else 0.0
-        return {
-            "Totalt antal scener": 0,
-            "Totalt antal prenumeranter": 0,
-            "BM-mål (snitt)": bm_avg,
-            "Mål vikt (kg)": target_w,
-        }
+    if rows_df is None or rows_df.empty:
+        return {}
 
-    stats["Totalt antal scener"] = len(rows)
+    # etiketter
+    esk_lbl = cfg.get("LBL_ESK", "Eskilstuna killar") if cfg else "Eskilstuna killar"
 
-    # Summor (robust)
-    for col, label in [
-        ("Intäkter", "Totalt intäkter (USD)"),
-        ("Kostnad män", "Totalt kostnad män (USD)"),
-        ("Intäkt Känner", "Totalt intäkt känner (USD)"),
-        ("Intäkt företag", "Totalt intäkt företag (USD)"),
-        ("Lön Malin", "Totalt lön Malin (USD)"),
-        ("Vinst", "Totalt vinst (USD)"),
-    ]:
-        if col in rows.columns:
-            stats[label] = float(_num(rows[col]).sum())
-        else:
-            stats[label] = 0.0
+    # Känner sammanlagt (från cfg maxvärden)
+    max_sum = 0
+    if cfg:
+        max_sum = (int(cfg.get("MAX_PAPPAN",0)) + int(cfg.get("MAX_GRANNAR",0)) +
+                   int(cfg.get("MAX_NILS_VANNER",0)) + int(cfg.get("MAX_NILS_FAMILJ",0)))
 
-    # Prenumeranter
-    if "Prenumeranter" in rows.columns:
-        stats["Totalt antal prenumeranter"] = int(_num(rows["Prenumeranter"]).sum())
-    else:
-        stats["Totalt antal prenumeranter"] = 0
+    # Totalt män (statistik)
+    part_rows = (
+        _sum_col(rows_df, "Män") +
+        _sum_col(rows_df, "Svarta") +
+        _sum_col(rows_df, "Bonus deltagit") +
+        _sum_col(rows_df, esk_lbl)
+    )
+    one_off = 0
+    if cfg:
+        one_off = (int(cfg.get("MAX_PAPPAN",0)) + int(cfg.get("MAX_GRANNAR",0)) +
+                   int(cfg.get("MAX_NILS_VANNER",0)) + int(cfg.get("MAX_NILS_FAMILJ",0)) +
+                   int(cfg.get("MAX_BEKANTA",0)) + int(cfg.get("PROD_STAFF",0)))
+    totalt_man_stat = part_rows + one_off
 
-    # BM-mål från CFG-ackumulatorer
-    bm_sum = float(cfg.get("BM_ACC_SUM", 0))
-    bm_n   = int(cfg.get("BM_ACC_N", 0))
-    bm_avg = round(bm_sum / bm_n, 2) if bm_n > 0 else 0.0
-    height_m = float(cfg.get("HEIGHT_M", 1.64))
-    target_w = round(bm_avg * (height_m ** 2), 1) if bm_avg > 0 else 0.0
+    # Svarta (statistik) – rader där Svarta > 0
+    try:
+        mask = rows_df["Svarta"].fillna(0).astype(float) > 0
+        svarta_stat = int(
+            rows_df.loc[mask, "Svarta"].fillna(0).astype(float).sum()
+            + rows_df.loc[mask, esk_lbl].fillna(0).astype(float).sum()
+            + rows_df.loc[mask, "Bonus deltagit"].fillna(0).astype(float).sum()
+        )
+    except Exception:
+        svarta_stat = 0
 
-    stats["BM-mål (snitt)"] = bm_avg
-    stats["Mål vikt (kg)"]  = target_w
-
-    return stats
+    return {
+        "Känner sammanlagt (maxvärden)": max_sum,
+        "Totalt män (statistik)": totalt_man_stat,
+        "Svarta (statistik)": svarta_stat,
+    }
