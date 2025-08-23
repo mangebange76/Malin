@@ -31,25 +31,25 @@ st.set_page_config(page_title="Malin – produktionsapp", layout="wide")
 st.title("Malin – produktionsapp (profiler + Google Sheets)")
 
 # ======== State-nycklar ========
-CFG_KEY        = "CFG"           # alla config + etiketter
-ROWS_KEY       = "ROWS"          # sparade rader lokalt (list[dict])
-HIST_MM_KEY    = "HIST_MINMAX"   # min/max per fält för slump
-SCENEINFO_KEY  = "CURRENT_SCENE" # (scen_nr, rad_datum, veckodag)
-SCENARIO_KEY   = "SCENARIO"      # rullist-valet
-PROFILE_KEY    = "PROFILE"       # vald profil
-BONUS_LEFT_KEY = "BONUS_AVAILABLE"   # alias i CFG
-SUPER_ACC_KEY  = "SUPER_BONUS_ACC"   # ack superbonus i CFG
+CFG_KEY        = "CFG"
+ROWS_KEY       = "ROWS"
+HIST_MM_KEY    = "HIST_MINMAX"
+SCENEINFO_KEY  = "CURRENT_SCENE"
+SCENARIO_KEY   = "SCENARIO"
+PROFILE_KEY    = "PROFILE"
+BONUS_LEFT_KEY = "BONUS_AVAILABLE"
+SUPER_ACC_KEY  = "SUPER_BONUS_ACC"
 
 # BMI-ackumulatorer
 BMI_SUM_KEY     = "BMI_SUM"
 BMI_CNT_KEY     = "BMI_CNT"
 PENDING_BMI_KEY = "PENDING_BMI"
 
-# >>> Nycklar för tvingad scenstart
+# Tvingad scenstart
 NEXT_START_DT_KEY = "NEXT_START_DT"   # datetime för nästa scenstart (tvingad)
 EXTRA_SLEEP_KEY   = "EXTRA_SLEEP_H"   # timmar
 
-# First-boot flagga (auto-laddning från Sheets)
+# First-boot flagga
 FIRST_BOOT_KEY = "FIRST_BOOT_DONE"
 
 # =========================
@@ -115,7 +115,6 @@ def _ensure_next_start_dt_exists():
         st.session_state[NEXT_START_DT_KEY] = datetime.combine(cfg["startdatum"], cfg["starttid"])
 
 def _current_scene_info():
-    # Bygg sceninfo från T V I N G A D nästa-start (inte dag-index)
     _ensure_next_start_dt_exists()
     dt = st.session_state[NEXT_START_DT_KEY]
     veckodagar = ["Måndag","Tisdag","Onsdag","Torsdag","Fredag","Lördag","Söndag"]
@@ -148,12 +147,8 @@ def init_state():
     for k in INPUT_ORDER:
         st.session_state.setdefault(k, defaults.get(k, 0))
 
-    # Tvingad nästa start
     _ensure_next_start_dt_exists()
-
-    # First boot flag
     st.session_state.setdefault(FIRST_BOOT_KEY, False)
-
     if SCENEINFO_KEY not in st.session_state:
         st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
@@ -161,7 +156,6 @@ init_state()
 
 # ===== Hjälpare: typ-tvång från Sheets =====
 def _coerce_cfg_types(cfg: dict) -> dict:
-    """Gör om strängar från Sheets -> date/time/nummer, och behåll övrigt."""
     out = dict(cfg)
 
     def _to_date(v):
@@ -170,7 +164,7 @@ def _coerce_cfg_types(cfg: dict) -> dict:
             for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y"):
                 try: return datetime.strptime(v.strip(), fmt).date()
                 except Exception: pass
-        return out.get("startdatum", date(1990,1,1))  # fallback
+        return out.get("startdatum", date(1990,1,1))
 
     def _to_time(v):
         if isinstance(v, time): return v
@@ -179,16 +173,13 @@ def _coerce_cfg_types(cfg: dict) -> dict:
             try:
                 hh = int(parts[0]); mm = int(parts[1]) if len(parts) > 1 else 0
                 return time(hh, mm)
-            except Exception:
-                pass
-        return out.get("starttid", time(7,0))  # fallback
+            except Exception: pass
+        return out.get("starttid", time(7,0))
 
-    # Kända nycklar som kan komma som strängar
     if "startdatum"   in out: out["startdatum"]   = _to_date(out["startdatum"])
     if "fodelsedatum" in out: out["fodelsedatum"] = _to_date(out["fodelsedatum"])
     if "starttid"     in out: out["starttid"]     = _to_time(out["starttid"])
 
-    # numeriska fält
     for k in ("avgift_usd","BONUS_PCT","SUPER_BONUS_PCT","BMI_GOAL"):
         if k in out:
             try: out[k] = float(out[k])
@@ -198,7 +189,6 @@ def _coerce_cfg_types(cfg: dict) -> dict:
             try: out[k] = int(float(out[k]))
             except Exception: pass
 
-    # sömn
     if EXTRA_SLEEP_KEY in out:
         try: out[EXTRA_SLEEP_KEY] = float(out[EXTRA_SLEEP_KEY])
         except Exception: pass
@@ -206,13 +196,11 @@ def _coerce_cfg_types(cfg: dict) -> dict:
     return out
 
 def _recompute_next_start_from_rows(rows):
-    """Gå igenom historiken och räkna fram tvingad NEXT_START_DT."""
     cfg = st.session_state[CFG_KEY]
     cur = datetime.combine(cfg["startdatum"], cfg["starttid"])
     if not rows:
         return cur
     for r in rows:
-        # Summa tid (sek) + 1h vila + 3h hångel + (älskar+sover)*20min + sömn(h)
         try: summa = float(r.get("Summa tid (sek)", 0))
         except Exception: summa = 0.0
         try: alskar = int(float(r.get("Älskar", 0)))
@@ -230,7 +218,6 @@ def _recompute_next_start_from_rows(rows):
             if end_sleep.time() <= time(7,0):
                 cur = base7
             else:
-                # ceil till nästa hela timme
                 cur = (end_sleep.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
         else:
             cur = datetime.combine(cur.date() + timedelta(days=1), time(7,0))
@@ -254,9 +241,19 @@ def _minmax_from_hist(colname: str):
     st.session_state[HIST_MM_KEY][colname] = mm
     return mm
 
-def _rand_1_to_max(colname: str):
+def _hist_hi(colname: str) -> int:
     _, hi = _minmax_from_hist(colname)
-    return 0 if hi<=0 else random.randint(1, hi)
+    try:
+        return int(hi)
+    except Exception:
+        return 0
+
+def _rand_30_60_of_hist_max(colname: str) -> int:
+    hi = _hist_hi(colname)
+    if hi <= 0: return 0
+    lo = max(1, int(round(0.30 * hi)))
+    hi2 = max(lo, int(round(0.60 * hi)))
+    return random.randint(lo, hi2)
 
 def _rand_esk(CFG):
     lo = int(CFG.get("ESK_MIN", 0)); hi = int(CFG.get("ESK_MAX", lo))
@@ -264,8 +261,6 @@ def _rand_esk(CFG):
     return random.randint(lo, hi) if hi>lo else lo
 
 def _load_profile_settings_and_data(profile_name: str):
-    """Läs in inställningar + data från Sheets, tvångskonvertera typer och uppdatera state."""
-    # 1) Inställningar
     try:
         prof_cfg = read_profile_settings(profile_name)
         if prof_cfg:
@@ -276,11 +271,9 @@ def _load_profile_settings_and_data(profile_name: str):
     except Exception as e:
         st.error(f"Kunde inte läsa profilens inställningar ({profile_name}): {e}")
 
-    # 2) Data
     try:
         df = read_profile_data(profile_name)
         st.session_state[ROWS_KEY] = df.to_dict(orient="records") if (df is not None and not df.empty) else []
-        # Bygg min/max för slump
         st.session_state[HIST_MM_KEY] = {}
         CFG = st.session_state[CFG_KEY]
         LBL_PAPPAN = CFG["LBL_PAPPAN"]; LBL_GRANNAR = CFG["LBL_GRANNAR"]
@@ -288,9 +281,10 @@ def _load_profile_settings_and_data(profile_name: str):
         LBL_BEK = CFG["LBL_BEKANTA"]; LBL_ESK = CFG["LBL_ESK"]
         for r in st.session_state[ROWS_KEY]:
             for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
-                        LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
+                        LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK,
+                        "Bonus deltagit","Personal deltagit"]:
                 _add_hist_value(col, r.get(col, 0))
-        # BMI ack
+
         bmi_sum = 0.0; bmi_cnt = 0
         for r in st.session_state[ROWS_KEY]:
             try:
@@ -305,174 +299,89 @@ def _load_profile_settings_and_data(profile_name: str):
         st.session_state[BMI_CNT_KEY] = int(bmi_cnt)
         st.session_state[PENDING_BMI_KEY] = {"scene": None, "sum": 0.0, "count": 0}
 
-        # >>> Tvingad nästa start beräknas från historiken
         st.session_state[NEXT_START_DT_KEY] = _recompute_next_start_from_rows(st.session_state[ROWS_KEY])
-
         st.session_state[SCENEINFO_KEY] = _current_scene_info()
         st.success(f"✅ Läste in {len(st.session_state[ROWS_KEY])} rader och inställningar för '{profile_name}'.")
     except Exception as e:
         st.error(f"Kunde inte läsa profilens data ({profile_name}): {e}")
 
 # =========================
-# 30–60%-slump baserad på historiskt max + DP/DPP/DAP/TAP-logik
+# Scenario-fill (med ny slumpning)
 # =========================
-def _hist_max(colname: str) -> int:
-    """Största positiva heltal i historiken för given kolumn."""
-    m = 0
-    for r in st.session_state.get(ROWS_KEY, []):
-        try:
-            v = r.get(colname, 0)
-            v = int(float(v)) if v not in (None, "") else 0
-            if v > m:
-                m = v
-        except Exception:
-            pass
-    return int(m)
+def _slumpa_bas_kallor_enligt_regler(CFG):
+    # 30–60% av historiskt max per kolumn
+    st.session_state["in_man"]            = _rand_30_60_of_hist_max("Män")
+    st.session_state["in_svarta"]         = _rand_30_60_of_hist_max("Svarta")
+    st.session_state["in_pappan"]         = _rand_30_60_of_hist_max(CFG["LBL_PAPPAN"])
+    st.session_state["in_grannar"]        = _rand_30_60_of_hist_max(CFG["LBL_GRANNAR"])
+    st.session_state["in_nils_vanner"]    = _rand_30_60_of_hist_max(CFG["LBL_NILS_VANNER"])
+    st.session_state["in_nils_familj"]    = _rand_30_60_of_hist_max(CFG["LBL_NILS_FAMILJ"])
+    st.session_state["in_bekanta"]        = _rand_30_60_of_hist_max(CFG["LBL_BEKANTA"])
+    st.session_state["in_personal_deltagit"] = _rand_30_60_of_hist_max("Personal deltagit")
+    st.session_state["in_eskilstuna"]     = _rand_30_60_of_hist_max(CFG["LBL_ESK"])
 
-def _sum_hist(colname: str) -> int:
-    """Summan (heltal) i historiken för given kolumn."""
-    s = 0
-    for r in st.session_state.get(ROWS_KEY, []):
-        try:
-            v = r.get(colname, 0)
-            v = int(float(v)) if v not in (None, "") else 0
-            s += v
-        except Exception:
-            pass
-    return int(s)
+    # Summa
+    total_bas = (
+        int(st.session_state["in_man"]) + int(st.session_state["in_svarta"]) +
+        int(st.session_state["in_pappan"]) + int(st.session_state["in_grannar"]) +
+        int(st.session_state["in_nils_vanner"]) + int(st.session_state["in_nils_familj"]) +
+        int(st.session_state["in_bekanta"]) + int(st.session_state["in_personal_deltagit"]) +
+        int(st.session_state["in_eskilstuna"])
+    )
 
-def _rand_30_60_of_hist_max(colname: str) -> int:
-    """
-    Slumpa ett heltal = 30–60% av historiskt max för kolumnen.
-    Om ingen historik -> 0.
-    """
-    hi = _hist_max(colname)
-    if hi <= 0:
-        return 0
-    pct = random.uniform(0.30, 0.60)
-    return max(0, int(round(hi * pct)))
+    # DP = 60% av totalsumman (avrunda)
+    dp_val = int(round(0.60 * total_bas))
 
-def _fill_core_30_60(CFG: dict, force_zero: dict | None = None) -> int:
-    """
-    Fyll in_*-fälten med 30–60% av historiskt max.
-    force_zero: {input_key: True} för att sätta vissa fält = 0 (scenario-regler).
-    Returnerar totalsumman av de 9 fälten.
-    """
-    if force_zero is None:
-        force_zero = {}
+    # Om kolumnsumma i historiken = 0 -> sätt 0, annars samma ”60%-regel”
+    def _hist_sum(col):
+        return sum(int(float(r.get(col, 0) or 0)) for r in st.session_state.get(ROWS_KEY, []))
 
-    labels_map = {
-        "in_man":               "Män",
-        "in_svarta":            "Svarta",
-        "in_pappan":            CFG["LBL_PAPPAN"],
-        "in_grannar":           CFG["LBL_GRANNAR"],
-        "in_nils_vanner":       CFG["LBL_NILS_VANNER"],
-        "in_nils_familj":       CFG["LBL_NILS_FAMILJ"],
-        "in_bekanta":           CFG["LBL_BEKANTA"],
-        "in_personal_deltagit": "Personal deltagit",
-        "in_eskilstuna":        CFG["LBL_ESK"],
-    }
+    st.session_state["in_dp"]  = dp_val
 
-    total = 0
-    for in_key, colname in labels_map.items():
-        if force_zero.get(in_key, False):
-            st.session_state[in_key] = 0
-            continue
-        v = _rand_30_60_of_hist_max(colname)
-        st.session_state[in_key] = int(v)
-        total += int(v)
-    return int(total)
+    st.session_state["in_dpp"] = int(round(0.60 * total_bas)) if _hist_sum("DPP") > 0 else 0
+    st.session_state["in_dap"] = int(round(0.60 * total_bas)) if _hist_sum("DAP") > 0 else 0
+    st.session_state["in_tap"] = int(round(0.40 * total_bas)) if _hist_sum("TAP") > 0 else 0
 
-def _apply_dp_pack_from_total(total_sum: int) -> None:
-    """
-    Sätt DP/DPP/DAP/TAP enligt regeln:
-      - DP = 60% av total_sum (avrundat)
-      - DPP = DP om historisk DPP-summa > 0, annars 0
-      - DAP = DP om historisk DAP-summa > 0, annars 0
-      - TAP = 40% av total_sum om historisk TAP-summa > 0, annars 0
-    """
-    dp = int(round(total_sum * 0.60))
-    st.session_state["in_dp"] = dp
-
-    dpp_hist = _sum_hist("DPP")
-    st.session_state["in_dpp"] = dp if dpp_hist > 0 else 0
-
-    dap_hist = _sum_hist("DAP")
-    st.session_state["in_dap"] = dp if dap_hist > 0 else 0
-
-    tap_hist = _sum_hist("TAP")
-    st.session_state["in_tap"] = int(round(total_sum * 0.40)) if tap_hist > 0 else 0
-
-# =========================
-# Scenario-fill
-# =========================
 def apply_scenario_fill():
     CFG = st.session_state[CFG_KEY]
     s = st.session_state[SCENARIO_KEY]
 
-    # Behåll standarder
-    keep_defaults = {
-        "in_tid_s":60, "in_tid_d":60, "in_vila":7,
-        "in_dt_tid":60, "in_dt_vila":3,
-        "in_hander_aktiv":st.session_state.get("in_hander_aktiv",1)
-    }
-    for k in INPUT_ORDER:
-        st.session_state[k] = keep_defaults.get(k, 0)
+    keep_defaults = {"in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,"in_hander_aktiv":st.session_state.get("in_hander_aktiv",1)}
+    for k in INPUT_ORDER: st.session_state[k] = keep_defaults.get(k, 0)
 
-    # Valfritt: slumpa bas för Fitta/Rumpa (övriga sexfält styrs av DP-paketet)
-    def _slumpa_sexfalt_bas():
-        for f, key in [("Fitta","in_fitta"),("Rumpa","in_rumpa")]:
-            st.session_state[key] = _rand_30_60_of_hist_max(f)
+    def _slumpa_sexfalt():
+        # lämnas oförändrat; behåll historik-baserad slump på sexfält om du vill
+        # här använder vi historiskt max 30–60% även för sexfält som baseline
+        st.session_state["in_fitta"] = _rand_30_60_of_hist_max("Fitta")
+        st.session_state["in_rumpa"] = _rand_30_60_of_hist_max("Rumpa")
+        st.session_state["in_dp"]    = _rand_30_60_of_hist_max("DP")
+        st.session_state["in_dpp"]   = _rand_30_60_of_hist_max("DPP")
+        st.session_state["in_dap"]   = _rand_30_60_of_hist_max("DAP")
+        st.session_state["in_tap"]   = _rand_30_60_of_hist_max("TAP")
 
-    # ===== Scenarier =====
     if s == "Ny scen":
         pass
-
     elif s == "Slumpa scen vit":
-        _slumpa_sexfalt_bas()
-        total = _fill_core_30_60(
-            CFG,
-            force_zero={"in_svarta": True}  # vit = inga svarta
-        )
-        _apply_dp_pack_from_total(total)
-        st.session_state["in_alskar"] = 8
-        st.session_state["in_sover"]  = 1
-
+        _slumpa_bas_kallor_enligt_regler(CFG)
+        _slumpa_sexfalt()
+        st.session_state["in_svarta"] = 0  # ”vit”
+        st.session_state["in_alskar"] = 8; st.session_state["in_sover"]  = 1
     elif s == "Slumpa scen svart":
-        _slumpa_sexfalt_bas()
-        # enligt tidigare: Män=0 och källor=0, men Svarta + Eskilstuna får fyllas
-        total = _fill_core_30_60(
-            CFG,
-            force_zero={
-                "in_man": True,
-                "in_pappan": True, "in_grannar": True,
-                "in_nils_vanner": True, "in_nils_familj": True,
-                "in_bekanta": True
-            }
-        )
-        _apply_dp_pack_from_total(total)
-        st.session_state["in_alskar"] = 8
-        st.session_state["in_sover"]  = 1
-
+        _slumpa_bas_kallor_enligt_regler(CFG)
+        # ”svart” -> sätt vita män 0 om du vill hålla dem rena
+        st.session_state["in_man"] = 0
+        st.session_state["in_alskar"]=8; st.session_state["in_sover"]=1
     elif s == "Vila på jobbet":
-        _slumpa_sexfalt_bas()
-        total = _fill_core_30_60(CFG)
-        _apply_dp_pack_from_total(total)
-        st.session_state["in_alskar"] = 8
-        st.session_state["in_sover"]  = 1
-
+        _slumpa_bas_kallor_enligt_regler(CFG)
+        _slumpa_sexfalt()
+        st.session_state["in_alskar"]=8; st.session_state["in_sover"]=1
     elif s == "Vila i hemmet (dag 1–7)":
-        _slumpa_sexfalt_bas()
-        total = _fill_core_30_60(CFG)
-        _apply_dp_pack_from_total(total)
-        st.session_state["in_alskar"] = 6
-        st.session_state["in_sover"]  = 0
-        st.session_state["in_nils"]   = 0
-
+        _slumpa_bas_kallor_enligt_regler(CFG)
+        _slumpa_sexfalt()
+        st.session_state["in_alskar"]=6; st.session_state["in_sover"]=0; st.session_state["in_nils"]=0
     elif s == "Super bonus":
         st.session_state["in_svarta"] = int(st.session_state[CFG_KEY].get(SUPER_ACC_KEY, 0))
 
-    # Uppdatera sceninfo
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
 # =========================
@@ -495,7 +404,6 @@ with st.sidebar:
     CFG["BMI_GOAL"]         = st.number_input("BM mål (BMI)", min_value=10.0, max_value=40.0, value=float(CFG.get("BMI_GOAL",21.7)), step=0.1)
     CFG["HEIGHT_CM"]        = st.number_input("Längd (cm)", min_value=140, max_value=220, value=int(CFG.get("HEIGHT_CM",164)), step=1)
 
-    # >>> NYTT: Sömn efter scen (timmar) – används i tvingad schemaläggning
     CFG[EXTRA_SLEEP_KEY]    = st.number_input("Sömn efter scen (timmar)", min_value=0.0, step=0.5, value=float(CFG.get(EXTRA_SLEEP_KEY,7)))
 
     st.markdown("---")
@@ -634,7 +542,7 @@ with c2:
 # =========================
 def build_base_from_inputs():
     scen, d, veckodag = st.session_state[SCENEINFO_KEY]
-    start_dt = st.session_state[NEXT_START_DT_KEY]  # tvingad
+    start_dt = st.session_state[NEXT_START_DT_KEY]
     base = {
         "Profil": st.session_state.get(PROFILE_KEY,""),
         "Datum": d.isoformat(), "Veckodag": veckodag, "Scen": scen,
@@ -665,7 +573,6 @@ def build_base_from_inputs():
         "Avgift":  float(CFG["avgift_usd"]),
         "PROD_STAFF": int(CFG["PROD_STAFF"]),
 
-        # labels och max in som referens till beräkningsmodul (om den vill)
         "MAX_PAPPAN": int(CFG["MAX_PAPPAN"]),
         "MAX_GRANNAR": int(CFG["MAX_GRANNAR"]),
         "MAX_NILS_VANNER": int(CFG["MAX_NILS_VANNER"]),
@@ -678,19 +585,17 @@ def build_base_from_inputs():
         "LBL_BEKANTA": CFG["LBL_BEKANTA"],
         "LBL_ESK": CFG["LBL_ESK"],
     }
-    # Känner = summa av käll-etiketter (radnivå)
     base["Känner"] = (
         int(base[CFG["LBL_PAPPAN"]]) + int(base[CFG["LBL_GRANNAR"]]) +
         int(base[CFG["LBL_NILS_VANNER"]]) + int(base[CFG["LBL_NILS_FAMILJ"]])
     )
-    # meta till beräkning
     base["_rad_datum"]    = start_dt.date()
     base["_fodelsedatum"] = CFG["fodelsedatum"]
-    base["_starttid"]     = start_dt.time()  # T V I N G A D starttid
+    base["_starttid"]     = start_dt.time()
     return base
 
 # =========================
-# Ekonomiberäkningar (i appen) – kompletterar preview
+# Ekonomiberäkningar (i appen)
 # =========================
 def _hardhet_from(base, preview):
     hard = 0
@@ -716,7 +621,6 @@ def _econ_compute(base, preview):
     hardhet = _hardhet_from(base, preview)
     out["Hårdhet"] = hardhet
 
-    # Prenumeranter
     if "Vila" in typ:
         pren = 0
     else:
@@ -724,15 +628,12 @@ def _econ_compute(base, preview):
                  int(base.get("TAP",0)) + int(preview.get("Totalt Män",0)) ) * hardhet
     out["Prenumeranter"] = int(pren)
 
-    # Intäkter
     avg = float(base.get("Avgift", 0.0))
     out["Intäkter"] = float(pren) * avg
 
-    # Intäkt Känner
     ksam = int(preview.get("Känner sammanlagt", 0)) or int(preview.get("Känner", 0))
     out["Intäkt Känner"] = 0.0 if "Vila" in typ else float(ksam) * 30.0
 
-    # Kostnad män
     if "Vila" in typ:
         kost = 0.0
     else:
@@ -742,10 +643,8 @@ def _econ_compute(base, preview):
         kost = timmar * tot_personer * 15.0
     out["Kostnad män"] = float(kost)
 
-    # Intäkt företag, Lön, Vinst
     out["Intäkt företag"] = float(out["Intäkter"]) - float(out["Kostnad män"]) - float(out["Intäkt Känner"])
 
-    # Åldersfaktor
     try:
         rad_dat = base["_rad_datum"]; fd = base["_fodelsedatum"]
         alder = rad_dat.year - fd.year - ((rad_dat.month, rad_dat.day) < (fd.month, fd.day))
@@ -795,7 +694,7 @@ except TypeError:
 econ = _econ_compute(base, preview)
 preview.update(econ)
 
-# 3) BMI – slump per ny prenumerant (12–18) med viktning (10,14,19,17,15,13,12)
+# 3) BMI – slump per ny prenumerant (12–18)
 def _compute_bmi_pending_for_current_row(pren: int, scen_typ: str):
     if pren <= 0 or ("Vila" in scen_typ):
         return 0.0, 0
@@ -831,19 +730,14 @@ def _ceil_to_next_hour(dt: datetime) -> datetime:
 def _compute_end_and_next(start_dt: datetime, base: dict, preview: dict, sleep_h: float):
     summa_sec = float(preview.get("Summa tid (sek)", 0.0))
     alskar = int(base.get("Älskar",0)); sover = int(base.get("Sover med",0))
-    # Klockan = summa + 1h vila + 3h hångel
     end_dt = start_dt + timedelta(seconds = summa_sec + 3600 + 10800)
-    # Klockan inkl älskar/sover
     end_incl = end_dt + timedelta(seconds=(alskar+sover)*20*60)
-    # + sömn
     end_sleep = end_incl + timedelta(hours=float(sleep_h))
 
-    # Nästa start (tvingad)
     if end_sleep.date() > start_dt.date():
         base7 = datetime.combine(end_sleep.date(), time(7,0))
         next_start = base7 if end_sleep.time() <= time(7,0) else _ceil_to_next_hour(end_sleep)
     else:
-        # Samma datum -> nästa dag 07:00
         next_start = datetime.combine(start_dt.date() + timedelta(days=1), time(7,0))
     return end_incl, end_sleep, next_start
 
@@ -851,7 +745,6 @@ start_dt = st.session_state[NEXT_START_DT_KEY]
 sleep_h  = float(CFG.get(EXTRA_SLEEP_KEY, 7))
 end_incl, end_sleep, forced_next = _compute_end_and_next(start_dt, base, preview, sleep_h)
 
-# Liten varning om extrem längd (>36h innan sömn)
 if (end_incl - start_dt) > timedelta(hours=36):
     st.warning("Scenen har pågått väldigt länge (>36 timmar) innan sömn. Nästa start är tvingad enligt reglerna.")
 
@@ -889,7 +782,6 @@ with rowB[0]:
 with rowB[1]:
     st.metric("Totalt män", int(preview.get("Totalt Män",0)))
 with rowB[2]:
-    # Egen totalsiffra inkl alla (som tidigare)
     tot_men_including = (
         int(base.get("Män",0)) + int(base.get("Svarta",0)) +
         int(base.get(CFG["LBL_PAPPAN"],0)) + int(base.get(CFG["LBL_GRANNAR"],0)) +
@@ -899,7 +791,6 @@ with rowB[2]:
     )
     st.metric("Totalt män (inkl alla)", int(tot_men_including))
 
-# Tid/kille inkl händer (visning)
 tid_kille_sek = float(preview.get("Tid per kille (sek)", 0.0))
 hander_kille_sek = float(preview.get("Händer per kille (sek)", 0.0))
 tid_kille_inkl_hander = _mmss(tid_kille_sek + (hander_kille_sek if int(base.get("Händer aktiv",1))==1 else 0))
@@ -946,7 +837,6 @@ with e4:
     st.metric("Vinst", f"${float(preview.get('Vinst',0)):,.2f}")
     st.metric("Bonus kvar", int(CFG.get(BONUS_LEFT_KEY,0)))
 
-# BM mål / Mål vikt (dubbelvisning för bakåtkomp.)
 mv1, mv2 = st.columns(2)
 with mv1:
     st.metric("BM mål (BMI)", preview.get("BM mål", "-"))
@@ -961,24 +851,24 @@ except Exception:
 st.markdown("**👤 Nils (live)**")
 st.metric("Nils (total)", nils_total)
 
-# ===== Senaste "Vila i hemmet" – räkna dagar utifrån appens tidslinje =====
-timeline_today = st.session_state[NEXT_START_DT_KEY].date()  # inte date.today()
+# ===== Senaste "Vila i hemmet" – baserat på tvingad tidslinje =====
 senaste_vila_datum = None
 for rad in reversed(st.session_state.get(ROWS_KEY, [])):
     if str(rad.get("Typ", "")).strip().startswith("Vila i hemmet"):
         try:
-            senaste_vila_datum = datetime.strptime(rad.get("Datum", ""), "%Y-%m-%d").date()
+            senaste_vila_datum = datetime.strptime(str(rad.get("Datum","")), "%Y-%m-%d").date()
             break
         except Exception:
             continue
 
+referens_datum = st.session_state[NEXT_START_DT_KEY].date()
 if senaste_vila_datum:
-    dagar_sedan_vila = (timeline_today - senaste_vila_datum).days
-    st.markdown(f"**🛏️ Senaste 'Vila i hemmet': {dagar_sedan_vila} dagar sedan**")
+    dagar_sedan_vila = (referens_datum - senaste_vila_datum).days
+    st.markdown(f"**🛏️ Senaste 'Vila i hemmet': {dagar_sedan_vila} dagar sedan (på tidslinjen)**")
     if dagar_sedan_vila >= 21:
         st.error(f"⚠️ Dags för semester! Det var {dagar_sedan_vila} dagar sedan senaste 'Vila i hemmet'.")
 else:
-    st.info("Ingen 'Vila i hemmet' hittad ännu.")
+    st.info("Ingen 'Vila i hemmet' hittad i data ännu (beräknat mot den interna tidslinjen).")
 
 st.caption("Obs: Vila-scenarion genererar inga prenumeranter, intäkter, kostnader eller lön. Bonus kvar minskas dock med 'Bonus deltagit'.")
 
@@ -993,6 +883,19 @@ SAVE_NUM_COLS = [
     "Bonus deltagit","Personal deltagit","Händer aktiv","Nils"
 ]
 
+def _to_writable_cell(v):
+    import datetime as _dt
+    try:
+        if isinstance(v, _dt.datetime):
+            return v.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(v, _dt.date):
+            return v.isoformat()
+        if isinstance(v, _dt.time):
+            return v.strftime("%H:%M:%S")
+    except Exception:
+        pass
+    return v
+
 def _prepare_row_for_save(_preview: dict, _base: dict, _cfg: dict) -> dict:
     row = dict(_base)
     row.update(_preview)
@@ -1000,13 +903,22 @@ def _prepare_row_for_save(_preview: dict, _base: dict, _cfg: dict) -> dict:
     row["BM mål"] = _preview.get("BM mål")
     row["Mål vikt (kg)"] = _preview.get("Mål vikt (kg)")
     row["Super bonus ack"] = _preview.get("Super bonus ack")
-    # Spara även sömn(h) för historik-återspelning
     row["Sömn (h)"] = float(_cfg.get(EXTRA_SLEEP_KEY, 7))
 
     for k in SAVE_NUM_COLS:
         if row.get(k) is None: row[k] = 0
     for k in ["Datum","Veckodag","Typ","Scen","Klockan","Klockan inkl älskar/sover"]:
         if row.get(k) is None: row[k] = ""
+
+    # 🚑 Fix för "Object of type date is not JSON serializable"
+    # Konvertera ALLA celler till skrivbara typer (str för datum/tid)
+    row = {k: _to_writable_cell(v) for k, v in row.items()}
+
+    # Ta bort interna meta-nycklar så de inte hamnar i Sheets
+    for meta_k in ["_rad_datum","_fodelsedatum","_starttid"]:
+        if meta_k in row:
+            del row[meta_k]
+
     return row
 
 # =========================
@@ -1021,25 +933,23 @@ def _save_to_sheets_for_profile(profile: str, row_dict: dict):
     append_row_to_profile_data(profile, row_dict)
 
 def _update_forced_next_start_after_save(saved_row: dict):
-    """Efter sparning: frys BMI-sample + uppdatera tvingad NEXT_START_DT."""
-    # BMI
     pend = st.session_state.get(PENDING_BMI_KEY, {"scene": None, "sum": 0.0, "count": 0})
     st.session_state[BMI_SUM_KEY] = float(st.session_state.get(BMI_SUM_KEY, 0.0)) + float(pend.get("sum", 0.0))
     st.session_state[BMI_CNT_KEY] = int(st.session_state.get(BMI_CNT_KEY, 0)) + int(pend.get("count", 0))
     st.session_state[PENDING_BMI_KEY] = {"scene": None, "sum": 0.0, "count": 0}
 
-    # Tvingad nästa start (använd live-beräknad)
     st.session_state[NEXT_START_DT_KEY] = forced_next
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
 with cL:
     if st.button("💾 Spara raden (lokalt)"):
         full_row = _prepare_row_for_save(preview, base, CFG)
+        # spegla lokalt
         st.session_state[ROWS_KEY].append(full_row)
 
-        # uppdatera min/max (för slump)
         for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
-                    LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
+                    LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK,
+                    "Bonus deltagit","Personal deltagit"]:
             _add_hist_value(col, int(full_row.get(col,0)))
 
         scen_typ = str(base.get("Typ",""))
@@ -1053,10 +963,12 @@ with cR:
         try:
             full_row = _prepare_row_for_save(preview, base, CFG)
             _save_to_sheets_for_profile(st.session_state.get(PROFILE_KEY,""), full_row)
+
             # spegla lokalt
             st.session_state[ROWS_KEY].append(full_row)
             for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
-                        LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
+                        LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK,
+                        "Bonus deltagit","Personal deltagit"]:
                 _add_hist_value(col, int(full_row.get(col,0)))
 
             scen_typ = str(base.get("Typ",""))
@@ -1079,7 +991,6 @@ if st.session_state[ROWS_KEY]:
 else:
     st.info("Inga lokala rader ännu.")
 
-# (valfri) Statistik
 if _HAS_STATS:
     try:
         st.markdown("---")
