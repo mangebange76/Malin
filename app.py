@@ -260,6 +260,61 @@ def _rand_esk(CFG):
     if hi < lo: hi = lo
     return random.randint(lo, hi) if hi>lo else lo
 
+def _hist_sum(col):
+    """Historisk summa för en kolumn (över lokalt inlästa rader)."""
+    return sum(int(float(r.get(col, 0) or 0)) for r in st.session_state.get(ROWS_KEY, []))
+
+def _recompute_dp_block_from_current_inputs():
+    """
+    Räkna DP/DPP/DAP/TAP från nuvarande basfält i session_state
+    enligt reglerna (DP=60%, DPP/DAP=DP om historik>0 annars 0, TAP=40% om historik>0).
+    Basfält = Män, Svarta, Pappans vänner, Grannar, Nils vänner, Nils familj,
+              Bekanta, Personal deltagit, Eskilstuna killar.
+    """
+    CFG = st.session_state[CFG_KEY]
+    total_bas = (
+        int(st.session_state.get("in_man",0)) +
+        int(st.session_state.get("in_svarta",0)) +
+        int(st.session_state.get("in_pappan",0)) +
+        int(st.session_state.get("in_grannar",0)) +
+        int(st.session_state.get("in_nils_vanner",0)) +
+        int(st.session_state.get("in_nils_familj",0)) +
+        int(st.session_state.get("in_bekanta",0)) +
+        int(st.session_state.get("in_personal_deltagit",0)) +
+        int(st.session_state.get("in_eskilstuna",0))
+    )
+    dp_val  = int(round(0.60 * total_bas))
+    dpp_val = dp_val if _hist_sum("DPP") > 0 else 0
+    dap_val = dp_val if _hist_sum("DAP") > 0 else 0
+    tap_val = int(round(0.40 * total_bas)) if _hist_sum("TAP") > 0 else 0
+
+    st.session_state["in_dp"]  = dp_val
+    st.session_state["in_dpp"] = dpp_val
+    st.session_state["in_dap"] = dap_val
+    st.session_state["in_tap"] = tap_val
+
+def _slumpa_bas_falt_enligt_regler(CFG):
+    """
+    Slumpar ENDAST bas-fälten (30–60% av historiskt max):
+    Män, Svarta, Pappans vänner, Grannar, Nils vänner, Nils familj,
+    Bekanta, Personal deltagit, Eskilstuna killar.
+    (OBS: Inga ingrepp på DP/DPP/DAP/TAP här!)
+    """
+    st.session_state["in_man"]               = _rand_30_60_of_hist_max("Män")
+    st.session_state["in_svarta"]            = _rand_30_60_of_hist_max("Svarta")
+    st.session_state["in_pappan"]            = _rand_30_60_of_hist_max(CFG["LBL_PAPPAN"])
+    st.session_state["in_grannar"]           = _rand_30_60_of_hist_max(CFG["LBL_GRANNAR"])
+    st.session_state["in_nils_vanner"]       = _rand_30_60_of_hist_max(CFG["LBL_NILS_VANNER"])
+    st.session_state["in_nils_familj"]       = _rand_30_60_of_hist_max(CFG["LBL_NILS_FAMILJ"])
+    st.session_state["in_bekanta"]           = _rand_30_60_of_hist_max(CFG["LBL_BEKANTA"])
+    st.session_state["in_personal_deltagit"] = _rand_30_60_of_hist_max("Personal deltagit")
+    st.session_state["in_eskilstuna"]        = _rand_30_60_of_hist_max(CFG["LBL_ESK"])
+
+def _slumpa_fitta_rumpa():
+    """Slumpar endast Fitta & Rumpa (30–60% av historiskt max)."""
+    st.session_state["in_fitta"] = _rand_30_60_of_hist_max("Fitta")
+    st.session_state["in_rumpa"] = _rand_30_60_of_hist_max("Rumpa")
+
 def _load_profile_settings_and_data(profile_name: str):
     try:
         prof_cfg = read_profile_settings(profile_name)
@@ -306,42 +361,8 @@ def _load_profile_settings_and_data(profile_name: str):
         st.error(f"Kunde inte läsa profilens data ({profile_name}): {e}")
 
 # =========================
-# Scenario-fill (med ny slumpning)
+# Scenario-fill (uppdaterad)
 # =========================
-def _slumpa_bas_kallor_enligt_regler(CFG):
-    # 30–60% av historiskt max per kolumn
-    st.session_state["in_man"]            = _rand_30_60_of_hist_max("Män")
-    st.session_state["in_svarta"]         = _rand_30_60_of_hist_max("Svarta")
-    st.session_state["in_pappan"]         = _rand_30_60_of_hist_max(CFG["LBL_PAPPAN"])
-    st.session_state["in_grannar"]        = _rand_30_60_of_hist_max(CFG["LBL_GRANNAR"])
-    st.session_state["in_nils_vanner"]    = _rand_30_60_of_hist_max(CFG["LBL_NILS_VANNER"])
-    st.session_state["in_nils_familj"]    = _rand_30_60_of_hist_max(CFG["LBL_NILS_FAMILJ"])
-    st.session_state["in_bekanta"]        = _rand_30_60_of_hist_max(CFG["LBL_BEKANTA"])
-    st.session_state["in_personal_deltagit"] = _rand_30_60_of_hist_max("Personal deltagit")
-    st.session_state["in_eskilstuna"]     = _rand_30_60_of_hist_max(CFG["LBL_ESK"])
-
-    # Summa
-    total_bas = (
-        int(st.session_state["in_man"]) + int(st.session_state["in_svarta"]) +
-        int(st.session_state["in_pappan"]) + int(st.session_state["in_grannar"]) +
-        int(st.session_state["in_nils_vanner"]) + int(st.session_state["in_nils_familj"]) +
-        int(st.session_state["in_bekanta"]) + int(st.session_state["in_personal_deltagit"]) +
-        int(st.session_state["in_eskilstuna"])
-    )
-
-    # DP = 60% av totalsumman (avrunda)
-    dp_val = int(round(0.60 * total_bas))
-
-    # Om kolumnsumma i historiken = 0 -> sätt 0, annars samma ”60%-regel”
-    def _hist_sum(col):
-        return sum(int(float(r.get(col, 0) or 0)) for r in st.session_state.get(ROWS_KEY, []))
-
-    st.session_state["in_dp"]  = dp_val
-
-    st.session_state["in_dpp"] = int(round(0.60 * total_bas)) if _hist_sum("DPP") > 0 else 0
-    st.session_state["in_dap"] = int(round(0.60 * total_bas)) if _hist_sum("DAP") > 0 else 0
-    st.session_state["in_tap"] = int(round(0.40 * total_bas)) if _hist_sum("TAP") > 0 else 0
-
 def apply_scenario_fill():
     CFG = st.session_state[CFG_KEY]
     s = st.session_state[SCENARIO_KEY]
@@ -349,38 +370,56 @@ def apply_scenario_fill():
     keep_defaults = {"in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,"in_hander_aktiv":st.session_state.get("in_hander_aktiv",1)}
     for k in INPUT_ORDER: st.session_state[k] = keep_defaults.get(k, 0)
 
-    def _slumpa_sexfalt():
-        # lämnas oförändrat; behåll historik-baserad slump på sexfält om du vill
-        # här använder vi historiskt max 30–60% även för sexfält som baseline
-        st.session_state["in_fitta"] = _rand_30_60_of_hist_max("Fitta")
-        st.session_state["in_rumpa"] = _rand_30_60_of_hist_max("Rumpa")
-        st.session_state["in_dp"]    = _rand_30_60_of_hist_max("DP")
-        st.session_state["in_dpp"]   = _rand_30_60_of_hist_max("DPP")
-        st.session_state["in_dap"]   = _rand_30_60_of_hist_max("DAP")
-        st.session_state["in_tap"]   = _rand_30_60_of_hist_max("TAP")
-
     if s == "Ny scen":
         pass
+
     elif s == "Slumpa scen vit":
-        _slumpa_bas_kallor_enligt_regler(CFG)
-        _slumpa_sexfalt()
-        st.session_state["in_svarta"] = 0  # ”vit”
-        st.session_state["in_alskar"] = 8; st.session_state["in_sover"]  = 1
+        _slumpa_bas_falt_enligt_regler(CFG)
+        # vit: inga svarta
+        st.session_state["in_svarta"] = 0
+        # slumpar endast fitta/rumpa
+        _slumpa_fitta_rumpa()
+        # räkna DP-blocket sist från nuvarande bas
+        _recompute_dp_block_from_current_inputs()
+        st.session_state["in_alskar"] = 8
+        st.session_state["in_sover"]  = 1
+
     elif s == "Slumpa scen svart":
-        _slumpa_bas_kallor_enligt_regler(CFG)
-        # ”svart” -> sätt vita män 0 om du vill hålla dem rena
+        _slumpa_bas_falt_enligt_regler(CFG)
+        # svart: inga "vita män" och inga släktingar/bekanta/personal
         st.session_state["in_man"] = 0
-        st.session_state["in_alskar"]=8; st.session_state["in_sover"]=1
+        st.session_state["in_pappan"] = 0
+        st.session_state["in_grannar"] = 0
+        st.session_state["in_nils_vanner"] = 0
+        st.session_state["in_nils_familj"] = 0
+        st.session_state["in_bekanta"] = 0
+        st.session_state["in_personal_deltagit"] = 0
+        # fitta/rumpa ska slumpas
+        _slumpa_fitta_rumpa()
+        # räkna DP-blocket sist från den nollade basen
+        _recompute_dp_block_from_current_inputs()
+        st.session_state["in_alskar"]=8
+        st.session_state["in_sover"]=1
+
     elif s == "Vila på jobbet":
-        _slumpa_bas_kallor_enligt_regler(CFG)
-        _slumpa_sexfalt()
-        st.session_state["in_alskar"]=8; st.session_state["in_sover"]=1
+        _slumpa_bas_falt_enligt_regler(CFG)
+        _slumpa_fitta_rumpa()
+        _recompute_dp_block_from_current_inputs()
+        st.session_state["in_alskar"]=8
+        st.session_state["in_sover"]=1
+
     elif s == "Vila i hemmet (dag 1–7)":
-        _slumpa_bas_kallor_enligt_regler(CFG)
-        _slumpa_sexfalt()
-        st.session_state["in_alskar"]=6; st.session_state["in_sover"]=0; st.session_state["in_nils"]=0
+        _slumpa_bas_falt_enligt_regler(CFG)
+        _slumpa_fitta_rumpa()
+        _recompute_dp_block_from_current_inputs()
+        st.session_state["in_alskar"]=6
+        st.session_state["in_sover"]=0
+        st.session_state["in_nils"]=0
+
     elif s == "Super bonus":
         st.session_state["in_svarta"] = int(st.session_state[CFG_KEY].get(SUPER_ACC_KEY, 0))
+        # Räkna gärna DP-blocket på denna bas också:
+        _recompute_dp_block_from_current_inputs()
 
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
@@ -910,11 +949,10 @@ def _prepare_row_for_save(_preview: dict, _base: dict, _cfg: dict) -> dict:
     for k in ["Datum","Veckodag","Typ","Scen","Klockan","Klockan inkl älskar/sover"]:
         if row.get(k) is None: row[k] = ""
 
-    # 🚑 Fix för "Object of type date is not JSON serializable"
-    # Konvertera ALLA celler till skrivbara typer (str för datum/tid)
+    # Konvertera ALLA celler till skrivbara typer
     row = {k: _to_writable_cell(v) for k, v in row.items()}
 
-    # Ta bort interna meta-nycklar så de inte hamnar i Sheets
+    # Ta bort interna meta-nycklar
     for meta_k in ["_rad_datum","_fodelsedatum","_starttid"]:
         if meta_k in row:
             del row[meta_k]
