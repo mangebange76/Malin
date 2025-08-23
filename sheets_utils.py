@@ -1,9 +1,12 @@
 # sheets_utils.py
+# Version 250823 + auto-merge patch
+
 from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 from collections.abc import Mapping
 import time
+import datetime as dt
 
 import streamlit as st
 import gspread
@@ -111,15 +114,12 @@ def _get_or_create_data_ws(ss: Spreadsheet, profile: str) -> Worksheet:
       2) Annars första existerande av kandidaterna
       3) Annars skapa 'Data - {profile}'
     """
-    # 1) primär finns?
     ws = _get_ws_by_title(ss, _primary_data_title(profile))
     if ws is not None:
         return ws
-    # 2) annan kandidat?
     ws = _find_existing_data_ws(ss, profile)
     if ws is not None:
         return ws
-    # 3) skapa primärt
     return ss.add_worksheet(title=_primary_data_title(profile), rows=1, cols=1)
 
 # =============================
@@ -129,19 +129,17 @@ def _get_or_create_data_ws(ss: Spreadsheet, profile: str) -> Worksheet:
 @st.cache_data(show_spinner=False, ttl=5)
 def list_profiles() -> List[str]:
     """
-    Läs profilnamn från bladet 'Profil', kolumn A (första kolumnen, utan header).
+    Läs profilnamn från bladet 'Profil', kolumn A.
     """
     ss = _open_spreadsheet()
     ws = _get_ws_by_title(ss, "Profil")
     if ws is None:
         return []
     try:
-        col = ws.col_values(1)  # hela kolumn A
+        col = ws.col_values(1)
     except APIError as e:
         raise RuntimeError(f"Kunde inte läsa bladet 'Profil': {e}")
-    # filtrera tomma och ev. header
     names = [x.strip() for x in col if x and x.strip()]
-    # Ta bort en eventuell rubrikrad "Profil" / "Namn"
     if names and names[0].lower() in ("profil", "namn", "profiles", "name"):
         names = names[1:]
     return names
@@ -151,10 +149,6 @@ def list_profiles() -> List[str]:
 # =============================
 
 def _coerce_setting(key: str, val: Any) -> Any:
-    """
-    Försök typa om några välkända nycklar till rätt Python-typer som appen väntar sig.
-    Datum/tid returneras som date/time-objekt.
-    """
     if val is None:
         return None
     s = str(val).strip()
@@ -167,15 +161,15 @@ def _coerce_setting(key: str, val: Any) -> Any:
 
     def _to_time(x: str):
         x = x.strip()
-        # tillåt "HH:MM", "HH:MM:SS"
         parts = x.split(":")
         try:
-            h = int(parts[0]); m = int(parts[1]) if len(parts) > 1 else 0; sec = int(parts[2]) if len(parts) > 2 else 0
+            h = int(parts[0])
+            m = int(parts[1]) if len(parts) > 1 else 0
+            sec = int(parts[2]) if len(parts) > 2 else 0
             return pd.Timestamp(year=2000, month=1, day=1, hour=h, minute=m, second=sec).time()
         except Exception:
             return None
 
-    # datum/tid
     if key in ("startdatum", "fodelsedatum"):
         d = _to_date(s)
         return d if d else s
@@ -183,7 +177,6 @@ def _coerce_setting(key: str, val: Any) -> Any:
         t = _to_time(s)
         return t if t else s
 
-    # numeriskt
     if s.lower() in ("true", "false"):
         return s.lower() == "true"
     try:
@@ -195,39 +188,26 @@ def _coerce_setting(key: str, val: Any) -> Any:
         return val
 
 def _read_kv_sheet(ws: Worksheet) -> Dict[str, Any]:
-    """
-    Läs key/value där antingen:
-      A) Kolumn A=nyckel, kolumn B=värde (flera rader)
-      B) Första raden = headers, andra raden = värden
-    Returnerar dict med ev. typning.
-    """
     values = ws.get_all_values()
     if not values:
         return {}
 
     out: Dict[str, Any] = {}
 
-    # A) Key/Value i kolumner
-    if len(values) >= 1 and len(values[0]) >= 2 and (values[1:] and values[0][1] == "" or True):
-        # Heuristik: fler rader än kolumner → betrakta som nyckel/värde per rad
-        kv_mode = False
-        # Om första två raderna ser ut som "key | value"
-        non_empty_second_col = sum(1 for r in values if len(r) >= 2 and r[1].strip())
-        if non_empty_second_col >= 1:
-            kv_mode = True
+    # Heuristik: key/value per rad om det ser ut som 2 kolumner med många rader
+    non_empty_second_col = sum(1 for r in values if len(r) >= 2 and r[1].strip())
+    if non_empty_second_col >= 1:
+        for r in values:
+            if not r:
+                continue
+            key = (r[0] or "").strip()
+            if not key:
+                continue
+            val = r[1] if len(r) > 1 else ""
+            out[key] = _coerce_setting(key, val)
+        return out
 
-        if kv_mode:
-            for r in values:
-                if not r:
-                    continue
-                key = (r[0] or "").strip()
-                if not key:
-                    continue
-                val = r[1] if len(r) > 1 else ""
-                out[key] = _coerce_setting(key, val)
-            return out
-
-    # B) Header + en rad värden
+    # Header + en rad värden
     header = [h.strip() for h in values[0]]
     valrow = values[1] if len(values) > 1 else []
     for i, h in enumerate(header):
@@ -238,16 +218,9 @@ def _read_kv_sheet(ws: Worksheet) -> Dict[str, Any]:
     return out
 
 def _settings_candidates(profile: str) -> List[str]:
-    # Stöd flera varianter för bakåtkompatibilitet
     return [f"Settings - {profile}", f"{profile}__settings", profile]
 
 def read_profile_settings(profile: str) -> Dict[str, Any]:
-    """
-    Läs inställningar för en profil. Sök i ordning:
-      1) 'Settings - {profile}'
-      2) '{profile}__settings'
-      3) '{profile}'
-    """
     ss = _open_spreadsheet()
     ws = None
     for title in _settings_candidates(profile):
@@ -263,10 +236,6 @@ def read_profile_settings(profile: str) -> Dict[str, Any]:
         raise RuntimeError(f"Kunde inte läsa inställningar för '{profile}': {e}")
 
 def save_profile_settings(profile: str, cfg: Dict[str, Any]) -> None:
-    """
-    Spara inställningar som enkel 2-kolumners nyckel/värde i 'Settings - {profile}'.
-    Datums skrivs som ISO (YYYY-MM-DD), tid som HH:MM:SS.
-    """
     ss = _open_spreadsheet()
     title = _settings_candidates(profile)[0]  # 'Settings - {profile}'
     ws = _get_ws_by_title(ss, title)
@@ -274,7 +243,6 @@ def save_profile_settings(profile: str, cfg: Dict[str, Any]) -> None:
         ws = ss.add_worksheet(title=title, rows=2, cols=2)
 
     def _to_writable(v: Any) -> Any:
-        # date/time → str
         try:
             import datetime as _dt
             if isinstance(v, _dt.date) and not isinstance(v, _dt.datetime):
@@ -285,15 +253,109 @@ def save_profile_settings(profile: str, cfg: Dict[str, Any]) -> None:
             pass
         return v
 
-    # Gör en stabil lista av (key, value)
-    rows = []
-    for k, v in cfg.items():
-        rows.append([k, _to_writable(v)])
-
-    # Töm och skriv
+    rows = [[k, _to_writable(v)] for k, v in cfg.items()]
     ws.clear()
     if rows:
-        ws.update(f"A1", rows)
+        ws.update("A1", rows)
+
+# =============================
+# Auto-merge patch (data)
+# =============================
+
+def _read_records(ws: Worksheet) -> List[Dict[str, Any]]:
+    """
+    Läser alla records som list[dict]. Tomt blad → [].
+    """
+    vals = ws.get_all_values()
+    if not vals:
+        return []
+    header = vals[0]
+    data = vals[1:]
+    records: List[Dict[str, Any]] = []
+    for row in data:
+        if all((c is None or str(c).strip() == "") for c in row):
+            continue
+        rec = {}
+        for i, h in enumerate(header):
+            if not h:
+                continue
+            rec[h] = row[i] if i < len(row) else ""
+        records.append(rec)
+    return records
+
+def _write_table(ws: Worksheet, headers: List[str], rows: List[List[Any]]) -> None:
+    ws.clear()
+    if headers:
+        ws.update("A1", [headers])
+    if rows:
+        ws.update(f"A2", rows)
+
+def _ensure_merged_data_sheets(ss: Spreadsheet, profile: str) -> Worksheet:
+    """
+    Om både 'Data - {profile}' och '{profile}__data' finns:
+      - slå ihop till 'Data - {profile}'
+      - ta union av kolumner (primär ordning först, sedan ev. extra kolumner i den ordning de förekommer i sekundär)
+      - ta bort exakta dubletter
+      - döp om sekundär till '{profile}__data__backup_YYYYMMDD_HHMMSS'
+    Returnerar worksheet som ska användas fortsättningsvis (primär).
+    """
+    primary_title = _primary_data_title(profile)
+    fallback_title = _fallback_data_title(profile)
+
+    ws_primary = _get_ws_by_title(ss, primary_title)
+    ws_fallback = _get_ws_by_title(ss, fallback_title)
+
+    # Inget att slå ihop
+    if ws_fallback is None or ws_primary is None:
+        return ws_primary or ws_fallback or _get_or_create_data_ws(ss, profile)
+
+    # Läs båda
+    rec_primary = _read_records(ws_primary)
+    rec_fallback = _read_records(ws_fallback)
+
+    # Hämta header-ordningar
+    vals_p = ws_primary.get_all_values()
+    header_p = vals_p[0] if vals_p else []
+    vals_f = ws_fallback.get_all_values()
+    header_f = vals_f[0] if vals_f else []
+
+    # Union av headers: primärs ordning först, sedan ev. nya från fallback i deras ordning
+    seen = set(h for h in header_p if h)
+    headers: List[str] = [h for h in header_p if h]
+    for h in header_f:
+        if h and h not in seen:
+            headers.append(h)
+            seen.add(h)
+
+    # Bygg rader enligt headers
+    def rec_to_row(rec: Dict[str, Any]) -> List[Any]:
+        return [rec.get(h, "") for h in headers]
+
+    all_rows = [rec_to_row(r) for r in rec_primary] + [rec_to_row(r) for r in rec_fallback]
+
+    # Deduplicera exakta rader
+    unique_rows: List[List[Any]] = []
+    seen_tuples = set()
+    for r in all_rows:
+        t = tuple(r)
+        if t in seen_tuples:
+            continue
+        seen_tuples.add(t)
+        unique_rows.append(r)
+
+    # Skriv ihop i primär
+    _write_table(ws_primary, headers, unique_rows)
+
+    # Döp om fallback till backup
+    stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        ws_fallback.update_title(f"{fallback_title}__backup_{stamp}")
+    except Exception:
+        # Om det skulle misslyckas lämnar vi bladet orört men eftersom titeln inte längre matchar fallback
+        # kommer appen ändå att ignorera det framöver.
+        pass
+
+    return ws_primary
 
 # =============================
 # Data – läsa & skriva
@@ -303,11 +365,9 @@ def _records_to_dataframe(records: List[Dict[str, Any]]) -> pd.DataFrame:
     if not records:
         return pd.DataFrame()
     df = pd.DataFrame(records)
-    # Försök tolka numeriska kolumner om möjligt
+    # försök numerisk konvertering
     for col in df.columns:
-        # hoppa över rena textfält
         if df[col].dtype == object:
-            # försök numeriskt
             try:
                 df[col] = pd.to_numeric(df[col])
             except Exception:
@@ -316,18 +376,16 @@ def _records_to_dataframe(records: List[Dict[str, Any]]) -> pd.DataFrame:
 
 def read_profile_data(profile: str) -> pd.DataFrame:
     """
-    Läs alla rader för profil från:
-      1) 'Data - {profile}' (primär) om den finns
-      2) annars '{profile}__data'
-    Returnerar en DataFrame (kan vara tom).
+    Läs alla rader för profil. Om både primär och fallback finns, slå ihop dem
+    automatiskt och läs sedan från primär.
     """
     ss = _open_spreadsheet()
-
-    ws = _find_existing_data_ws(ss, profile)
+    ws = _ensure_merged_data_sheets(ss, profile)
     if ws is None:
         return pd.DataFrame()
 
     try:
+        # använd records → DataFrame
         records = ws.get_all_records(default_blank="")
     except APIError as e:
         raise RuntimeError(f"Kunde inte läsa data för '{profile}': {e}")
@@ -336,33 +394,39 @@ def read_profile_data(profile: str) -> pd.DataFrame:
 
 def append_row_to_profile_data(profile: str, row: Dict[str, Any]) -> None:
     """
-    Lägg till en rad i profilens **befintliga** databladsark.
-    - Om 'Data - {profile}' finns → append där
-    - Annars om '{profile}__data' finns → append där
-    - Annars skapa 'Data - {profile}' och lägg till header + rad
+    Lägg till en rad i profilens databladsark.
+    Auto-merge körs först om både primär och fallback finns.
     """
     ss = _open_spreadsheet()
-    ws = _get_or_create_data_ws(ss, profile)
+    ws = _ensure_merged_data_sheets(ss, profile)  # säkerställ primär & sammanslagen
 
-    # Läs befintlig header (om någon)
+    # Läs befintlig header
     try:
         existing = ws.get_all_values()
     except APIError as e:
         raise RuntimeError(f"Kunde inte läsa befintliga värden för '{ws.title}': {e}")
 
     if not existing:
-        # tomt blad → skriv header + rad
         headers = list(row.keys())
         values = [row.get(h, "") for h in headers]
         ws.update("A1", [headers, values])
         return
 
-    # Det finns något – anta första raden = header
     headers = existing[0] if existing else []
     if not headers:
-        # Om första raden råkat vara tom – skriv header i A1
         headers = list(row.keys())
         ws.update("A1", [headers])
-    # Bygg rad i header-ordning
+
+    # Om raden har nya fält som inte finns i header → utöka headern
+    new_cols = [k for k in row.keys() if k not in headers]
+    if new_cols:
+        headers_extended = headers + new_cols
+        # hämta befintliga rader (exkl. header)
+        body = existing[1:] if len(existing) > 1 else []
+        # fyll upp gamla rader med tomma för nya kolumner
+        body_ext = [r + [""] * (len(headers_extended) - len(r)) for r in body]
+        _write_table(ws, headers_extended, body_ext)
+        headers = headers_extended
+
     values = [row.get(h, "") for h in headers]
     ws.append_row(values, value_input_option="USER_ENTERED")
