@@ -849,6 +849,26 @@ except Exception:
 st.markdown("**👤 Nils (live)**")
 st.metric("Nils (total)", nils_total)
 
+# =========================
+# Senaste "Vila i hemmet" – räkna dagar + varning vid 21+
+# =========================
+senaste_vila_datum = None
+for rad in reversed(st.session_state.get(ROWS_KEY, [])):
+    if str(rad.get("Typ", "")).strip().startswith("Vila i hemmet"):
+        try:
+            senaste_vila_datum = datetime.strptime(rad.get("Datum", ""), "%Y-%m-%d").date()
+            break
+        except Exception:
+            continue
+
+if senaste_vila_datum:
+    dagar_sedan_vila = (date.today() - senaste_vila_datum).days
+    st.markdown(f"**🛏️ Senaste 'Vila i hemmet': {dagar_sedan_vila} dagar sedan**")
+    if dagar_sedan_vila >= 21:
+        st.error(f"⚠️ Dags för semester! Det var {dagar_sedan_vila} dagar sedan senaste 'Vila i hemmet'.")
+else:
+    st.info("Ingen 'Vila i hemmet' hittad ännu.")
+
 st.caption("Obs: Vila-scenarion genererar inga prenumeranter, intäkter, kostnader eller lön. Bonus kvar minskas dock med 'Bonus deltagit'.")
 
 # =========================
