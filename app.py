@@ -73,7 +73,7 @@ INPUT_ORDER = [
 # =========================
 # URL helpers (st.query_params med fallback)
 # =========================
-def _get_url_profile() -> str | None:
+def _get_url_profile():
     try:
         # Nya API:t
         val = st.query_params.get(URL_PROFILE_PARAM)
@@ -195,6 +195,45 @@ def init_state():
 init_state()
 
 # =========================
+# Hjälpare: typkonvertering från Sheets (datum/tid)
+# =========================
+def _to_date(v, default_if_fail=None):
+    if isinstance(v, date) and not isinstance(v, datetime):
+        return v
+    if isinstance(v, datetime):
+        return v.date()
+    if isinstance(v, str):
+        # försök ISO först
+        try:
+            return date.fromisoformat(v.strip().split(" ")[0])
+        except Exception:
+            try:
+                return pd.to_datetime(v, errors="raise").date()
+            except Exception:
+                pass
+    return default_if_fail if default_if_fail is not None else date.today()
+
+def _to_time(v, default_if_fail=None):
+    if isinstance(v, time):
+        return v
+    if isinstance(v, datetime):
+        return v.time().replace(microsecond=0)
+    if isinstance(v, str):
+        s = v.strip()
+        for fmt in ("%H:%M:%S", "%H:%M"):
+            try:
+                return datetime.strptime(s, fmt).time()
+            except Exception:
+                continue
+        # sista chans via pandas
+        try:
+            ts = pd.to_datetime(s, errors="raise")
+            return ts.time().replace(microsecond=0)
+        except Exception:
+            pass
+    return default_if_fail if default_if_fail is not None else time(7,0)
+
+# =========================
 # Hjälpare: min/max + slump
 # =========================
 def _add_hist_value(col, v):
@@ -235,6 +274,9 @@ def _ceil_to_next_hour(dt: datetime) -> datetime:
 def _recompute_next_start_from_rows(rows):
     """Gå igenom historiken och räkna fram tvingad NEXT_START_DT."""
     cfg = st.session_state[CFG_KEY]
+    # säkerställ typer
+    cfg["startdatum"] = _to_date(cfg.get("startdatum"), cfg["startdatum"])
+    cfg["starttid"]   = _to_time(cfg.get("starttid"),   cfg["starttid"])
     cur = datetime.combine(cfg["startdatum"], cfg["starttid"])
     if not rows:
         return cur
@@ -254,10 +296,7 @@ def _recompute_next_start_from_rows(rows):
 
         if end_sleep.date() > cur.date():
             base7 = datetime.combine(end_sleep.date(), time(7,0))
-            if end_sleep.time() <= time(7,0):
-                cur = base7
-            else:
-                cur = _ceil_to_next_hour(end_sleep)
+            cur = base7 if end_sleep.time() <= time(7,0) else _ceil_to_next_hour(end_sleep)
         else:
             cur = datetime.combine(cur.date() + timedelta(days=1), time(7,0))
     return cur
@@ -272,6 +311,18 @@ def _load_profile_settings(profile_name: str):
         prof_cfg = read_profile_settings(profile_name)
         if prof_cfg:
             st.session_state[CFG_KEY].update(prof_cfg)
+            # TYP-KONVERTERA kritiska fält (om de kom in som strängar)
+            cfg = st.session_state[CFG_KEY]
+            cfg["startdatum"]   = _to_date(cfg.get("startdatum"),   cfg["startdatum"])
+            cfg["fodelsedatum"] = _to_date(cfg.get("fodelsedatum"), cfg["fodelsedatum"])
+            cfg["starttid"]     = _to_time(cfg.get("starttid"),     cfg["starttid"])
+            # säkra numeriska
+            for k in ["PROD_STAFF","ESK_MIN","ESK_MAX","MAX_PAPPAN","MAX_GRANNAR","MAX_NILS_VANNER","MAX_NILS_FAMILJ","MAX_BEKANTA","HEIGHT_CM"]:
+                try: cfg[k] = int(float(cfg.get(k,0)))
+                except Exception: pass
+            for k in ["avgift_usd","BMI_GOAL","BONUS_PCT","SUPER_BONUS_PCT", EXTRA_SLEEP_KEY]:
+                try: cfg[k] = float(cfg.get(k,0.0))
+                except Exception: pass
     except Exception as e:
         st.warning(f"Kunde inte läsa inställningar för '{profile_name}': {e}")
 
@@ -318,24 +369,19 @@ def _auto_load_profile_every_run():
     ALLTID: hämta profilnamn (URL prioriteras), sätt PROFILE_KEY,
     skriv URL om saknas, och LÄS alltid in inställningar + data från Sheets.
     """
-    # 1) Försök hämta från URL
     url_prof = _get_url_profile()
 
-    # 2) Om ingen URL-profil: välj befintlig vald profil eller första i listan
     if not url_prof:
         profiles = list_profiles()
         fallback = st.session_state.get(PROFILE_KEY) or (profiles[0] if profiles else "")
         if fallback:
-            # Sätt URL (kan trigga rerun i vissa miljöer)
             _set_url_profile(fallback)
             st.session_state[PROFILE_KEY] = fallback
-            # LÄS in omedelbart (även om rerun triggas vill vi ha state korrekt)
             _load_profile_settings(fallback)
             _load_profile_data(fallback)
             st.session_state[LOADED_PROFILE_KEY] = fallback
         return
 
-    # 3) URL-profil finns -> använd den och LÄS alltid
     st.session_state[PROFILE_KEY] = url_prof
     _load_profile_settings(url_prof)
     _load_profile_data(url_prof)
@@ -402,9 +448,9 @@ def apply_scenario_fill():
 CFG = st.session_state[CFG_KEY]
 with st.sidebar:
     st.header("Inställningar (lokalt)")
-    CFG["startdatum"]   = st.date_input("Startdatum", value=CFG["startdatum"])
-    CFG["starttid"]     = st.time_input("Starttid", value=CFG["starttid"])
-    CFG["fodelsedatum"] = st.date_input("Födelsedatum", value=CFG["fodelsedatum"])
+    CFG["startdatum"]   = st.date_input("Startdatum", value=_to_date(CFG["startdatum"], CFG["startdatum"]))
+    CFG["starttid"]     = st.time_input("Starttid",   value=_to_time(CFG["starttid"], CFG["starttid"]))
+    CFG["fodelsedatum"] = st.date_input("Födelsedatum", value=_to_date(CFG["fodelsedatum"], CFG["fodelsedatum"]))
     CFG["avgift_usd"]   = st.number_input("Avgift per prenumerant (USD)", min_value=0.0, value=float(CFG["avgift_usd"]), step=1.0)
     CFG["PROD_STAFF"]   = st.number_input("Totalt antal personal (lönebas)", min_value=0, value=int(CFG["PROD_STAFF"]), step=1)
 
@@ -680,7 +726,10 @@ def _econ_compute(base, preview):
         alder = rad_dat.year - fd.year - ((rad_dat.month, rad_dat.day) < (fd.month, fd.day))
     except Exception:
         alder = 30
-    grund_lon = max(150.0, min(800.0, 0.08 * float(out["Intäkt företag"])))
+    grund_lon = max(150.0, min(800.0, 0.08 * float(out["Intäktt företag"]) if "Intäkt företag" in out else 0.0))
+    # rättning om key-stavning fel:
+    if "Intäkt företag" in out:
+        grund_lon = max(150.0, min(800.0, 0.08 * float(out["Intäkt företag"])))
     if   alder <= 18: faktor = 1.00
     elif 19 <= alder <= 23: faktor = 0.90
     elif 24 <= alder <= 27: faktor = 0.85
@@ -809,8 +858,6 @@ with rowB[0]:
     st.metric("Summa tid (timmar:minuter)", _hhmm(float(preview.get("Summa tid (sek)",0))))
 with rowB[1]:
     st.metric("Totalt män", int(preview.get("Totalt Män",0)))
-with rowB2:
-    pass
 with rowB[2]:
     tot_men_including = (
         int(base.get("Män",0)) + int(base.get("Svarta",0)) +
