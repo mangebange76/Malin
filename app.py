@@ -378,8 +378,8 @@ with st.sidebar:
     st.markdown(f"**Bonus killar kvar:** {int(CFG[BONUS_LEFT_KEY])}")
     st.markdown(f"**Super-bonus ack (antal):** {int(CFG.get(SUPER_ACC_KEY,0))}")
 
-    CFG["BONUS_PCT"]        = st.number_input("Bonus % (decimal, t.ex. 1.0 = 1%)", min_value=0.0, value=float(CFG.get("BONUS_PCT",1.0)), step=0.1)
-    CFG["SUPER_BONUS_PCT"]  = st.number_input("Super-bonus % (decimal, t.ex. 0.1 = 0.1%)", min_value=0.0, value=float(CFG.get("SUPER_BONUS_PCT",0.1)), step=0.1)
+    CFG["BONUS_PCT"]        = st.number_input("Bonus % (decimal, f.eks. 1.0 = 1%)", min_value=0.0, value=float(CFG.get("BONUS_PCT",1.0)), step=0.1)
+    CFG["SUPER_BONUS_PCT"]  = st.number_input("Super-bonus % (decimal, f.eks. 0.1 = 0.1%)", min_value=0.0, value=float(CFG.get("SUPER_BONUS_PCT",0.1)), step=0.1)
     CFG["BMI_GOAL"]         = st.number_input("BM mål (BMI)", min_value=10.0, max_value=40.0, value=float(CFG.get("BMI_GOAL",21.7)), step=0.1)
     CFG["HEIGHT_CM"]        = st.number_input("Längd (cm)", min_value=140, max_value=220, value=int(CFG.get("HEIGHT_CM",164)), step=1)
 
@@ -818,29 +818,6 @@ with rowH[1]:
 with rowH[2]:
     st.metric("Mål vikt (kg)", preview.get("Mål vikt (kg)", "-"))
 
-# Ekonomi
-st.markdown("**💵 Ekonomi (live)**")
-e1, e2, e3, e4 = st.columns(4)
-with e1:
-    st.metric("Prenumeranter (rad)", int(preview.get("Prenumeranter",0)))
-    st.metric("Intäkter", f"${float(preview.get('Intäkter',0)):,.2f}")
-with e2:
-    st.metric("Kostnad män", f"${float(preview.get('Kostnad män',0)):,.2f}")
-    st.metric("Intäkt Känner", f"${float(preview.get('Intäkt Känner',0)):,.2f}")
-with e3:
-    st.metric("Intäkt företag", f"${float(preview.get('Intäkt företag',0)):,.2f}")
-    st.metric("Lön Malin", f"${float(preview.get('Lön Malin',0)):,.2f}")
-with e4:
-    st.metric("Vinst", f"${float(preview.get('Vinst',0)):,.2f}")
-    st.metric("Bonus kvar", int(CFG.get(BONUS_LEFT_KEY,0)))
-
-# BM mål / Mål vikt (dubbelvisning för bakåtkomp.)
-mv1, mv2 = st.columns(2)
-with mv1:
-    st.metric("BM mål (BMI)", preview.get("BM mål", "-"))
-with mv2:
-    st.metric("Mål vikt (kg)", preview.get("Mål vikt (kg)", "-"))
-
 # ===== Nils – längst ner i liven =====
 try:
     nils_total = int(base.get("Nils",0)) + sum(int(r.get("Nils",0) or 0) for r in st.session_state[ROWS_KEY])
@@ -849,25 +826,29 @@ except Exception:
 st.markdown("**👤 Nils (live)**")
 st.metric("Nils (total)", nils_total)
 
-# =========================
-# Senaste "Vila i hemmet" – räkna dagar + varning vid 21+
-# =========================
+# ===== Ledighet – 'Vila i hemmet' (profilens tidslinje) =====
+# Beräkna "nu" utifrån profilens tidslinje (tvingad nästa start), inte dagens datum.
+timeline_now_date = st.session_state.get(NEXT_START_DT_KEY, datetime.combine(CFG["startdatum"], CFG["starttid"])).date()
+
 senaste_vila_datum = None
 for rad in reversed(st.session_state.get(ROWS_KEY, [])):
     if str(rad.get("Typ", "")).strip().startswith("Vila i hemmet"):
         try:
-            senaste_vila_datum = datetime.strptime(rad.get("Datum", ""), "%Y-%m-%d").date()
+            senaste_vila_datum = datetime.strptime(str(rad.get("Datum", "")).strip(), "%Y-%m-%d").date()
             break
         except Exception:
             continue
 
 if senaste_vila_datum:
-    dagar_sedan_vila = (date.today() - senaste_vila_datum).days
-    st.markdown(f"**🛏️ Senaste 'Vila i hemmet': {dagar_sedan_vila} dagar sedan**")
+    dagar_sedan_vila = max(0, (timeline_now_date - senaste_vila_datum).days)
+    st.markdown(f"**🛏️ Senaste 'Vila i hemmet' (enligt profilens tidslinje): {dagar_sedan_vila} dagar sedan**")
     if dagar_sedan_vila >= 21:
         st.error(f"⚠️ Dags för semester! Det var {dagar_sedan_vila} dagar sedan senaste 'Vila i hemmet'.")
 else:
-    st.info("Ingen 'Vila i hemmet' hittad ännu.")
+    dagar_fr_start = max(0, (timeline_now_date - CFG.get("startdatum", timeline_now_date)).days)
+    st.info(f"Ingen 'Vila i hemmet' hittad ännu. Dagar sedan profilens start: {dagar_fr_start}.")
+    if dagar_fr_start >= 21:
+        st.error(f"⚠️ Dags för semester! Ingen 'Vila i hemmet' än och det har gått {dagar_fr_start} dagar sedan start.")
 
 st.caption("Obs: Vila-scenarion genererar inga prenumeranter, intäkter, kostnader eller lön. Bonus kvar minskas dock med 'Bonus deltagit'.")
 
