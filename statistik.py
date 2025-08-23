@@ -1,6 +1,5 @@
 # statistik.py
-# Basversion 250823 + "summa / maxvärde" under snitt per scen för Personal/Pappan/Grannar/Nils vänner/Nils familj/Bekanta
-
+# Basversion 250823 (uppdaterad): korrekt ordning + "antal tillfällen" (summa/max)
 from typing import Dict, Any, Optional
 import pandas as pd
 
@@ -42,10 +41,6 @@ def _secs_to_wd(secs: float) -> str:
     return f"{w}v {d}d"
 
 def compute_stats(rows: pd.DataFrame, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """
-    Returnerar en ordnad dict med statistik, färdig att visas.
-    Alla presentationer har 2 decimaler där det är rimligt.
-    """
     stats: Dict[str, Any] = {}
     if rows is None or rows.empty:
         return {"Info": "Inga rader i databasen ännu."}
@@ -67,7 +62,7 @@ def compute_stats(rows: pd.DataFrame, cfg: Optional[Dict[str, Any]] = None) -> D
     MAX_BEK     = float(cfg.get("MAX_BEKANTA", 0))
     PROD_STAFF  = float(cfg.get("PROD_STAFF", 0))
 
-    # Säkra kolumnnamn
+    # Kolumner
     col_man       = "Män"
     col_svarta    = "Svarta"
     col_bonus     = "Bonus deltagit"
@@ -76,8 +71,8 @@ def compute_stats(rows: pd.DataFrame, cfg: Optional[Dict[str, Any]] = None) -> D
     col_hand_aktiv= "Händer aktiv"
 
     col_tid_sum   = "Summa tid (sek)"
-    col_tidD_sum  = "Summa D (sek)"      # om finns
-    col_tidTP_sum = "Summa TP (sek)"     # om finns
+    col_tidD_sum  = "Summa D (sek)"
+    col_tidTP_sum = "Summa TP (sek)"
 
     col_tid_kille = "Tid per kille (sek)"
     col_hand_kille= "Händer per kille (sek)"
@@ -85,11 +80,9 @@ def compute_stats(rows: pd.DataFrame, cfg: Optional[Dict[str, Any]] = None) -> D
     col_alskar_s  = "Tid Älskar (sek)"
 
     # === Topp: GB / Privat GB ===
-    # Antal GB = rader där Män > 0
     gb_mask = pd.to_numeric(rows.get(col_man, 0), errors="coerce").fillna(0) > 0
     antal_gb = int(gb_mask.sum())
 
-    # Privat GB = Män == 0 och minst en av källorna >0
     kallsum = (
         pd.to_numeric(rows.get(LBL_PAPPAN, 0), errors="coerce").fillna(0)
       + pd.to_numeric(rows.get(LBL_GRANNAR, 0), errors="coerce").fillna(0)
@@ -107,11 +100,11 @@ def compute_stats(rows: pd.DataFrame, cfg: Optional[Dict[str, Any]] = None) -> D
     snitt_gb = float(tot_men_series[gb_mask].sum()) / antal_gb if antal_gb > 0 else 0.0
     snitt_priv_gb = float(tot_men_series[privat_gb_mask].sum()) / antal_privat_gb if antal_privat_gb > 0 else 0.0
 
-    stats["— Snitt —"] = ""  # avdelare
+    stats["— Snitt —"] = ""
     stats["Snitt GB (Totalt män / GB)"] = _fmt2(snitt_gb)
     stats["Snitt Privat GB (Totalt män / Privat GB)"] = _fmt2(snitt_priv_gb)
 
-    # === Totalt antal män (enligt din definition) ===
+    # === Totalt antal män (def) ===
     total_man = (
         _safe_sum(rows, col_man)
       + _safe_sum(rows, col_svarta)
@@ -126,20 +119,17 @@ def compute_stats(rows: pd.DataFrame, cfg: Optional[Dict[str, Any]] = None) -> D
     )
     stats["Totalt antal män (def)"] = _fmt2(total_man)
 
-    # === Andel svarta ===
-    # Rader med svarta > 0: på dessa räknas även ESK + BONUS som svarta
+    # === Andel svarta (%) + antal ===
     sv_series  = pd.to_numeric(rows.get(col_svarta, 0), errors="coerce").fillna(0)
     esk_series = pd.to_numeric(rows.get(LBL_ESK, 0), errors="coerce").fillna(0)
     bon_series = pd.to_numeric(rows.get(col_bonus, 0), errors="coerce").fillna(0)
-    man_series = pd.to_numeric(rows.get(col_man, 0), errors="coerce").fillna(0)
-
     mask_svarta = sv_series > 0
     total_svarta_count = float(sv_series.sum() + esk_series[mask_svarta].sum() + bon_series[mask_svarta].sum())
     stats["Svarta – antal"] = _fmt2(total_svarta_count)
     andel_svarta_pct = (total_svarta_count / total_man * 100.0) if total_man > 0 else 0.0
     stats["Andel svarta (%)"] = _fmt2(andel_svarta_pct)
 
-    # === DP/DPP/DAP/TAP: summor + snitt per scen (på rader med Totalt män > 0) ===
+    # === DP/DPP/DAP/TAP: summor + snitt per scen (Totalt män > 0) ===
     for col in ["DP", "DPP", "DAP", "TAP"]:
         summan = _safe_sum(rows, col)
         stats[f"{col} – summa"] = _fmt2(summan)
@@ -152,47 +142,29 @@ def compute_stats(rows: pd.DataFrame, cfg: Optional[Dict[str, Any]] = None) -> D
     stats["Älskar – summa"] = _fmt2(_safe_sum(rows, "Älskar"))
     stats["Sover med – summa"] = _fmt2(_safe_sum(rows, "Sover med"))
 
-    # === Enskilda fält-summor ===
-    stats["Bonus deltagit – summa"]   = _fmt2(_safe_sum(rows, col_bonus))
-    stats["Personal deltagit – summa"] = _fmt2(_safe_sum(rows, col_personal))
-    stats[f"{LBL_PAPPAN} – summa"]    = _fmt2(_safe_sum(rows, LBL_PAPPAN))
-    stats[f"{LBL_GRANNAR} – summa"]   = _fmt2(_safe_sum(rows, LBL_GRANNAR))
-    stats[f"{LBL_NV} – summa"]        = _fmt2(_safe_sum(rows, LBL_NV))
-    stats[f"{LBL_NF} – summa"]        = _fmt2(_safe_sum(rows, LBL_NF))
-    stats[f"{LBL_BEK} – summa"]       = _fmt2(_safe_sum(rows, LBL_BEK))
-    stats[f"{LBL_ESK} – summa"]       = _fmt2(_safe_sum(rows, LBL_ESK))
-
-    # === Snitt per scen för de enskilda fälten (summa / rader där fältet > 0) ===
+    # === Enskilda fält: SUMMA -> SNITT PER SCEN -> ANTAL TILLFÄLLEN (summa/max) ===
     def _snitt_per_scen(colname: str) -> float:
         series = pd.to_numeric(rows.get(colname, 0), errors="coerce").fillna(0)
         mask = series > 0
         denom = int(mask.sum())
         return float(series[mask].sum()) / denom if denom > 0 else 0.0
 
-    stats["Bonus deltagit – snitt per scen"]   = _fmt2(_snitt_per_scen(col_bonus))
-    stats["Personal deltagit – snitt per scen"] = _fmt2(_snitt_per_scen(col_personal))
-    stats[f"{LBL_PAPPAN} – snitt per scen"]    = _fmt2(_snitt_per_scen(LBL_PAPPAN))
-    stats[f"{LBL_GRANNAR} – snitt per scen"]   = _fmt2(_snitt_per_scen(LBL_GRANNAR))
-    stats[f"{LBL_NV} – snitt per scen"]        = _fmt2(_snitt_per_scen(LBL_NV))
-    stats[f"{LBL_NF} – snitt per scen"]        = _fmt2(_snitt_per_scen(LBL_NF))
-    stats[f"{LBL_BEK} – snitt per scen"]       = _fmt2(_snitt_per_scen(LBL_BEK))
-    stats[f"{LBL_ESK} – snitt per scen"]       = _fmt2(_snitt_per_scen(LBL_ESK))
-
-    # === NYTT: "summa / maxvärde från inställningar" direkt under snitt per scen ===
-    def _sum_div_max(colname: str, maxval: float) -> str:
+    def _block_sum_snitt_tillfallen(field_label: str, colname: str, maxval: float):
         s = _safe_sum(rows, colname)
-        return _fmt2(s / maxval) if maxval > 0 else "0.00"
+        stats[f"{field_label} – summa"] = _fmt2(s)
+        stats[f"{field_label} – snitt per scen"] = _fmt2(_snitt_per_scen(colname))
+        # "antal tillfällen" = summa / max
+        antal = s / maxval if maxval > 0 else 0.0
+        stats[f"{field_label} – antal tillfällen"] = _fmt2(antal)
 
-    # Personal deltagit / PROD_STAFF
-    stats["Personal deltagit – summa / max (PROD_STAFF)"] = _sum_div_max(col_personal, PROD_STAFF)
-    # Pappan/Grannar/Nils vänner/Nils familj/Bekanta mot respektive MAX_*
-    stats[f"{LBL_PAPPAN} – summa / max"]  = _sum_div_max(LBL_PAPPAN, MAX_PAPPAN)
-    stats[f"{LBL_GRANNAR} – summa / max"] = _sum_div_max(LBL_GRANNAR, MAX_GRANNAR)
-    stats[f"{LBL_NV} – summa / max"]      = _sum_div_max(LBL_NV, MAX_NV)
-    stats[f"{LBL_NF} – summa / max"]      = _sum_div_max(LBL_NF, MAX_NF)
-    stats[f"{LBL_BEK} – summa / max"]     = _sum_div_max(LBL_BEK, MAX_BEK)
+    _block_sum_snitt_tillfallen("Personal deltagit", col_personal, PROD_STAFF)
+    _block_sum_snitt_tillfallen(LBL_PAPPAN, LBL_PAPPAN, MAX_PAPPAN)
+    _block_sum_snitt_tillfallen(LBL_GRANNAR, LBL_GRANNAR, MAX_GRANNAR)
+    _block_sum_snitt_tillfallen(LBL_NV, LBL_NV, MAX_NV)
+    _block_sum_snitt_tillfallen(LBL_NF, LBL_NF, MAX_NF)
+    _block_sum_snitt_tillfallen(LBL_BEK, LBL_BEK, MAX_BEK)
 
-    # === Summa av MAX-värden (placeras under enskilda presentationer) ===
+    # Summa av MAX-värden (källor)
     stats["Summa MAX (källor)"] = _fmt2(MAX_PAPPAN + MAX_GRANNAR + MAX_NV + MAX_NF)
 
     # === Tidsstatistik: Summa tid/D/TP sek -> HM / D:H / V:D ===
@@ -203,7 +175,6 @@ def compute_stats(rows: pd.DataFrame, cfg: Optional[Dict[str, Any]] = None) -> D
 
     tot_secs  = _safe_sum(rows, col_tid_sum)
     _time_block("Summa tid (sek)", tot_secs)
-
     if col_tidD_sum in rows.columns:
         _time_block("Summa D (sek)", _safe_sum(rows, col_tidD_sum))
     if col_tidTP_sum in rows.columns:
@@ -230,7 +201,7 @@ def compute_stats(rows: pd.DataFrame, cfg: Optional[Dict[str, Any]] = None) -> D
     if col_hangel in rows.columns:
         stats["Hångel – snitt (sek/kille)"] = _fmt2(_safe_mean(rows[col_hangel]))
 
-    # === Tid älskar: summa + snitt KÄNNER (sum Älskar / (MAX_PAPPAN+MAX_GRANNAR+MAX_NV+MAX_NF)) ===
+    # === Tid älskar: summa + snitt KÄNNER ===
     alskar_sum = _safe_sum(rows, "Älskar")
     stats["Älskar – summa"] = _fmt2(alskar_sum)
     denom_kanner = MAX_PAPPAN + MAX_GRANNAR + MAX_NV + MAX_NF
