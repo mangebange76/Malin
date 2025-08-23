@@ -6,11 +6,11 @@ def compute_stats(rows_df: pd.DataFrame, cfg: dict) -> dict:
     Allt numeriskt formatteras med 2 decimaler i svensk stil:
       115 718,52  (mellanslag som tusentalsavskiljare, komma som decimal)
 
-    NYTT:
+    Innehåll:
+    - Vanlig statistik (GB, Nöjdhet, Totalt/Svarta, DP/DPP/DAP/TAP, Källor, Händer, Tider, Snitt, Ekonomi).
     - Ekonomi: "Känner tjänar" = (Intäkt Känner – summa + Vinst – summa) /
       (MAX_PAPPAN + MAX_GRANNAR + MAX_NILS_VANNER + MAX_NILS_FAMILJ + MAX_BEKANTA)
-    - Prognos 365 dagar: nedbantad till exakt de punkter du efterfrågade och
-      kompletterad med relevanta snitt.
+    - Prognos 365 dagar: enligt dina punkter + Nöjdhet (365d) och Nöjdhet / vecka (inkl. Nils).
     """
     out = {}
 
@@ -19,7 +19,6 @@ def compute_stats(rows_df: pd.DataFrame, cfg: dict) -> dict:
         """Svensk formatering: tusental med mellanslag, decimal med komma."""
         try:
             s = f"{float(x):,.{decimals}f}"
-            # "1,234,567.89" -> "1 234 567,89"
             return s.replace(",", " ").replace(".", ",")
         except Exception:
             return "0,00" if decimals == 2 else "0"
@@ -42,7 +41,6 @@ def compute_stats(rows_df: pd.DataFrame, cfg: dict) -> dict:
         return float(a) / float(b) if float(b) != 0.0 else 0.0
 
     def _sec_to_hours_days_weeks(sec: float):
-        # Allt tillbaka som decimala enheter med två decimaler (svensk formatering senare)
         hours = sec / 3600.0
         days  = hours / 24.0
         weeks = days / 7.0
@@ -295,9 +293,10 @@ def compute_stats(rows_df: pd.DataFrame, cfg: dict) -> dict:
     kanner_tjanar = _div(ik_sum + v_sum, denom_kanner_all)
     out["Känner tjänar"] = _fmt_sv(kanner_tjanar)
 
-    # ===== NYTT: Prognos 365 dagar (endast begärda punkter) =====
+    # ===== Prognos 365 dagar =====
     days = _covered_days(rows_df)
     factor_365 = 365.0 / float(days) if days > 0 else 0.0
+    weeks_per_year = 365.0 / 7.0  # ~52.14
 
     # Grundsummor 365d
     total_man_sum_365 = total_man_sum * factor_365
@@ -312,6 +311,7 @@ def compute_stats(rows_df: pd.DataFrame, cfg: dict) -> dict:
     pd_365            = float(PD.sum()) * factor_365
     bek_365           = float(BE.sum()) * factor_365
     esk_365           = float(ES.sum()) * factor_365
+    nils_365          = sum_nils * factor_365  # <-- Nils i prognosen
 
     pren_365 = pren_sum * factor_365
     int_365  = int_sum  * factor_365
@@ -357,24 +357,24 @@ def compute_stats(rows_df: pd.DataFrame, cfg: dict) -> dict:
 
     # Älskar + snitt
     out["Älskar – summa (365d)"] = _fmt_sv(alskar_365)
-    out["Snitt Älskar (känner)"] = _fmt_sv(alskar_snitt_kanner)
+    out["Snitt Älskar (känner)"] = _fmt_sv(_div(alskar_365, denom_kanner_core))
 
     # Sover med + snitt
     out["Sover med – summa (365d)"] = _fmt_sv(sover_365)
-    out["Snitt Sover med / MAX (Nils familj)"] = _fmt_sv(sover_div_max_nf)
+    out["Snitt Sover med / MAX (Nils familj)"] = _fmt_sv(_div(sover_365, MAX_NF))
 
     # Källor (summa 365d + snitt per scen)
-    out[f"{LBL_PAPPAN} – summa (365d)"]  = _fmt_sv(p_365)
+    out[f"{LBL_PAPPAN} – summa (365d)"]   = _fmt_sv(p_365)
     out[f"{LBL_PAPPAN} – snitt per scen"] = _fmt_sv(p_avg)
 
-    out[f"{LBL_GRANNAR} – summa (365d)"]  = _fmt_sv(g_365)
+    out[f"{LBL_GRANNAR} – summa (365d)"]   = _fmt_sv(g_365)
     out[f"{LBL_GRANNAR} – snitt per scen"] = _fmt_sv(g_avg)
 
-    out[f"{LBL_NV} – summa (365d)"]      = _fmt_sv(nv_365)
-    out[f"{LBL_NV} – snitt per scen"]     = _fmt_sv(nv_avg)
+    out[f"{LBL_NV} – summa (365d)"]        = _fmt_sv(nv_365)
+    out[f"{LBL_NV} – snitt per scen"]      = _fmt_sv(nv_avg)
 
-    out[f"{LBL_NF} – summa (365d)"]      = _fmt_sv(nf_365)
-    out[f"{LBL_NF} – snitt per scen"]     = _fmt_sv(nf_avg)
+    out[f"{LBL_NF} – summa (365d)"]        = _fmt_sv(nf_365)
+    out[f"{LBL_NF} – snitt per scen"]      = _fmt_sv(nf_avg)
 
     out["Bonus deltagit – summa (365d)"]    = _fmt_sv(bd_365)
     out["Bonus deltagit – snitt per scen"]  = _fmt_sv(bd_avg)
@@ -387,6 +387,36 @@ def compute_stats(rows_df: pd.DataFrame, cfg: dict) -> dict:
 
     out[f"{LBL_ESK} – summa (365d)"]        = _fmt_sv(esk_365)
 
+    # ===== Nöjdhet 365d + per vecka (inkl. Nils) =====
+    alskar_snitt_kanner_365 = _div(alskar_365, denom_kanner_core)
+    tillf_pappan_365        = _div(p_365,  MAX_PAPPAN)
+    tillf_grannar_365       = _div(g_365,  MAX_GRANNAR)
+    tillf_nv_365            = _div(nv_365, MAX_NV)
+    tillf_nf_365            = _div(nf_365, MAX_NF)
+    sover_div_max_nf_365    = _div(sover_365, MAX_NF)
+
+    noj_pappan_365  = alskar_snitt_kanner_365 + tillf_pappan_365
+    noj_grannar_365 = alskar_snitt_kanner_365 + tillf_grannar_365
+    noj_nv_365      = alskar_snitt_kanner_365 + tillf_nv_365
+    noj_nf_365      = alskar_snitt_kanner_365 + tillf_nf_365 + sover_div_max_nf_365
+    # Nils: i "vanlig" nöjdhet använder vi bara summan av kolumnen Nils, så vi skalar den till 365 dagar.
+    noj_nils_365    = nils_365
+
+    out[f"Nöjdhet – {LBL_PAPPAN} (365d)"]  = _fmt_sv(noj_pappan_365)
+    out[f"Nöjdhet – {LBL_PAPPAN} / vecka"] = _fmt_sv(_div(noj_pappan_365, weeks_per_year))
+
+    out[f"Nöjdhet – {LBL_GRANNAR} (365d)"]  = _fmt_sv(noj_grannar_365)
+    out[f"Nöjdhet – {LBL_GRANNAR} / vecka"] = _fmt_sv(_div(noj_grannar_365, weeks_per_year))
+
+    out[f"Nöjdhet – {LBL_NV} (365d)"]       = _fmt_sv(noj_nv_365)
+    out[f"Nöjdhet – {LBL_NV} / vecka"]      = _fmt_sv(_div(noj_nv_365, weeks_per_year))
+
+    out[f"Nöjdhet – {LBL_NF} (365d)"]       = _fmt_sv(noj_nf_365)
+    out[f"Nöjdhet – {LBL_NF} / vecka"]      = _fmt_sv(_div(noj_nf_365, weeks_per_year))
+
+    out["Nöjdhet – Nils (365d)"]            = _fmt_sv(noj_nils_365)
+    out["Nöjdhet – Nils / vecka"]           = _fmt_sv(_div(noj_nils_365, weeks_per_year))
+
     # Ekonomi 365d
     out["Prenumeranter – summa (365d)"] = _fmt_sv(pren_365)
     out["Intäkter – summa (365d)"]      = _fmt_sv(int_365)
@@ -396,7 +426,7 @@ def compute_stats(rows_df: pd.DataFrame, cfg: dict) -> dict:
     out["Lön Malin – summa (365d)"]     = _fmt_sv(lm_365)
     out["Lön Malin – snitt per scen"]   = _fmt_sv(lm_avg_per_scen)
 
-    # Känner tjänar – 365d (beräknad på 365d-summor)
+    # Känner tjänar – 365d
     out["Känner tjänar – (365d)"] = _fmt_sv(kanner_tjanar_365)
 
     out["Vinst – summa (365d)"]   = _fmt_sv(v_365)
