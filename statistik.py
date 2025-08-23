@@ -1,370 +1,261 @@
 # statistik.py
-from __future__ import annotations
-import re
-import math
+# Basversion 250823 + "summa / maxvärde" under snitt per scen för Personal/Pappan/Grannar/Nils vänner/Nils familj/Bekanta
+
+from typing import Dict, Any, Optional
 import pandas as pd
-
-WS_STRIP_RE = re.compile(r"[\u00A0\u2007\u202F\u200B\u200C\u200D]")  # NBSP, figure, narrow, zero-widths
-MULTI_SPACE_RE = re.compile(r"\s+")
-
-def _clean_colname(s: str) -> str:
-    s = str(s)
-    s = WS_STRIP_RE.sub(" ", s)          # ersätt “special”-mellanrum med vanlig space
-    s = MULTI_SPACE_RE.sub(" ", s).strip()
-    return s
-
-NUM_KEEP_RE = re.compile(r"[^0-9,.\-()]")  # behåll bara siffror, , . - ( )
-
-def _parse_float(val) -> float:
-    """
-    Robust parsning av tal från strängar:
-    - tar bort valutasymboler/bokstäver
-    - hanterar tusentalsavgränsare och både punkt/komma som decimaltecken
-    - stödjer parentes för negativa tal
-    """
-    if val is None or (isinstance(val, float) and math.isnan(val)):
-        return 0.0
-    if isinstance(val, (int, float)):
-        try:
-            return float(val)
-        except Exception:
-            return 0.0
-
-    s = str(val).strip()
-    if not s:
-        return 0.0
-
-    # Negativt med parentes
-    neg = False
-    if s.startswith("(") and s.endswith(")"):
-        neg = True
-        s = s[1:-1]
-
-    # Ta bort allt utom siffror och skiljetecken
-    s = NUM_KEEP_RE.sub("", s)
-    s = s.replace(" ", "").replace("\u00A0", "")  # säkra ännu en gång
-
-    if not s:
-        return 0.0
-
-    # Om både komma och punkt finns: välj den SISTA som decimal, rensa andra
-    if "," in s and "." in s:
-        last_comma = s.rfind(",")
-        last_dot   = s.rfind(".")
-        if last_dot > last_comma:
-            # punkt som decimal -> ta bort alla komman
-            s = s.replace(",", "")
-        else:
-            # komma som decimal -> ta bort alla punkter
-            s = s.replace(".", "")
-            s = s.replace(",", ".")
-    elif "," in s and "." not in s:
-        # bara komma -> decimal
-        s = s.replace(",", ".")
-    # annars: bara punkt -> redan decimal
-
-    try:
-        out = float(s)
-    except Exception:
-        out = 0.0
-    return -out if neg else out
-
-def _to_float_series(s: pd.Series) -> pd.Series:
-    return s.apply(_parse_float).astype("float64")
 
 def _fmt2(x: float) -> str:
     try:
-        return f"{float(x):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"{float(x):.2f}"
     except Exception:
-        return "0,00"
+        return "0.00"
 
-def _fmt_pct(p: float) -> str:
-    return f"{_fmt2(p)} %"
+def _safe_sum(df: pd.DataFrame, col: str) -> float:
+    if col in df.columns:
+        return float(pd.to_numeric(df[col].fillna(0), errors="coerce").sum())
+    return 0.0
 
-def compute_stats(df: pd.DataFrame, cfg: dict | None = None) -> dict:
-    stats: dict[str,str] = {}
-    if df is None or df.empty:
-        return stats
-
-    # ---------- 1) Städa kolumnnamn och duplicera inte ----------
-    clean_map = {}
-    used = set()
-    for c in df.columns:
-        cc = _clean_colname(c)
-        if cc in used:
-            # om renat namn skulle krocka, behåll originalnamn
-            cc = str(c)
-        used.add(cc)
-        clean_map[c] = cc
-    df = df.rename(columns=clean_map)
-    cols = set(df.columns)
-
-    # ---------- 2) Hämta labels & max från cfg ----------
-    cfg = cfg or {}
-    LBL_PAPPAN  = cfg.get("LBL_PAPPAN",  "Pappans vänner")
-    LBL_GRANNAR = cfg.get("LBL_GRANNAR", "Grannar")
-    LBL_NV      = cfg.get("LBL_NILS_VANNER",  "Nils vänner")
-    LBL_NF      = cfg.get("LBL_NILS_FAMILJ",  "Nils familj")
-    LBL_BEK     = cfg.get("LBL_BEKANTA", "Bekanta")
-    LBL_ESK     = cfg.get("LBL_ESK",     "Eskilstuna killar")
-
-    MAX_PAPPAN  = _parse_float(cfg.get("MAX_PAPPAN", 0))
-    MAX_GRANNAR = _parse_float(cfg.get("MAX_GRANNAR", 0))
-    MAX_NV      = _parse_float(cfg.get("MAX_NILS_VANNER", 0))
-    MAX_NF      = _parse_float(cfg.get("MAX_NILS_FAMILJ", 0))
-    MAX_BEK     = _parse_float(cfg.get("MAX_BEKANTA", 0))
-    PROD_STAFF  = _parse_float(cfg.get("PROD_STAFF", 0))
-
-    # ---------- 3) Hjälpare ----------
-    def s_col(name: str) -> pd.Series:
-        if name not in cols:
-            return pd.Series([0.0]*len(df), dtype="float64")
-        return _to_float_series(df[name])
-
-    def sum_exact(name: str) -> float:
-        return float(s_col(name).sum()) if name in cols else 0.0
-
-    def exist(name: str) -> bool:
-        return name in cols
-
-    # Händer aktiv robust
-    def hander_aktiv_series() -> pd.Series:
-        nm = None
-        for cand in ["Händer aktiv", "Hander aktiv"]:
-            if cand in cols:
-                nm = cand; break
-        if nm is None:
-            return pd.Series([0.0]*len(df), dtype="float64")
-
-        raw = df[nm].fillna("")
-        out = []
-        for v in raw:
-            if isinstance(v, (int, float)):
-                out.append(1.0 if _parse_float(v) >= 1 else 0.0)
-            else:
-                vs = str(v).strip().lower()
-                if vs in ("1","ja","true","t","y","yes"):
-                    out.append(1.0)
-                elif vs in ("0","nej","false","f","n","no",""):
-                    out.append(0.0)
-                else:
-                    out.append(1.0 if _parse_float(v) >= 1 else 0.0)
-        return pd.Series(out, dtype="float64")
-
-    # mm:ss fallback
-    MMSS_RE = re.compile(r"^\s*(\d+)\s*:\s*([0-5]?\d)\s*$")
-    def mmss_to_sec_series(name: str) -> pd.Series:
-        if name not in cols:
-            return pd.Series([0.0]*len(df), dtype="float64")
-        raw = df[name].fillna("")
-        out = []
-        for v in raw:
-            if isinstance(v, (int, float)):
-                out.append(float(v))
-                continue
-            m = MMSS_RE.match(str(v))
-            if m:
-                mm = int(m.group(1)); ss = int(m.group(2)); out.append(float(mm*60+ss))
-            else:
-                out.append(_parse_float(v))  # om någon redan skrivit sekunder
-        return pd.Series(out, dtype="float64")
-
-    # Totalt män per rad (egen beräkning – robust mot saknade kolumner)
-    def totalt_man_per_rad() -> pd.Series:
-        parts = [
-            s_col("Män"), s_col("Svarta"), s_col(LBL_PAPPAN), s_col(LBL_GRANNAR),
-            s_col(LBL_NV), s_col(LBL_NF), s_col(LBL_BEK), s_col(LBL_ESK),
-            s_col("Bonus deltagit"), s_col("Personal deltagit")
-        ]
-        s = parts[0].copy()
-        for p in parts[1:]:
-            s = s.add(p, fill_value=0.0)
-        return s
-
-    # ---------- 4) GB/Privat GB (överst) ----------
-    man = s_col("Män")
-    antal_gb = int((man > 0).sum())
-
-    privat_mask = (man == 0) & (
-        (s_col(LBL_PAPPAN) > 0) |
-        (s_col(LBL_GRANNAR) > 0) |
-        (s_col(LBL_NV) > 0) |
-        (s_col(LBL_NF) > 0)
-    )
-    antal_privat_gb = int(privat_mask.sum())
-
-    stats["Antal GB"] = _fmt2(antal_gb)
-    stats["Privat GB"] = _fmt2(antal_privat_gb)
-
-    # ---------- 5) TOTALER ----------
-    stats["— TOTALER —"] = ""
-
-    total_man_stat = (
-        sum_exact("Män")
-        + sum_exact("Svarta")
-        + sum_exact("Bonus deltagit")
-        + sum_exact(LBL_ESK)
-        + MAX_PAPPAN + MAX_GRANNAR + MAX_NV + MAX_NF + MAX_BEK + PROD_STAFF
-    )
-    stats["Totalt antal män (statistik)"] = _fmt2(total_man_stat)
-
-    svarta = s_col("Svarta")
-    svart_mask = (svarta > 0)
-    andel_svarta_numer = float(
-        svarta[svart_mask].sum()
-        + s_col(LBL_ESK)[svart_mask].sum()
-        + s_col("Bonus deltagit")[svart_mask].sum()
-    )
-    stats["Svarta (antal för andel)"] = _fmt2(andel_svarta_numer)
-    stats["Andel svarta"] = _fmt_pct((andel_svarta_numer / total_man_stat * 100.0) if total_man_stat > 0 else 0.0)
-
-    # DP/DPP/DAP/TAP (summa + snitt per scen där Totalt män > 0)
-    tot_man_rad = totalt_man_per_rad()
-    n_scen_totman = int((tot_man_rad > 0).sum())
-
-    for etikett in ["DP", "DPP", "DAP", "TAP"]:
-        s = sum_exact(etikett)
-        stats[f"{etikett} (summa)"] = _fmt2(s)
-        stats[f"{etikett} – snitt per scen"] = ""
-        stats[f"{etikett} snitt per scen"] = _fmt2(s / (n_scen_totman if n_scen_totman > 0 else 1))
-
-    # Älskar / Sover med (summa)
-    stats["Älskar (summa)"]    = _fmt2(sum_exact("Älskar"))
-    stats["Sover med (summa)"] = _fmt2(sum_exact("Sover med"))
-
-    # Enskilda kolumner (summa + snitt per scen där kolumn > 0)
-    def add_sum_and_avg(col_name: str):
-        s = sum_exact(col_name)
-        n_pos = int((s_col(col_name) > 0).sum()) if exist(col_name) else 0
-        stats[f"{col_name} (summa)"] = _fmt2(s)
-        stats[f"{col_name} – snitt per scen"] = ""
-        stats[f"{col_name} snitt per scen"] = _fmt2(s / (n_pos if n_pos > 0 else 1))
-
-    for nm in ["Bonus deltagit","Personal deltagit", LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
-        add_sum_and_avg(nm)
-
-    # Summa maxvärden (Känner)
-    stats["Summa maxvärden (Känner)"] = _fmt2(MAX_PAPPAN + MAX_GRANNAR + MAX_NV + MAX_NF)
-
-    # ---------- 6) TID ----------
-    stats["— TID —"] = ""
-
-    def alias_sum_seconds(cands: list[str]) -> float:
-        for nm in cands:
-            if nm in cols:
-                return float(s_col(nm).sum())
+def _safe_mean(series) -> float:
+    try:
+        s = pd.to_numeric(series, errors="coerce").dropna()
+        return float(s.mean()) if len(s) else 0.0
+    except Exception:
         return 0.0
 
-    # Summa tid (sek) (alias) + presentation (h/d/veckor)
-    AL_SUM_TID = ["Summa tid (sek)","Summa tid sek","Summa tid"]
-    AL_SUM_D   = ["Summa D (sek)","Summa D sek","Summa D"]
-    AL_SUM_TP  = ["Summa TP (sek)","Summa TP sek","Summa TP"]
+def _secs_to_hm(secs: float) -> str:
+    secs = max(0, int(round(secs)))
+    h = secs // 3600
+    m = (secs % 3600) // 60
+    return f"{h}:{m:02d}"
 
-    def time_block(prefix: str, seconds: float):
-        hours = seconds / 3600.0
-        days  = seconds / 86400.0
-        weeks = seconds / (7*86400.0)
-        stats[f"{prefix} – timmar"] = _fmt2(hours)
-        stats[f"{prefix} – dagar"]  = _fmt2(days)
-        stats[f"{prefix} – veckor"] = _fmt2(weeks)
+def _secs_to_dh(secs: float) -> str:
+    secs = max(0, int(round(secs)))
+    d = secs // 86400
+    h = (secs % 86400) // 3600
+    return f"{d}d {h}h"
 
-    sum_tid_sec = alias_sum_seconds(AL_SUM_TID)
-    time_block("Summa tid", sum_tid_sec)
+def _secs_to_wd(secs: float) -> str:
+    secs = max(0, int(round(secs)))
+    days = secs // 86400
+    w = days // 7
+    d = days % 7
+    return f"{w}v {d}d"
 
-    sum_d_sec  = alias_sum_seconds(AL_SUM_D)
-    sum_tp_sec = alias_sum_seconds(AL_SUM_TP)
-    time_block("Summa D",  sum_d_sec)
-    time_block("Summa TP", sum_tp_sec)
+def compute_stats(rows: pd.DataFrame, cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """
+    Returnerar en ordnad dict med statistik, färdig att visas.
+    Alla presentationer har 2 decimaler där det är rimligt.
+    """
+    stats: Dict[str, Any] = {}
+    if rows is None or rows.empty:
+        return {"Info": "Inga rader i databasen ännu."}
 
-    # ---------- 7) HÄNDER ----------
-    stats["— HÄNDER —"] = ""
-    total_rows = int(len(df))
-    h_aktiv = hander_aktiv_series()
-    aktiva = int((h_aktiv == 1).sum()) if len(h_aktiv) else 0
-    inaktiva = max(0, total_rows - aktiva)
-    p_aktiva = (aktiva / total_rows * 100.0) if total_rows > 0 else 0.0
-    p_inaktiva = (inaktiva / total_rows * 100.0) if total_rows > 0 else 0.0
-    stats["Händer aktiva (antal)"]   = _fmt2(aktiva)
-    stats["Händer aktiva (%)"]       = _fmt_pct(p_aktiva)
-    stats["Händer inaktiva (antal)"] = _fmt2(inaktiva)
-    stats["Händer inaktiva (%)"]     = _fmt_pct(p_inaktiva)
+    cfg = cfg or {}
 
-    # ---------- 8) EKONOMI ----------
-    stats["— EKONOMI —"] = ""
-    # Summa
-    stats["Prenumeranter (summa)"]   = _fmt2(sum_exact("Prenumeranter"))
-    stats["Intäkter (summa)"]        = _fmt2(sum_exact("Intäkter"))
-    stats["Kostnad män (summa)"]     = _fmt2(sum_exact("Kostnad män"))
-    stats["Intäkt Känner (summa)"]   = _fmt2(sum_exact("Intäkt Känner"))
-    stats["Intäkt företag (summa)"]  = _fmt2(sum_exact("Intäkt företag"))
-    stats["Lön Malin (summa)"]       = _fmt2(sum_exact("Lön Malin"))
-    stats["Vinst (summa)"]           = _fmt2(sum_exact("Vinst"))
+    # Dynamiska etiketter/inställningar
+    LBL_PAPPAN  = cfg.get("LBL_PAPPAN", "Pappans vänner")
+    LBL_GRANNAR = cfg.get("LBL_GRANNAR", "Grannar")
+    LBL_NV      = cfg.get("LBL_NILS_VANNER", "Nils vänner")
+    LBL_NF      = cfg.get("LBL_NILS_FAMILJ", "Nils familj")
+    LBL_BEK     = cfg.get("LBL_BEKANTA", "Bekanta")
+    LBL_ESK     = cfg.get("LBL_ESK", "Eskilstuna killar")
 
-    # Snitt Lön Malin per scen / per totalt män
-    lon_tot = sum_exact("Lön Malin")
-    stats["Lön Malin / Per scen"]   = _fmt2(lon_tot / (antal_gb if antal_gb > 0 else 1))
-    stats["Lön Malin / Totalt män"] = _fmt2(lon_tot / (total_man_stat if total_man_stat > 0 else 1))
+    MAX_PAPPAN  = float(cfg.get("MAX_PAPPAN", 0))
+    MAX_GRANNAR = float(cfg.get("MAX_GRANNAR", 0))
+    MAX_NV      = float(cfg.get("MAX_NILS_VANNER", 0))
+    MAX_NF      = float(cfg.get("MAX_NILS_FAMILJ", 0))
+    MAX_BEK     = float(cfg.get("MAX_BEKANTA", 0))
+    PROD_STAFF  = float(cfg.get("PROD_STAFF", 0))
 
-    # ---------- 9) SNITT ----------
-    stats["— SNITT —"] = ""
+    # Säkra kolumnnamn
+    col_man       = "Män"
+    col_svarta    = "Svarta"
+    col_bonus     = "Bonus deltagit"
+    col_personal  = "Personal deltagit"
+    col_tot_men   = "Totalt Män"
+    col_hand_aktiv= "Händer aktiv"
 
-    # Snitt GB / Snitt Privat GB (Totalt män / antal)
-    totman_rad = totalt_man_per_rad()
-    sum_totman_gb     = float(totman_rad[man > 0].sum()) if len(totman_rad) else 0.0
-    sum_totman_privat = float(totman_rad[privat_mask].sum()) if len(totman_rad) else 0.0
-    stats["Snitt GB (Totalt män / Antal GB)"]               = _fmt2(sum_totman_gb / (antal_gb if antal_gb > 0 else 1))
-    stats["Snitt Privat GB (Totalt män / Antal Privat GB)"] = _fmt2(sum_totman_privat / (antal_privat_gb if antal_privat_gb > 0 else 1))
+    col_tid_sum   = "Summa tid (sek)"
+    col_tidD_sum  = "Summa D (sek)"      # om finns
+    col_tidTP_sum = "Summa TP (sek)"     # om finns
 
-    # Snitt tid GB/Privat GB (h)
-    sum_tid_series = None
-    for nm in AL_SUM_TID:
-        if exist(nm):
-            sum_tid_series = s_col(nm); break
-    if sum_tid_series is None:
-        sum_tid_series = pd.Series([0.0]*len(df), dtype="float64")
+    col_tid_kille = "Tid per kille (sek)"
+    col_hand_kille= "Händer per kille (sek)"
+    col_hangel    = "Hångel (sek/kille)"
+    col_alskar_s  = "Tid Älskar (sek)"
 
-    stats["Snitt tid GB (h)"]        = _fmt2((float(sum_tid_series[man > 0].sum())      / 3600.0) / (antal_gb if antal_gb > 0 else 1))
-    stats["Snitt tid Privat GB (h)"] = _fmt2((float(sum_tid_series[privat_mask].sum()) / 3600.0) / (antal_privat_gb if antal_privat_gb > 0 else 1))
+    # === Topp: GB / Privat GB ===
+    # Antal GB = rader där Män > 0
+    gb_mask = pd.to_numeric(rows.get(col_man, 0), errors="coerce").fillna(0) > 0
+    antal_gb = int(gb_mask.sum())
 
-    # Tid/kille snitt inkl/ex händer (min)
-    # a) tpk (sek)
-    if "Tid per kille (sek)" in cols:
-        tpk_sec = s_col("Tid per kille (sek)")
-    elif "Tid/kille (sek)" in cols:
-        tpk_sec = s_col("Tid/kille (sek)")
-    elif "Tid per kille" in cols:
-        tpk_sec = mmss_to_sec_series("Tid per kille")
-    else:
-        tpk_sec = pd.Series([0.0]*len(df), dtype="float64")
+    # Privat GB = Män == 0 och minst en av källorna >0
+    kallsum = (
+        pd.to_numeric(rows.get(LBL_PAPPAN, 0), errors="coerce").fillna(0)
+      + pd.to_numeric(rows.get(LBL_GRANNAR, 0), errors="coerce").fillna(0)
+      + pd.to_numeric(rows.get(LBL_NV, 0), errors="coerce").fillna(0)
+      + pd.to_numeric(rows.get(LBL_NF, 0), errors="coerce").fillna(0)
+    )
+    privat_gb_mask = (pd.to_numeric(rows.get(col_man, 0), errors="coerce").fillna(0) == 0) & (kallsum > 0)
+    antal_privat_gb = int(privat_gb_mask.sum())
 
-    # b) händer per kille (sek)
-    if "Händer per kille (sek)" in cols:
-        hpk_sec = s_col("Händer per kille (sek)")
-    elif "Hander per kille (sek)" in cols:
-        hpk_sec = s_col("Hander per kille (sek)")
-    else:
-        hpk_sec = pd.Series([0.0]*len(df), dtype="float64")
+    stats["Antal GB"] = antal_gb
+    stats["Privat GB"] = antal_privat_gb
 
-    h_act = hander_aktiv_series()
-    extra = hpk_sec.where(h_act == 1, other=0.0)
+    # Snitt GB & Privat GB
+    tot_men_series = pd.to_numeric(rows.get(col_tot_men, rows.get(col_man, 0)), errors="coerce").fillna(0)
+    snitt_gb = float(tot_men_series[gb_mask].sum()) / antal_gb if antal_gb > 0 else 0.0
+    snitt_priv_gb = float(tot_men_series[privat_gb_mask].sum()) / antal_privat_gb if antal_privat_gb > 0 else 0.0
 
-    snitt_tid_ex = float(tpk_sec.mean()) / 60.0 if len(tpk_sec) else 0.0
-    snitt_tid_in = float((tpk_sec + extra).mean()) / 60.0 if len(tpk_sec) else 0.0
-    stats["Tid/kille snitt ex händer (min)"]   = _fmt2(snitt_tid_ex)
-    stats["Tid/kille snitt inkl händer (min)"] = _fmt2(snitt_tid_in)
+    stats["— Snitt —"] = ""  # avdelare
+    stats["Snitt GB (Totalt män / GB)"] = _fmt2(snitt_gb)
+    stats["Snitt Privat GB (Totalt män / Privat GB)"] = _fmt2(snitt_priv_gb)
 
-    # Hångel snitt (min)
-    if "Hångel (sek/kille)" in cols:
-        hangel_sec = s_col("Hångel (sek/kille)")
-    else:
-        hangel_sec = pd.Series([0.0]*len(df), dtype="float64")
-    stats["Hångel snitt (min)"] = _fmt2(float(hangel_sec.mean() / 60.0) if len(hangel_sec) else 0.0)
+    # === Totalt antal män (enligt din definition) ===
+    total_man = (
+        _safe_sum(rows, col_man)
+      + _safe_sum(rows, col_svarta)
+      + _safe_sum(rows, col_bonus)
+      + _safe_sum(rows, LBL_ESK)
+      + float(PROD_STAFF)
+      + _safe_sum(rows, LBL_PAPPAN)
+      + _safe_sum(rows, LBL_GRANNAR)
+      + _safe_sum(rows, LBL_NV)
+      + _safe_sum(rows, LBL_NF)
+      + _safe_sum(rows, LBL_BEK)
+    )
+    stats["Totalt antal män (def)"] = _fmt2(total_man)
 
-    # Älskar snitt Känner
-    kanner_max_sum = (MAX_PAPPAN + MAX_GRANNAR + MAX_NV + MAX_NF)
-    stats["Älskar snitt Känner"] = _fmt2(sum_exact("Älskar") / (kanner_max_sum if kanner_max_sum > 0 else 1))
+    # === Andel svarta ===
+    # Rader med svarta > 0: på dessa räknas även ESK + BONUS som svarta
+    sv_series  = pd.to_numeric(rows.get(col_svarta, 0), errors="coerce").fillna(0)
+    esk_series = pd.to_numeric(rows.get(LBL_ESK, 0), errors="coerce").fillna(0)
+    bon_series = pd.to_numeric(rows.get(col_bonus, 0), errors="coerce").fillna(0)
+    man_series = pd.to_numeric(rows.get(col_man, 0), errors="coerce").fillna(0)
 
-    # Sover med snitt Nils familj
-    stats["Sover med snitt Nils familj"] = _fmt2(sum_exact("Sover med") / (MAX_NF if MAX_NF > 0 else 1))
+    mask_svarta = sv_series > 0
+    total_svarta_count = float(sv_series.sum() + esk_series[mask_svarta].sum() + bon_series[mask_svarta].sum())
+    stats["Svarta – antal"] = _fmt2(total_svarta_count)
+    andel_svarta_pct = (total_svarta_count / total_man * 100.0) if total_man > 0 else 0.0
+    stats["Andel svarta (%)"] = _fmt2(andel_svarta_pct)
+
+    # === DP/DPP/DAP/TAP: summor + snitt per scen (på rader med Totalt män > 0) ===
+    for col in ["DP", "DPP", "DAP", "TAP"]:
+        summan = _safe_sum(rows, col)
+        stats[f"{col} – summa"] = _fmt2(summan)
+        mask = pd.to_numeric(rows.get(col_tot_men, rows.get(col_man, 0)), errors="coerce").fillna(0) > 0
+        denom = int(mask.sum())
+        snitt = float(pd.to_numeric(rows.get(col, 0), errors="coerce").fillna(0)[mask].sum()) / denom if denom > 0 else 0.0
+        stats[f"{col} – snitt per scen"] = _fmt2(snitt)
+
+    # === Älskar / Sover med – summor (enskilt) ===
+    stats["Älskar – summa"] = _fmt2(_safe_sum(rows, "Älskar"))
+    stats["Sover med – summa"] = _fmt2(_safe_sum(rows, "Sover med"))
+
+    # === Enskilda fält-summor ===
+    stats["Bonus deltagit – summa"]   = _fmt2(_safe_sum(rows, col_bonus))
+    stats["Personal deltagit – summa"] = _fmt2(_safe_sum(rows, col_personal))
+    stats[f"{LBL_PAPPAN} – summa"]    = _fmt2(_safe_sum(rows, LBL_PAPPAN))
+    stats[f"{LBL_GRANNAR} – summa"]   = _fmt2(_safe_sum(rows, LBL_GRANNAR))
+    stats[f"{LBL_NV} – summa"]        = _fmt2(_safe_sum(rows, LBL_NV))
+    stats[f"{LBL_NF} – summa"]        = _fmt2(_safe_sum(rows, LBL_NF))
+    stats[f"{LBL_BEK} – summa"]       = _fmt2(_safe_sum(rows, LBL_BEK))
+    stats[f"{LBL_ESK} – summa"]       = _fmt2(_safe_sum(rows, LBL_ESK))
+
+    # === Snitt per scen för de enskilda fälten (summa / rader där fältet > 0) ===
+    def _snitt_per_scen(colname: str) -> float:
+        series = pd.to_numeric(rows.get(colname, 0), errors="coerce").fillna(0)
+        mask = series > 0
+        denom = int(mask.sum())
+        return float(series[mask].sum()) / denom if denom > 0 else 0.0
+
+    stats["Bonus deltagit – snitt per scen"]   = _fmt2(_snitt_per_scen(col_bonus))
+    stats["Personal deltagit – snitt per scen"] = _fmt2(_snitt_per_scen(col_personal))
+    stats[f"{LBL_PAPPAN} – snitt per scen"]    = _fmt2(_snitt_per_scen(LBL_PAPPAN))
+    stats[f"{LBL_GRANNAR} – snitt per scen"]   = _fmt2(_snitt_per_scen(LBL_GRANNAR))
+    stats[f"{LBL_NV} – snitt per scen"]        = _fmt2(_snitt_per_scen(LBL_NV))
+    stats[f"{LBL_NF} – snitt per scen"]        = _fmt2(_snitt_per_scen(LBL_NF))
+    stats[f"{LBL_BEK} – snitt per scen"]       = _fmt2(_snitt_per_scen(LBL_BEK))
+    stats[f"{LBL_ESK} – snitt per scen"]       = _fmt2(_snitt_per_scen(LBL_ESK))
+
+    # === NYTT: "summa / maxvärde från inställningar" direkt under snitt per scen ===
+    def _sum_div_max(colname: str, maxval: float) -> str:
+        s = _safe_sum(rows, colname)
+        return _fmt2(s / maxval) if maxval > 0 else "0.00"
+
+    # Personal deltagit / PROD_STAFF
+    stats["Personal deltagit – summa / max (PROD_STAFF)"] = _sum_div_max(col_personal, PROD_STAFF)
+    # Pappan/Grannar/Nils vänner/Nils familj/Bekanta mot respektive MAX_*
+    stats[f"{LBL_PAPPAN} – summa / max"]  = _sum_div_max(LBL_PAPPAN, MAX_PAPPAN)
+    stats[f"{LBL_GRANNAR} – summa / max"] = _sum_div_max(LBL_GRANNAR, MAX_GRANNAR)
+    stats[f"{LBL_NV} – summa / max"]      = _sum_div_max(LBL_NV, MAX_NV)
+    stats[f"{LBL_NF} – summa / max"]      = _sum_div_max(LBL_NF, MAX_NF)
+    stats[f"{LBL_BEK} – summa / max"]     = _sum_div_max(LBL_BEK, MAX_BEK)
+
+    # === Summa av MAX-värden (placeras under enskilda presentationer) ===
+    stats["Summa MAX (källor)"] = _fmt2(MAX_PAPPAN + MAX_GRANNAR + MAX_NV + MAX_NF)
+
+    # === Tidsstatistik: Summa tid/D/TP sek -> HM / D:H / V:D ===
+    def _time_block(title: str, secs: float):
+        stats[f"{title} – timmar:minuter"] = _secs_to_hm(secs)
+        stats[f"{title} – dagar:timmar"]   = _secs_to_dh(secs)
+        stats[f"{title} – veckor:dagar"]   = _secs_to_wd(secs)
+
+    tot_secs  = _safe_sum(rows, col_tid_sum)
+    _time_block("Summa tid (sek)", tot_secs)
+
+    if col_tidD_sum in rows.columns:
+        _time_block("Summa D (sek)", _safe_sum(rows, col_tidD_sum))
+    if col_tidTP_sum in rows.columns:
+        _time_block("Summa TP (sek)", _safe_sum(rows, col_tidTP_sum))
+
+    # === Händer aktiv/inaktiv antal + % ===
+    if col_hand_aktiv in rows.columns:
+        hand = pd.to_numeric(rows[col_hand_aktiv].fillna(0), errors="coerce")
+        n_rows = len(rows)
+        aktiva = int((hand == 1).sum())
+        inakt  = int((hand == 0).sum())
+        stats["Händer aktiva – antal"]   = aktiva
+        stats["Händer aktiva – %"]       = _fmt2(aktiva / n_rows * 100.0 if n_rows else 0.0)
+        stats["Händer inaktiva – antal"] = inakt
+        stats["Händer inaktiva – %"]     = _fmt2(inakt / n_rows * 100.0 if n_rows else 0.0)
+
+    # === Tid per kille snitt – med & utan händer ===
+    tid_kille = pd.to_numeric(rows.get(col_tid_kille, 0), errors="coerce").fillna(0)
+    hand_kille= pd.to_numeric(rows.get(col_hand_kille, 0), errors="coerce").fillna(0)
+    stats["Tid/kille snitt (ex händer)"] = _fmt2(float(tid_kille.mean()) if len(rows) else 0.0)
+    stats["Tid/kille snitt (inkl händer)"] = _fmt2(float((tid_kille + hand_kille).mean()) if len(rows) else 0.0)
+
+    # === Genomsnitt hångel tid ===
+    if col_hangel in rows.columns:
+        stats["Hångel – snitt (sek/kille)"] = _fmt2(_safe_mean(rows[col_hangel]))
+
+    # === Tid älskar: summa + snitt KÄNNER (sum Älskar / (MAX_PAPPAN+MAX_GRANNAR+MAX_NV+MAX_NF)) ===
+    alskar_sum = _safe_sum(rows, "Älskar")
+    stats["Älskar – summa"] = _fmt2(alskar_sum)
+    denom_kanner = MAX_PAPPAN + MAX_GRANNAR + MAX_NV + MAX_NF
+    stats["Älskar snitt känner"] = _fmt2(alskar_sum / denom_kanner if denom_kanner > 0 else 0.0)
+
+    # Sover med: summa / MAX_NF
+    sover_sum = _safe_sum(rows, "Sover med")
+    stats["Sover med – summa / MAX Nils familj"] = _fmt2(sover_sum / MAX_NF if MAX_NF > 0 else 0.0)
+
+    # === Ekonomi (summor) ===
+    for col, label in [
+        ("Prenumeranter", "Prenumeranter – summa"),
+        ("Intäkter", "Intäkter – summa"),
+        ("Kostnad män", "Kostnad män – summa"),
+        ("Intäkt Känner", "Intäkt Känner – summa"),
+        ("Intäkt företag", "Intäkt företag – summa"),
+        ("Lön Malin", "Lön Malin – summa"),
+        ("Vinst", "Vinst – summa"),
+    ]:
+        stats[label] = _fmt2(_safe_sum(rows, col))
+
+    # === Snitt på Lön Malin ===
+    lon_sum = _safe_sum(rows, "Lön Malin")
+    total_men_all = float(tot_men_series.sum())
+    stats["Lön Malin / Per scen"] = _fmt2(lon_sum / antal_gb if antal_gb > 0 else 0.0)
+    stats["Lön Malin / Totalt män"] = _fmt2(lon_sum / total_men_all if total_men_all > 0 else 0.0)
 
     return stats
