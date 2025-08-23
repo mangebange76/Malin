@@ -77,7 +77,23 @@ def _init_cfg_defaults():
         "starttid":     time(7,0),
         "fodelsedatum": date(1970,1,1),
 
-        "avgift_usd":   30.0,
+        # Ekonomi – styrbara
+        "avgift_usd":   30.0,      # Avgift per prenumerant
+        "ECON_SALARY_RATE": 0.08,  # andel av Intäkt företag för grundlön
+        "ECON_SALARY_MIN_USD": 150.0,
+        "ECON_SALARY_MAX_USD": 800.0,
+        "ECON_COST_RATE_PER_HOUR": 15.0,      # USD per person-timme
+        "ECON_KANNER_RATE": 30.0,             # USD per känner-enhet
+
+        # Åldersfaktorer (multiplicerar grundlönen)
+        "AGEF_LE18":   1.00,
+        "AGEF_19_23":  0.90,
+        "AGEF_24_27":  0.85,
+        "AGEF_28_30":  0.80,
+        "AGEF_31_32":  0.75,
+        "AGEF_33_35":  0.70,
+        "AGEF_GE36":   0.60,
+
         "PROD_STAFF":   800,
 
         BONUS_LEFT_KEY: 500,
@@ -188,11 +204,19 @@ def _coerce_cfg_types(cfg: dict) -> dict:
     if "fodelsedatum" in out: out["fodelsedatum"] = _to_date(out["fodelsedatum"])
     if "starttid"     in out: out["starttid"]     = _to_time(out["starttid"])
 
-    # numeriska fält
-    for k in ("avgift_usd","BONUS_PCT","SUPER_BONUS_PCT","BMI_GOAL"):
+    # numeriska fält (floats)
+    float_keys = (
+        "avgift_usd","BONUS_PCT","SUPER_BONUS_PCT","BMI_GOAL",
+        "ECON_SALARY_RATE","ECON_SALARY_MIN_USD","ECON_SALARY_MAX_USD",
+        "ECON_COST_RATE_PER_HOUR","ECON_KANNER_RATE",
+        "AGEF_LE18","AGEF_19_23","AGEF_24_27","AGEF_28_30","AGEF_31_32","AGEF_33_35","AGEF_GE36"
+    )
+    for k in float_keys:
         if k in out:
-            try: out[k] = float(out[k])
+            try: out[k] = float(str(out[k]).replace(",", "."))
             except Exception: pass
+
+    # numeriska fält (ints)
     for k in ("PROD_STAFF","HEIGHT_CM","ESK_MIN","ESK_MAX","MAX_PAPPAN","MAX_GRANNAR","MAX_NILS_VANNER","MAX_NILS_FAMILJ","MAX_BEKANTA"):
         if k in out:
             try: out[k] = int(float(out[k]))
@@ -277,7 +301,6 @@ def _recompute_dp_block_from_current_inputs():
        DPP/DAP=DP om kolumnens historik>0, annars 0,
        TAP=40% av total om historik>0, annars 0.
     """
-    CFG = st.session_state[CFG_KEY]
     total = (
         int(st.session_state.get("in_man", 0)) +
         int(st.session_state.get("in_svarta", 0)) +
@@ -394,7 +417,6 @@ def apply_scenario_fill():
         pass
 
     elif s == "Slumpa scen vit":
-        # Män + källor + personal + ESK slumpas 30–60% av historiskt max, Svarta=0
         st.session_state["in_man"]    = _slump_30_60_of_hist_max("Män")
         st.session_state["in_svarta"] = 0
 
@@ -416,7 +438,6 @@ def apply_scenario_fill():
         st.session_state["in_sover"]  = 1
 
     elif s == "Slumpa scen svart":
-        # Svarta slumpas 30–60% av historiskt max; Män=0; källor=0; personal=0; ESK enligt intervall
         LBL_ESK = CFG["LBL_ESK"]
         st.session_state["in_man"]    = 0
         st.session_state["in_svarta"] = _slump_30_60_of_hist_max("Svarta")
@@ -438,7 +459,6 @@ def apply_scenario_fill():
         st.session_state["in_sover"]  = 1
 
     elif s == "Vila på jobbet":
-        # Alltid 0 för Män/Svarta i vila-scenarier
         st.session_state["in_man"]    = 0
         st.session_state["in_svarta"] = 0
 
@@ -451,7 +471,6 @@ def apply_scenario_fill():
         st.session_state["in_sover"]=1
 
     elif s == "Vila i hemmet (dag 1–7)":
-        # Alltid 0 för Män/Svarta i vila-scenarier
         st.session_state["in_man"]    = 0
         st.session_state["in_svarta"] = 0
 
@@ -475,9 +494,13 @@ def apply_scenario_fill():
 CFG = st.session_state[CFG_KEY]
 with st.sidebar:
     st.header("Inställningar (lokalt)")
+
+    # Start & födelse
     CFG["startdatum"]   = st.date_input("Startdatum", value=CFG["startdatum"])
     CFG["starttid"]     = st.time_input("Starttid", value=CFG["starttid"])
     CFG["fodelsedatum"] = st.date_input("Födelsedatum", value=CFG["fodelsedatum"])
+
+    # Ekonomi – grund
     CFG["avgift_usd"]   = st.number_input("Avgift per prenumerant (USD)", min_value=0.0, value=float(CFG["avgift_usd"]), step=1.0)
     CFG["PROD_STAFF"]   = st.number_input("Totalt antal personal (lönebas)", min_value=0, value=int(CFG["PROD_STAFF"]), step=1)
 
@@ -489,8 +512,34 @@ with st.sidebar:
     CFG["BMI_GOAL"]         = st.number_input("BM mål (BMI)", min_value=10.0, max_value=40.0, value=float(CFG.get("BMI_GOAL",21.7)), step=0.1)
     CFG["HEIGHT_CM"]        = st.number_input("Längd (cm)", min_value=140, max_value=220, value=int(CFG.get("HEIGHT_CM",164)), step=1)
 
-    # >>> NYTT: Sömn efter scen (timmar) – används i tvingad schemaläggning
+    # >>> Sömn efter scen (timmar)
     CFG[EXTRA_SLEEP_KEY]    = st.number_input("Sömn efter scen (timmar)", min_value=0.0, step=0.5, value=float(CFG.get(EXTRA_SLEEP_KEY,7)))
+
+    st.markdown("---")
+    st.subheader("Ekonomi – parametrar")
+    cE1, cE2 = st.columns(2)
+    with cE1:
+        CFG["ECON_SALARY_RATE"] = st.number_input("Lön: andel av Intäkt företag", min_value=0.0, value=float(CFG.get("ECON_SALARY_RATE",0.08)), step=0.01, format="%.2f")
+        CFG["ECON_SALARY_MIN_USD"] = st.number_input("Lön: min (USD)", min_value=0.0, value=float(CFG.get("ECON_SALARY_MIN_USD",150.0)), step=10.0)
+        CFG["ECON_SALARY_MAX_USD"] = st.number_input("Lön: max (USD)", min_value=0.0, value=float(CFG.get("ECON_SALARY_MAX_USD",800.0)), step=10.0)
+    with cE2:
+        CFG["ECON_COST_RATE_PER_HOUR"] = st.number_input("Kostnad män: USD per person-timme", min_value=0.0, value=float(CFG.get("ECON_COST_RATE_PER_HOUR",15.0)), step=1.0)
+        CFG["ECON_KANNER_RATE"] = st.number_input("Intäkt Känner: USD per enhet", min_value=0.0, value=float(CFG.get("ECON_KANNER_RATE",30.0)), step=1.0)
+
+    st.caption("Baslön = clamp(andel * Intäkt företag, min, max) × åldersfaktor")
+
+    st.subheader("Åldersfaktorer (multiplikator)")
+    cA1, cA2, cA3 = st.columns(3)
+    with cA1:
+        CFG["AGEF_LE18"]  = st.number_input("≤18 år",  min_value=0.0, value=float(CFG.get("AGEF_LE18",1.00)), step=0.05, format="%.2f")
+        CFG["AGEF_19_23"] = st.number_input("19–23 år", min_value=0.0, value=float(CFG.get("AGEF_19_23",0.90)), step=0.05, format="%.2f")
+        CFG["AGEF_24_27"] = st.number_input("24–27 år", min_value=0.0, value=float(CFG.get("AGEF_24_27",0.85)), step=0.05, format="%.2f")
+    with cA2:
+        CFG["AGEF_28_30"] = st.number_input("28–30 år", min_value=0.0, value=float(CFG.get("AGEF_28_30",0.80)), step=0.05, format="%.2f")
+        CFG["AGEF_31_32"] = st.number_input("31–32 år", min_value=0.0, value=float(CFG.get("AGEF_31_32",0.75)), step=0.05, format="%.2f")
+        CFG["AGEF_33_35"] = st.number_input("33–35 år", min_value=0.0, value=float(CFG.get("AGEF_33_35",0.70)), step=0.05, format="%.2f")
+    with cA3:
+        CFG["AGEF_GE36"]  = st.number_input("≥36 år",  min_value=0.0, value=float(CFG.get("AGEF_GE36",0.60)), step=0.05, format="%.2f")
 
     st.markdown("---")
     st.subheader("Eskilstuna-intervall")
@@ -703,7 +752,17 @@ def _hardhet_from(base, preview):
         hard = 0
     return hard
 
+def _age_factor(cfg, alder: int) -> float:
+    if   alder <= 18: return float(cfg.get("AGEF_LE18", 1.0))
+    elif 19 <= alder <= 23: return float(cfg.get("AGEF_19_23", 0.9))
+    elif 24 <= alder <= 27: return float(cfg.get("AGEF_24_27", 0.85))
+    elif 28 <= alder <= 30: return float(cfg.get("AGEF_28_30", 0.8))
+    elif 31 <= alder <= 32: return float(cfg.get("AGEF_31_32", 0.75))
+    elif 33 <= alder <= 35: return float(cfg.get("AGEF_33_35", 0.7))
+    else:                    return float(cfg.get("AGEF_GE36", 0.6))
+
 def _econ_compute(base, preview):
+    cfg = st.session_state[CFG_KEY]
     out = {}
     typ = str(base.get("Typ",""))
 
@@ -719,41 +778,41 @@ def _econ_compute(base, preview):
     out["Prenumeranter"] = int(pren)
 
     # Intäkter
-    avg = float(base.get("Avgift", 0.0))
+    avg = float(cfg.get("avgift_usd", 0.0))
     out["Intäkter"] = float(pren) * avg
 
-    # Intäkt Känner
+    # Intäkt Känner (styrbar)
     ksam = int(preview.get("Känner sammanlagt", 0)) or int(preview.get("Känner", 0))
-    out["Intäkt Känner"] = 0.0 if "Vila" in typ else float(ksam) * 30.0
+    k_rate = float(cfg.get("ECON_KANNER_RATE", 30.0))
+    out["Intäkt Känner"] = 0.0 if "Vila" in typ else float(ksam) * k_rate
 
-    # Kostnad män
+    # Kostnad män (styrbar: USD per person-timme)
     if "Vila" in typ:
         kost = 0.0
     else:
         timmar = float(preview.get("Summa tid (sek)", 0)) / 3600.0
-        bas_mann = int(base.get("Män",0)) + int(base.get("Svarta",0)) + int(base.get(CFG["LBL_BEKANTA"],0)) + int(base.get(CFG["LBL_ESK"],0))
-        tot_personer = bas_mann + int(CFG.get("PROD_STAFF",0))
-        kost = timmar * tot_personer * 15.0
+        bas_mann = int(base.get("Män",0)) + int(base.get("Svarta",0)) + int(base.get(cfg["LBL_BEKANTA"],0)) + int(base.get(cfg["LBL_ESK"],0))
+        tot_personer = bas_mann + int(cfg.get("PROD_STAFF",0))
+        kost_rate = float(cfg.get("ECON_COST_RATE_PER_HOUR", 15.0))
+        kost = timmar * tot_personer * kost_rate
     out["Kostnad män"] = float(kost)
 
-    # Intäkt företag, Lön, Vinst
+    # Intäkt företag, Lön, Vinst (styrbart lönespann + åldersfaktor + rate)
     out["Intäkt företag"] = float(out["Intäkter"]) - float(out["Kostnad män"]) - float(out["Intäkt Känner"])
 
-    # Åldersfaktor
     try:
         rad_dat = base["_rad_datum"]; fd = base["_fodelsedatum"]
         alder = rad_dat.year - fd.year - ((rad_dat.month, rad_dat.day) < (fd.month, fd.day))
     except Exception:
         alder = 30
-    grund_lon = max(150.0, min(800.0, 0.08 * float(out["Intäkt företag"])))
-    if   alder <= 18: faktor = 1.00
-    elif 19 <= alder <= 23: faktor = 0.90
-    elif 24 <= alder <= 27: faktor = 0.85
-    elif 28 <= alder <= 30: faktor = 0.80
-    elif 31 <= alder <= 32: faktor = 0.75
-    elif 33 <= alder <= 35: faktor = 0.70
-    else: faktor = 0.60
-    lon = 0.0 if "Vila" in typ else grund_lon * faktor
+
+    salary_rate = float(cfg.get("ECON_SALARY_RATE", 0.08))
+    min_usd     = float(cfg.get("ECON_SALARY_MIN_USD", 150.0))
+    max_usd     = float(cfg.get("ECON_SALARY_MAX_USD", 800.0))
+    grund_lon   = min(max(salary_rate * float(out["Intäkt företag"]), min_usd), max_usd)
+    faktor      = _age_factor(cfg, int(alder))
+    lon         = 0.0 if "Vila" in typ else grund_lon * faktor
+
     out["Lön Malin"] = float(lon)
     out["Vinst"] = float(out["Intäkt företag"]) - float(out["Lön Malin"])
     return out
@@ -986,7 +1045,6 @@ def _prepare_row_for_save(_preview: dict, _base: dict, _cfg: dict) -> dict:
 
     # Gör alla date/time json-vänliga
     row = {k: _stringify_if_needed(v) for k, v in row.items()}
-    # Behåll meta-nycklar som strängar (kan vara nyttiga)
     for k in ["_rad_datum","_fodelsedatum","_starttid"]:
         if k in row:
             row[k] = _stringify_if_needed(row[k])
@@ -1021,7 +1079,6 @@ with cL:
         full_row = _prepare_row_for_save(preview, base, CFG)
         st.session_state[ROWS_KEY].append(full_row)
 
-        # uppdatera min/max (för slump)
         for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
                     LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
             _add_hist_value(col, int(full_row.get(col,0)))
@@ -1037,7 +1094,6 @@ with cR:
         try:
             full_row = _prepare_row_for_save(preview, base, CFG)
             _save_to_sheets_for_profile(st.session_state.get(PROFILE_KEY,""), full_row)
-            # spegla lokalt
             st.session_state[ROWS_KEY].append(full_row)
             for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
                         LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK]:
