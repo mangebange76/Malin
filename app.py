@@ -230,7 +230,7 @@ def _recompute_next_start_from_rows(rows):
             if end_sleep.time() <= time(7,0):
                 cur = base7
             else:
-                # ceil to next hour
+                # ceil till nästa hela timme
                 cur = (end_sleep.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
         else:
             cur = datetime.combine(cur.date() + timedelta(days=1), time(7,0))
@@ -314,53 +314,165 @@ def _load_profile_settings_and_data(profile_name: str):
         st.error(f"Kunde inte läsa profilens data ({profile_name}): {e}")
 
 # =========================
+# 30–60%-slump baserad på historiskt max + DP/DPP/DAP/TAP-logik
+# =========================
+def _hist_max(colname: str) -> int:
+    """Största positiva heltal i historiken för given kolumn."""
+    m = 0
+    for r in st.session_state.get(ROWS_KEY, []):
+        try:
+            v = r.get(colname, 0)
+            v = int(float(v)) if v not in (None, "") else 0
+            if v > m:
+                m = v
+        except Exception:
+            pass
+    return int(m)
+
+def _sum_hist(colname: str) -> int:
+    """Summan (heltal) i historiken för given kolumn."""
+    s = 0
+    for r in st.session_state.get(ROWS_KEY, []):
+        try:
+            v = r.get(colname, 0)
+            v = int(float(v)) if v not in (None, "") else 0
+            s += v
+        except Exception:
+            pass
+    return int(s)
+
+def _rand_30_60_of_hist_max(colname: str) -> int:
+    """
+    Slumpa ett heltal = 30–60% av historiskt max för kolumnen.
+    Om ingen historik -> 0.
+    """
+    hi = _hist_max(colname)
+    if hi <= 0:
+        return 0
+    pct = random.uniform(0.30, 0.60)
+    return max(0, int(round(hi * pct)))
+
+def _fill_core_30_60(CFG: dict, force_zero: dict | None = None) -> int:
+    """
+    Fyll in_*-fälten med 30–60% av historiskt max.
+    force_zero: {input_key: True} för att sätta vissa fält = 0 (scenario-regler).
+    Returnerar totalsumman av de 9 fälten.
+    """
+    if force_zero is None:
+        force_zero = {}
+
+    labels_map = {
+        "in_man":               "Män",
+        "in_svarta":            "Svarta",
+        "in_pappan":            CFG["LBL_PAPPAN"],
+        "in_grannar":           CFG["LBL_GRANNAR"],
+        "in_nils_vanner":       CFG["LBL_NILS_VANNER"],
+        "in_nils_familj":       CFG["LBL_NILS_FAMILJ"],
+        "in_bekanta":           CFG["LBL_BEKANTA"],
+        "in_personal_deltagit": "Personal deltagit",
+        "in_eskilstuna":        CFG["LBL_ESK"],
+    }
+
+    total = 0
+    for in_key, colname in labels_map.items():
+        if force_zero.get(in_key, False):
+            st.session_state[in_key] = 0
+            continue
+        v = _rand_30_60_of_hist_max(colname)
+        st.session_state[in_key] = int(v)
+        total += int(v)
+    return int(total)
+
+def _apply_dp_pack_from_total(total_sum: int) -> None:
+    """
+    Sätt DP/DPP/DAP/TAP enligt regeln:
+      - DP = 60% av total_sum (avrundat)
+      - DPP = DP om historisk DPP-summa > 0, annars 0
+      - DAP = DP om historisk DAP-summa > 0, annars 0
+      - TAP = 40% av total_sum om historisk TAP-summa > 0, annars 0
+    """
+    dp = int(round(total_sum * 0.60))
+    st.session_state["in_dp"] = dp
+
+    dpp_hist = _sum_hist("DPP")
+    st.session_state["in_dpp"] = dp if dpp_hist > 0 else 0
+
+    dap_hist = _sum_hist("DAP")
+    st.session_state["in_dap"] = dp if dap_hist > 0 else 0
+
+    tap_hist = _sum_hist("TAP")
+    st.session_state["in_tap"] = int(round(total_sum * 0.40)) if tap_hist > 0 else 0
+
+# =========================
 # Scenario-fill
 # =========================
 def apply_scenario_fill():
     CFG = st.session_state[CFG_KEY]
     s = st.session_state[SCENARIO_KEY]
 
-    keep_defaults = {"in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,"in_hander_aktiv":st.session_state.get("in_hander_aktiv",1)}
-    for k in INPUT_ORDER: st.session_state[k] = keep_defaults.get(k, 0)
+    # Behåll standarder
+    keep_defaults = {
+        "in_tid_s":60, "in_tid_d":60, "in_vila":7,
+        "in_dt_tid":60, "in_dt_vila":3,
+        "in_hander_aktiv":st.session_state.get("in_hander_aktiv",1)
+    }
+    for k in INPUT_ORDER:
+        st.session_state[k] = keep_defaults.get(k, 0)
 
-    def _slumpa_sexfalt():
-        for f,key in [("Fitta","in_fitta"),("Rumpa","in_rumpa"),("DP","in_dp"),("DPP","in_dpp"),("DAP","in_dap"),("TAP","in_tap")]:
-            st.session_state[key] = _rand_1_to_max(f)
+    # Valfritt: slumpa bas för Fitta/Rumpa (övriga sexfält styrs av DP-paketet)
+    def _slumpa_sexfalt_bas():
+        for f, key in [("Fitta","in_fitta"),("Rumpa","in_rumpa")]:
+            st.session_state[key] = _rand_30_60_of_hist_max(f)
 
-    def _slumpa_kallor():
-        LBL_PAPPAN = CFG["LBL_PAPPAN"]; LBL_GRANNAR = CFG["LBL_GRANNAR"]
-        LBL_NV = CFG["LBL_NILS_VANNER"]; LBL_NF = CFG["LBL_NILS_FAMILJ"]; LBL_BEK = CFG["LBL_BEKANTA"]
-        st.session_state["in_pappan"]      = _rand_1_to_max(LBL_PAPPAN)
-        st.session_state["in_grannar"]     = _rand_1_to_max(LBL_GRANNAR)
-        st.session_state["in_nils_vanner"] = _rand_1_to_max(LBL_NV)
-        st.session_state["in_nils_familj"] = _rand_1_to_max(LBL_NF)
-        st.session_state["in_bekanta"]     = _rand_1_to_max(LBL_BEK)
-        st.session_state["in_eskilstuna"]  = _rand_esk(CFG)
-
+    # ===== Scenarier =====
     if s == "Ny scen":
         pass
+
     elif s == "Slumpa scen vit":
-        st.session_state["in_svarta"] = 0
-        st.session_state["in_man"]    = _rand_1_to_max("Män")
-        _slumpa_sexfalt(); _slumpa_kallor()
-        st.session_state["in_alskar"] = 8; st.session_state["in_sover"]  = 1
+        _slumpa_sexfalt_bas()
+        total = _fill_core_30_60(
+            CFG,
+            force_zero={"in_svarta": True}  # vit = inga svarta
+        )
+        _apply_dp_pack_from_total(total)
+        st.session_state["in_alskar"] = 8
+        st.session_state["in_sover"]  = 1
+
     elif s == "Slumpa scen svart":
-        st.session_state["in_svarta"] = _rand_1_to_max("Svarta")
-        _slumpa_sexfalt()
-        st.session_state["in_pappan"]=0; st.session_state["in_grannar"]=0
-        st.session_state["in_nils_vanner"]=0; st.session_state["in_nils_familj"]=0
-        st.session_state["in_bekanta"]=0
-        st.session_state["in_eskilstuna"] = _rand_esk(CFG)
-        st.session_state["in_alskar"]=8; st.session_state["in_sover"]=1
+        _slumpa_sexfalt_bas()
+        # enligt tidigare: Män=0 och källor=0, men Svarta + Eskilstuna får fyllas
+        total = _fill_core_30_60(
+            CFG,
+            force_zero={
+                "in_man": True,
+                "in_pappan": True, "in_grannar": True,
+                "in_nils_vanner": True, "in_nils_familj": True,
+                "in_bekanta": True
+            }
+        )
+        _apply_dp_pack_from_total(total)
+        st.session_state["in_alskar"] = 8
+        st.session_state["in_sover"]  = 1
+
     elif s == "Vila på jobbet":
-        _slumpa_sexfalt(); _slumpa_kallor()
-        st.session_state["in_alskar"]=8; st.session_state["in_sover"]=1
+        _slumpa_sexfalt_bas()
+        total = _fill_core_30_60(CFG)
+        _apply_dp_pack_from_total(total)
+        st.session_state["in_alskar"] = 8
+        st.session_state["in_sover"]  = 1
+
     elif s == "Vila i hemmet (dag 1–7)":
-        _slumpa_sexfalt(); _slumpa_kallor()
-        st.session_state["in_alskar"]=6; st.session_state["in_sover"]=0; st.session_state["in_nils"]=0
+        _slumpa_sexfalt_bas()
+        total = _fill_core_30_60(CFG)
+        _apply_dp_pack_from_total(total)
+        st.session_state["in_alskar"] = 6
+        st.session_state["in_sover"]  = 0
+        st.session_state["in_nils"]   = 0
+
     elif s == "Super bonus":
         st.session_state["in_svarta"] = int(st.session_state[CFG_KEY].get(SUPER_ACC_KEY, 0))
 
+    # Uppdatera sceninfo
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
 # =========================
@@ -378,8 +490,8 @@ with st.sidebar:
     st.markdown(f"**Bonus killar kvar:** {int(CFG[BONUS_LEFT_KEY])}")
     st.markdown(f"**Super-bonus ack (antal):** {int(CFG.get(SUPER_ACC_KEY,0))}")
 
-    CFG["BONUS_PCT"]        = st.number_input("Bonus % (decimal, f.eks. 1.0 = 1%)", min_value=0.0, value=float(CFG.get("BONUS_PCT",1.0)), step=0.1)
-    CFG["SUPER_BONUS_PCT"]  = st.number_input("Super-bonus % (decimal, f.eks. 0.1 = 0.1%)", min_value=0.0, value=float(CFG.get("SUPER_BONUS_PCT",0.1)), step=0.1)
+    CFG["BONUS_PCT"]        = st.number_input("Bonus % (decimal, t.ex. 1.0 = 1%)", min_value=0.0, value=float(CFG.get("BONUS_PCT",1.0)), step=0.1)
+    CFG["SUPER_BONUS_PCT"]  = st.number_input("Super-bonus % (decimal, t.ex. 0.1 = 0.1%)", min_value=0.0, value=float(CFG.get("SUPER_BONUS_PCT",0.1)), step=0.1)
     CFG["BMI_GOAL"]         = st.number_input("BM mål (BMI)", min_value=10.0, max_value=40.0, value=float(CFG.get("BMI_GOAL",21.7)), step=0.1)
     CFG["HEIGHT_CM"]        = st.number_input("Längd (cm)", min_value=140, max_value=220, value=int(CFG.get("HEIGHT_CM",164)), step=1)
 
@@ -818,6 +930,29 @@ with rowH[1]:
 with rowH[2]:
     st.metric("Mål vikt (kg)", preview.get("Mål vikt (kg)", "-"))
 
+# Ekonomi
+st.markdown("**💵 Ekonomi (live)**")
+e1, e2, e3, e4 = st.columns(4)
+with e1:
+    st.metric("Prenumeranter (rad)", int(preview.get("Prenumeranter",0)))
+    st.metric("Intäkter", f"${float(preview.get('Intäkter',0)):,.2f}")
+with e2:
+    st.metric("Kostnad män", f"${float(preview.get('Kostnad män',0)):,.2f}")
+    st.metric("Intäkt Känner", f"${float(preview.get('Intäkt Känner',0)):,.2f}")
+with e3:
+    st.metric("Intäkt företag", f"${float(preview.get('Intäkt företag',0)):,.2f}")
+    st.metric("Lön Malin", f"${float(preview.get('Lön Malin',0)):,.2f}")
+with e4:
+    st.metric("Vinst", f"${float(preview.get('Vinst',0)):,.2f}")
+    st.metric("Bonus kvar", int(CFG.get(BONUS_LEFT_KEY,0)))
+
+# BM mål / Mål vikt (dubbelvisning för bakåtkomp.)
+mv1, mv2 = st.columns(2)
+with mv1:
+    st.metric("BM mål (BMI)", preview.get("BM mål", "-"))
+with mv2:
+    st.metric("Mål vikt (kg)", preview.get("Mål vikt (kg)", "-"))
+
 # ===== Nils – längst ner i liven =====
 try:
     nils_total = int(base.get("Nils",0)) + sum(int(r.get("Nils",0) or 0) for r in st.session_state[ROWS_KEY])
@@ -826,29 +961,24 @@ except Exception:
 st.markdown("**👤 Nils (live)**")
 st.metric("Nils (total)", nils_total)
 
-# ===== Ledighet – 'Vila i hemmet' (profilens tidslinje) =====
-# Beräkna "nu" utifrån profilens tidslinje (tvingad nästa start), inte dagens datum.
-timeline_now_date = st.session_state.get(NEXT_START_DT_KEY, datetime.combine(CFG["startdatum"], CFG["starttid"])).date()
-
+# ===== Senaste "Vila i hemmet" – räkna dagar utifrån appens tidslinje =====
+timeline_today = st.session_state[NEXT_START_DT_KEY].date()  # inte date.today()
 senaste_vila_datum = None
 for rad in reversed(st.session_state.get(ROWS_KEY, [])):
     if str(rad.get("Typ", "")).strip().startswith("Vila i hemmet"):
         try:
-            senaste_vila_datum = datetime.strptime(str(rad.get("Datum", "")).strip(), "%Y-%m-%d").date()
+            senaste_vila_datum = datetime.strptime(rad.get("Datum", ""), "%Y-%m-%d").date()
             break
         except Exception:
             continue
 
 if senaste_vila_datum:
-    dagar_sedan_vila = max(0, (timeline_now_date - senaste_vila_datum).days)
-    st.markdown(f"**🛏️ Senaste 'Vila i hemmet' (enligt profilens tidslinje): {dagar_sedan_vila} dagar sedan**")
+    dagar_sedan_vila = (timeline_today - senaste_vila_datum).days
+    st.markdown(f"**🛏️ Senaste 'Vila i hemmet': {dagar_sedan_vila} dagar sedan**")
     if dagar_sedan_vila >= 21:
         st.error(f"⚠️ Dags för semester! Det var {dagar_sedan_vila} dagar sedan senaste 'Vila i hemmet'.")
 else:
-    dagar_fr_start = max(0, (timeline_now_date - CFG.get("startdatum", timeline_now_date)).days)
-    st.info(f"Ingen 'Vila i hemmet' hittad ännu. Dagar sedan profilens start: {dagar_fr_start}.")
-    if dagar_fr_start >= 21:
-        st.error(f"⚠️ Dags för semester! Ingen 'Vila i hemmet' än och det har gått {dagar_fr_start} dagar sedan start.")
+    st.info("Ingen 'Vila i hemmet' hittad ännu.")
 
 st.caption("Obs: Vila-scenarion genererar inga prenumeranter, intäkter, kostnader eller lön. Bonus kvar minskas dock med 'Bonus deltagit'.")
 
