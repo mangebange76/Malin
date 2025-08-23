@@ -40,6 +40,10 @@ PROFILE_KEY    = "PROFILE"       # vald profil
 BONUS_LEFT_KEY = "BONUS_AVAILABLE"   # alias i CFG
 SUPER_ACC_KEY  = "SUPER_BONUS_ACC"   # ack superbonus i CFG
 
+# URL/Autoload
+URL_PROFILE_PARAM   = "profile"
+LOADED_PROFILE_KEY  = "LOADED_PROFILE"  # senaste profilen vi lastade (endast informativt)
+
 # BMI-ackumulatorer
 BMI_SUM_KEY     = "BMI_SUM"
 BMI_CNT_KEY     = "BMI_CNT"
@@ -47,7 +51,7 @@ PENDING_BMI_KEY = "PENDING_BMI"
 
 # >>> Nycklar för tvingad scenstart
 NEXT_START_DT_KEY = "NEXT_START_DT"   # datetime för nästa scenstart (tvingad)
-EXTRA_SLEEP_KEY   = "EXTRA_SLEEP_H"   # timmar (standard/sidopanel)
+EXTRA_SLEEP_KEY   = "EXTRA_SLEEP_H"   # default-sömn (timmar), inställning
 
 # =========================
 # Input-ordning (EXAKT)
@@ -63,8 +67,40 @@ INPUT_ORDER = [
     "in_bonus_deltagit","in_personal_deltagit",
     "in_hander_aktiv",
     "in_nils",
-    "in_somn_h",  # NYTT: sömn per rad
+    "in_sleep_h_row"  # NYTT: sömn på radnivå (timmar, 0 = använd standard)
 ]
+
+# =========================
+# URL helpers (st.query_params med fallback)
+# =========================
+def _get_url_profile() -> str | None:
+    try:
+        # Nya API:t
+        val = st.query_params.get(URL_PROFILE_PARAM)
+        if isinstance(val, list):
+            return val[0] if val else None
+        return val
+    except Exception:
+        try:
+            q = st.experimental_get_query_params()
+            vals = q.get(URL_PROFILE_PARAM, [])
+            return vals[0] if vals else None
+        except Exception:
+            return None
+
+def _set_url_profile(profile_name: str):
+    try:
+        # Nya API:t
+        qp = dict(st.query_params)
+        qp[URL_PROFILE_PARAM] = profile_name
+        st.query_params.clear()
+        for k, v in qp.items():
+            st.query_params[k] = v
+    except Exception:
+        try:
+            st.experimental_set_query_params(**{URL_PROFILE_PARAM: profile_name})
+        except Exception:
+            pass
 
 # =========================
 # Init state
@@ -87,7 +123,7 @@ def _init_cfg_defaults():
         "BMI_GOAL": 21.7,
         "HEIGHT_CM": 164,
 
-        # Standard SÖMN efter scen (timmar) – kan ändras i sidopanel
+        # Standard SÖMN efter scen (timmar) – används om radens fält = 0
         EXTRA_SLEEP_KEY: 7,
 
         # Eskilstuna-intervall
@@ -142,10 +178,13 @@ def init_state():
     defaults = {
         "in_tid_s":60, "in_tid_d":60, "in_vila":7, "in_dt_tid":60, "in_dt_vila":3,
         "in_sover":0, "in_alskar":0, "in_nils":0, "in_hander_aktiv":1,
-        "in_somn_h": 7.0,
+        "in_sleep_h_row": 0.0
     }
     for k in INPUT_ORDER:
         st.session_state.setdefault(k, defaults.get(k, 0))
+
+    # URL/Autoload-hjälp
+    st.session_state.setdefault(LOADED_PROFILE_KEY, "")
 
     # Tvingad nästa start
     _ensure_next_start_dt_exists()
@@ -186,17 +225,135 @@ def _rand_esk(CFG):
     return random.randint(lo, hi) if hi>lo else lo
 
 # =========================
+# Schemaläggning/Datum – helpers
+# =========================
+def _ceil_to_next_hour(dt: datetime) -> datetime:
+    if dt.minute==0 and dt.second==0 and dt.microsecond==0:
+        return dt
+    return dt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+
+def _recompute_next_start_from_rows(rows):
+    """Gå igenom historiken och räkna fram tvingad NEXT_START_DT."""
+    cfg = st.session_state[CFG_KEY]
+    cur = datetime.combine(cfg["startdatum"], cfg["starttid"])
+    if not rows:
+        return cur
+    for r in rows:
+        # Summa tid (sek) + 1h vila + 3h hångel + (älskar+sover)*20min + sömn(h)
+        try: summa = float(r.get("Summa tid (sek)", 0))
+        except Exception: summa = 0.0
+        try: alskar = int(float(r.get("Älskar", 0)))
+        except Exception: alskar = 0
+        try: sover  = int(float(r.get("Sover med", 0)))
+        except Exception: sover = 0
+        try: sleep_h = float(r.get("Sömn (h)", cfg.get(EXTRA_SLEEP_KEY,7)))
+        except Exception: sleep_h = float(cfg.get(EXTRA_SLEEP_KEY,7))
+
+        end_dt = cur + timedelta(seconds=summa + 3600 + 10800 + (alskar+sover)*20*60)
+        end_sleep = end_dt + timedelta(hours=sleep_h)
+
+        if end_sleep.date() > cur.date():
+            base7 = datetime.combine(end_sleep.date(), time(7,0))
+            if end_sleep.time() <= time(7,0):
+                cur = base7
+            else:
+                cur = _ceil_to_next_hour(end_sleep)
+        else:
+            cur = datetime.combine(cur.date() + timedelta(days=1), time(7,0))
+    return cur
+
+# =========================
+# Autoload – ALLTID läs inställningar + data från Sheets
+# =========================
+def _load_profile_settings(profile_name: str):
+    if not profile_name:
+        return
+    try:
+        prof_cfg = read_profile_settings(profile_name)
+        if prof_cfg:
+            st.session_state[CFG_KEY].update(prof_cfg)
+    except Exception as e:
+        st.warning(f"Kunde inte läsa inställningar för '{profile_name}': {e}")
+
+def _load_profile_data(profile_name: str):
+    if not profile_name:
+        return
+    CFG = st.session_state[CFG_KEY]
+    try:
+        df = read_profile_data(profile_name)
+        st.session_state[ROWS_KEY] = df.to_dict(orient="records") if not df.empty else []
+        # bygg min/max för slump
+        st.session_state[HIST_MM_KEY] = {}
+        LBL_PAPPAN = CFG["LBL_PAPPAN"]; LBL_GRANNAR = CFG["LBL_GRANNAR"]
+        LBL_NV = CFG["LBL_NILS_VANNER"]; LBL_NF = CFG["LBL_NILS_FAMILJ"]
+        LBL_BEK = CFG["LBL_BEKANTA"]; LBL_ESK = CFG["LBL_ESK"]
+        for r in st.session_state[ROWS_KEY]:
+            for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
+                        LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF,
+                        LBL_BEK, LBL_ESK]:
+                _add_hist_value(col, r.get(col, 0))
+        # BMI ack
+        bmi_sum = 0.0; bmi_cnt = 0
+        for r in st.session_state[ROWS_KEY]:
+            try:
+                pren = int(float(r.get("Prenumeranter", 0)))
+                bm   = float(r.get("BM mål", 0))
+                if pren > 0 and bm > 0:
+                    bmi_sum += bm * pren
+                    bmi_cnt += pren
+            except Exception:
+                pass
+        st.session_state[BMI_SUM_KEY] = float(bmi_sum)
+        st.session_state[BMI_CNT_KEY] = int(bmi_cnt)
+        st.session_state[PENDING_BMI_KEY] = {"scene": None, "sum": 0.0, "count": 0}
+
+        # Tvingad nästa start från historiken
+        st.session_state[NEXT_START_DT_KEY] = _recompute_next_start_from_rows(st.session_state[ROWS_KEY])
+        st.session_state[SCENEINFO_KEY] = _current_scene_info()
+    except Exception as e:
+        st.warning(f"Kunde inte läsa data för '{profile_name}': {e}")
+
+def _auto_load_profile_every_run():
+    """
+    ALLTID: hämta profilnamn (URL prioriteras), sätt PROFILE_KEY,
+    skriv URL om saknas, och LÄS alltid in inställningar + data från Sheets.
+    """
+    # 1) Försök hämta från URL
+    url_prof = _get_url_profile()
+
+    # 2) Om ingen URL-profil: välj befintlig vald profil eller första i listan
+    if not url_prof:
+        profiles = list_profiles()
+        fallback = st.session_state.get(PROFILE_KEY) or (profiles[0] if profiles else "")
+        if fallback:
+            # Sätt URL (kan trigga rerun i vissa miljöer)
+            _set_url_profile(fallback)
+            st.session_state[PROFILE_KEY] = fallback
+            # LÄS in omedelbart (även om rerun triggas vill vi ha state korrekt)
+            _load_profile_settings(fallback)
+            _load_profile_data(fallback)
+            st.session_state[LOADED_PROFILE_KEY] = fallback
+        return
+
+    # 3) URL-profil finns -> använd den och LÄS alltid
+    st.session_state[PROFILE_KEY] = url_prof
+    _load_profile_settings(url_prof)
+    _load_profile_data(url_prof)
+    st.session_state[LOADED_PROFILE_KEY] = url_prof
+
+# Kör autoload nu (efter init_state, innan UI) — ALLTID från Sheets
+_auto_load_profile_every_run()
+
+# =========================
 # Scenario-fill
 # =========================
 def apply_scenario_fill():
     CFG = st.session_state[CFG_KEY]
     s = st.session_state[SCENARIO_KEY]
 
-    keep_defaults = {
-        "in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,
-        "in_hander_aktiv":st.session_state.get("in_hander_aktiv",1),
-        "in_somn_h": st.session_state.get("in_somn_h", CFG.get(EXTRA_SLEEP_KEY, 7))
-    }
+    keep_defaults = {"in_tid_s":60,"in_tid_d":60,"in_vila":7,"in_dt_tid":60,"in_dt_vila":3,
+                     "in_hander_aktiv":st.session_state.get("in_hander_aktiv",1),
+                     "in_sleep_h_row": st.session_state.get("in_sleep_h_row", 0.0)}
     for k in INPUT_ORDER: st.session_state[k] = keep_defaults.get(k, 0)
 
     def _slumpa_sexfalt():
@@ -259,8 +416,8 @@ with st.sidebar:
     CFG["BMI_GOAL"]         = st.number_input("BM mål (BMI)", min_value=10.0, max_value=40.0, value=float(CFG.get("BMI_GOAL",21.7)), step=0.1)
     CFG["HEIGHT_CM"]        = st.number_input("Längd (cm)", min_value=140, max_value=220, value=int(CFG.get("HEIGHT_CM",164)), step=1)
 
-    # >>> NYTT: Sömn efter scen (timmar) – standard, kan omskrivas per rad
-    CFG[EXTRA_SLEEP_KEY]    = st.number_input("Sömn efter scen (timmar) – standard", min_value=0.0, step=0.5, value=float(CFG.get(EXTRA_SLEEP_KEY,7)))
+    # Sömn efter scen (timmar) – används som default om radens fält = 0
+    CFG[EXTRA_SLEEP_KEY]    = st.number_input("Sömn efter scen (timmar)", min_value=0.0, step=0.5, value=float(CFG.get(EXTRA_SLEEP_KEY,7)))
 
     st.markdown("---")
     st.subheader("Eskilstuna-intervall")
@@ -295,95 +452,46 @@ with st.sidebar:
         apply_scenario_fill()
         st.rerun()
 
+    # =========================
     # Profiler & Sheets
+    # =========================
     st.markdown("---")
     st.subheader("Profiler (Sheets)")
     profiles = list_profiles()
     if not profiles:
         st.info("Inga profiler funna i fliken 'Profil'. Lägg till namn i kolumn A i bladet 'Profil'.")
-    selected_profile = st.selectbox("Välj profil", options=profiles or ["(saknas)"],
-                                    index=(profiles.index(st.session_state[PROFILE_KEY]) if st.session_state.get(PROFILE_KEY) in profiles else 0))
-    st.session_state[PROFILE_KEY] = selected_profile
+
+    current_profile = st.session_state.get(PROFILE_KEY, profiles[0] if profiles else "")
+    try:
+        idx = profiles.index(current_profile) if current_profile in profiles else 0
+    except Exception:
+        idx = 0
+    new_selection = st.selectbox("Välj profil", options=profiles or ["(saknas)"], index=idx)
+
+    # Om användaren byter i rullistan -> uppdatera URL + autoload direkt
+    if new_selection and new_selection != current_profile:
+        st.session_state[PROFILE_KEY] = new_selection
+        _set_url_profile(new_selection)
+        _load_profile_settings(new_selection)
+        _load_profile_data(new_selection)
+        st.session_state[LOADED_PROFILE_KEY] = new_selection
+        st.success(f"✅ Profil '{new_selection}' inläst.")
+        st.rerun()
 
     colP1, colP2 = st.columns(2)
     with colP1:
         if st.button("📥 Läs in profilens inställningar"):
             try:
-                prof_cfg = read_profile_settings(selected_profile)
-                if prof_cfg:
-                    st.session_state[CFG_KEY].update(prof_cfg)
-                    st.success(f"✅ Läste in inställningar för '{selected_profile}'.")
-                else:
-                    st.warning(f"Inga inställningar hittades på bladet '{selected_profile}'.")
+                _load_profile_settings(st.session_state[PROFILE_KEY])
+                st.success(f"✅ Läste in inställningar för '{st.session_state[PROFILE_KEY]}'.")
             except Exception as e:
                 st.error(f"Kunde inte läsa profilens inställningar: {e}")
-
-    def _recompute_next_start_from_rows(rows):
-        """Gå igenom historiken och räkna fram tvingad NEXT_START_DT."""
-        cfg = st.session_state[CFG_KEY]
-        cur = datetime.combine(cfg["startdatum"], cfg["starttid"])
-        if not rows:
-            return cur
-        for r in rows:
-            # Summa tid (sek) + 1h vila + 3h hångel + (älskar+sover)*20min + sömn(h)
-            try: summa = float(r.get("Summa tid (sek)", 0))
-            except Exception: summa = 0.0
-            try: alskar = int(float(r.get("Älskar", 0)))
-            except Exception: alskar = 0
-            try: sover  = int(float(r.get("Sover med", 0)))
-            except Exception: sover = 0
-            try: sleep_h = float(r.get("Sömn (h)", cfg.get(EXTRA_SLEEP_KEY,7)))
-            except Exception: sleep_h = float(cfg.get(EXTRA_SLEEP_KEY,7))
-
-            end_dt = cur + timedelta(seconds=summa + 3600 + 10800 + (alskar+sover)*20*60)
-            end_sleep = end_dt + timedelta(hours=sleep_h)
-
-            if end_sleep.date() > cur.date():
-                base7 = datetime.combine(end_sleep.date(), time(7,0))
-                if end_sleep.time() <= time(7,0):
-                    cur = base7
-                else:
-                    # ceil to next hour
-                    cur = (end_sleep.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
-            else:
-                cur = datetime.combine(cur.date() + timedelta(days=1), time(7,0))
-        return cur
 
     with colP2:
         if st.button("📥 Läs in profilens data"):
             try:
-                df = read_profile_data(selected_profile)
-                st.session_state[ROWS_KEY] = df.to_dict(orient="records") if not df.empty else []
-                # bygg min/max för slump
-                st.session_state[HIST_MM_KEY] = {}
-                LBL_PAPPAN = CFG["LBL_PAPPAN"]; LBL_GRANNAR = CFG["LBL_GRANNAR"]
-                LBL_NV = CFG["LBL_NILS_VANNER"]; LBL_NF = CFG["LBL_NILS_FAMILJ"]
-                LBL_BEK = CFG["LBL_BEKANTA"]; LBL_ESK = CFG["LBL_ESK"]
-                for r in st.session_state[ROWS_KEY]:
-                    for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
-                                LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF,
-                                LBL_BEK, LBL_ESK]:
-                        _add_hist_value(col, r.get(col, 0))
-                # BMI ack
-                bmi_sum = 0.0; bmi_cnt = 0
-                for r in st.session_state[ROWS_KEY]:
-                    try:
-                        pren = int(float(r.get("Prenumeranter", 0)))
-                        bm   = float(r.get("BM mål", 0))
-                        if pren > 0 and bm > 0:
-                            bmi_sum += bm * pren
-                            bmi_cnt += pren
-                    except Exception:
-                        pass
-                st.session_state[BMI_SUM_KEY] = float(bmi_sum)
-                st.session_state[BMI_CNT_KEY] = int(bmi_cnt)
-                st.session_state[PENDING_BMI_KEY] = {"scene": None, "sum": 0.0, "count": 0}
-
-                # >>> Tvingad nästa start beräknas från historiken (använder sparad "Sömn (h)")
-                st.session_state[NEXT_START_DT_KEY] = _recompute_next_start_from_rows(st.session_state[ROWS_KEY])
-
-                st.session_state[SCENEINFO_KEY] = _current_scene_info()
-                st.success(f"✅ Läste in {len(st.session_state[ROWS_KEY])} rader för '{selected_profile}'.")
+                _load_profile_data(st.session_state[PROFILE_KEY])
+                st.success(f"✅ Läste in {len(st.session_state[ROWS_KEY])} rader för '{st.session_state[PROFILE_KEY]}'.")
             except Exception as e:
                 st.error(f"Kunde inte läsa profilens data: {e}")
 
@@ -391,7 +499,7 @@ with st.sidebar:
 
     if st.button("💾 Spara inställningar till profil"):
         try:
-            save_profile_settings(selected_profile, st.session_state[CFG_KEY])
+            save_profile_settings(st.session_state[PROFILE_KEY], st.session_state[CFG_KEY])
             st.success("✅ Inställningar sparade till profilbladet.")
         except Exception as e:
             st.error(f"Misslyckades att spara inställningar: {e}")
@@ -423,7 +531,7 @@ labels = {
     "in_personal_deltagit":f"Personal deltagit (av {int(CFG['PROD_STAFF'])})",
     "in_hander_aktiv":"Händer aktiv (1=Ja, 0=Nej)",
     "in_nils":"Nils (0/1/2)",
-    "in_somn_h":"Sömn (h, rad)",  # NYTT
+    "in_sleep_h_row":"Sömn (h) – rad (0 = använd standard)"
 }
 
 with c1:
@@ -435,8 +543,9 @@ with c1:
         st.number_input(labels[key], min_value=0, step=1, key=key)
 
 with c2:
-    for key in ["in_dt_tid","in_dt_vila","in_alskar"]:
-        st.number_input(labels[key], min_value=0, step=1, key=key)
+    st.number_input(labels["in_dt_tid"], min_value=0, step=1, key="in_dt_tid")
+    st.number_input(labels["in_dt_vila"], min_value=0, step=1, key="in_dt_vila")
+    st.number_input(labels["in_alskar"], min_value=0, step=1, key="in_alskar")
     st.number_input(labels["in_sover"], min_value=0, max_value=1, step=1, key="in_sover")
     for key in [
         "in_pappan","in_grannar","in_nils_vanner","in_nils_familj",
@@ -446,8 +555,7 @@ with c2:
         st.number_input(labels[key], min_value=0, step=1, key=key)
     st.number_input(labels["in_hander_aktiv"], min_value=0, max_value=1, step=1, key="in_hander_aktiv")
     st.number_input(labels["in_nils"], min_value=0, step=1, key="in_nils")
-    # NYTT: sömn per rad (float)
-    st.number_input(labels["in_somn_h"], min_value=0.0, step=0.5, key="in_somn_h", value=float(st.session_state.get("in_somn_h", CFG.get(EXTRA_SLEEP_KEY,7))))
+    st.number_input(labels["in_sleep_h_row"], min_value=0.0, step=0.5, key="in_sleep_h_row")
 
 # =========================
 # Bygg basrad från inputs
@@ -497,19 +605,17 @@ def build_base_from_inputs():
         "LBL_NILS_FAMILJ": CFG["LBL_NILS_FAMILJ"],
         "LBL_BEKANTA": CFG["LBL_BEKANTA"],
         "LBL_ESK": CFG["LBL_ESK"],
-
-        # sömn per rad
-        "Sömn (h)": float(st.session_state.get("in_somn_h", CFG.get(EXTRA_SLEEP_KEY, 7)))
     }
     # Känner = summa av käll-etiketter (radnivå)
     base["Känner"] = (
         int(base[CFG["LBL_PAPPAN"]]) + int(base[CFG["LBL_GRANNAR"]]) +
         int(base[CFG["LBL_NILS_VANNER"]]) + int(base[CFG["LBL_NILS_FAMILJ"]])
     )
-    # meta till beräkning (tvingad start)
+    # meta till beräkning – här använder vi tvingad starttid & ev. rad-sömn
     base["_rad_datum"]    = start_dt.date()
     base["_fodelsedatum"] = CFG["fodelsedatum"]
     base["_starttid"]     = start_dt.time()
+    base["_sleep_h_row"]  = float(st.session_state.get("in_sleep_h_row", 0.0))  # 0 = använd standard
     return base
 
 # =========================
@@ -646,39 +752,31 @@ preview["Super bonus ack"] = int(CFG.get(SUPER_ACC_KEY, 0))
 st.session_state[PENDING_BMI_KEY] = {"scene": current_scene, "sum": float(pend_sum), "count": int(pend_cnt)}
 
 # ===== T V I N G A D schemaläggning: beräkna slut + nästa start
-def _ceil_to_next_hour(dt: datetime) -> datetime:
-    if dt.minute==0 and dt.second==0 and dt.microsecond==0:
-        return dt
-    return dt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-
-def _compute_end_and_next(start_dt: datetime, base: dict, preview: dict, sleep_h: float):
+def _compute_end_and_next(start_dt: datetime, base: dict, preview: dict, default_sleep_h: float):
     summa_sec = float(preview.get("Summa tid (sek)", 0.0))
     alskar = int(base.get("Älskar",0)); sover = int(base.get("Sover med",0))
-    # Klockan = summa + 1h vila + 3h hångel
-    end_dt = start_dt + timedelta(seconds = summa_sec + 3600 + 10800)
-    # Klockan inkl älskar/sover
+    end_dt = start_dt + timedelta(seconds = summa_sec + 3600 + 10800)  # +1h vila +3h hångel
     end_incl = end_dt + timedelta(seconds=(alskar+sover)*20*60)
-    # + sömn
-    end_sleep = end_incl + timedelta(hours=float(sleep_h))
+    # radens sömn om >0 annars standard
+    sleep_h_row = float(base.get("_sleep_h_row", 0.0))
+    use_sleep_h = sleep_h_row if sleep_h_row > 0 else float(default_sleep_h)
+    end_sleep = end_incl + timedelta(hours=use_sleep_h)
 
-    # Nästa start (tvingad)
     if end_sleep.date() > start_dt.date():
         base7 = datetime.combine(end_sleep.date(), time(7,0))
         next_start = base7 if end_sleep.time() <= time(7,0) else _ceil_to_next_hour(end_sleep)
     else:
-        # Samma datum -> nästa dag 07:00
         next_start = datetime.combine(start_dt.date() + timedelta(days=1), time(7,0))
-    return end_incl, end_sleep, next_start
+    return end_incl, end_sleep, next_start, use_sleep_h
 
 start_dt = st.session_state[NEXT_START_DT_KEY]
-sleep_h  = float(base.get("Sömn (h)", CFG.get(EXTRA_SLEEP_KEY, 7)))  # per rad
-end_incl, end_sleep, forced_next = _compute_end_and_next(start_dt, base, preview, sleep_h)
+end_incl, end_sleep, forced_next, used_sleep_h = _compute_end_and_next(start_dt, base, preview, CFG.get(EXTRA_SLEEP_KEY, 7))
 
 # Liten varning om extrem längd (>36h innan sömn)
 if (end_incl - start_dt) > timedelta(hours=36):
     st.warning("Scenen har pågått väldigt länge (>36 timmar) innan sömn. Nästa start är tvingad enligt reglerna.")
 
-# ===== NY LIVE-ORDNING (förkortad till relevanta delar här)
+# ===== NY LIVE-ORDNING
 def _mmss(total_seconds: float) -> str:
     try:
         s = max(0, int(round(total_seconds))); m, s = divmod(s, 60); return f"{m}:{s:02d}"
@@ -696,7 +794,7 @@ with rowA[0]:
 with rowA[1]:
     st.metric("Klockan + älskar/sover med", preview.get("Klockan inkl älskar/sover","-"))
 with rowA[2]:
-    st.metric("Sömn (h)", sleep_h)
+    st.metric("Sömn (h)", used_sleep_h)
 
 rowA2 = st.columns(3)
 with rowA2[0]:
@@ -711,8 +809,9 @@ with rowB[0]:
     st.metric("Summa tid (timmar:minuter)", _hhmm(float(preview.get("Summa tid (sek)",0))))
 with rowB[1]:
     st.metric("Totalt män", int(preview.get("Totalt Män",0)))
+with rowB2:
+    pass
 with rowB[2]:
-    # Egen totalsiffra inkl alla (som tidigare)
     tot_men_including = (
         int(base.get("Män",0)) + int(base.get("Svarta",0)) +
         int(base.get(CFG["LBL_PAPPAN"],0)) + int(base.get(CFG["LBL_GRANNAR"],0)) +
@@ -804,8 +903,9 @@ def _prepare_row_for_save(_preview: dict, _base: dict, _cfg: dict) -> dict:
     row["BM mål"] = _preview.get("BM mål")
     row["Mål vikt (kg)"] = _preview.get("Mål vikt (kg)")
     row["Super bonus ack"] = _preview.get("Super bonus ack")
-    # Spara även sömn(h) för historik-återspelning (per rad)
-    row["Sömn (h)"] = float(_base.get("Sömn (h)", _cfg.get(EXTRA_SLEEP_KEY, 7)))
+    # Spara även sömn(h) för historik-återspelning – använd radens värde om >0 annars standard
+    sleep_h_row = float(_base.get("_sleep_h_row", 0.0))
+    row["Sömn (h)"] = float(sleep_h_row if sleep_h_row > 0 else _cfg.get(EXTRA_SLEEP_KEY, 7))
 
     for k in SAVE_NUM_COLS:
         if row.get(k) is None: row[k] = 0
@@ -827,7 +927,7 @@ def _update_forced_next_start_after_save(saved_row: dict):
     st.session_state[BMI_CNT_KEY] = int(st.session_state.get(BMI_CNT_KEY, 0)) + int(pend.get("count", 0))
     st.session_state[PENDING_BMI_KEY] = {"scene": None, "sum": 0.0, "count": 0}
 
-    # Tvingad nästa start (beräkna utifrån live-beräkning vi nyss gjorde)
+    # Tvingad nästa start – använd redan beräknad from live
     st.session_state[NEXT_START_DT_KEY] = forced_next
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
@@ -887,6 +987,7 @@ if _HAS_STATS:
         st.markdown("---")
         st.subheader("📊 Statistik")
         rows_df = pd.DataFrame(st.session_state[ROWS_KEY]) if st.session_state[ROWS_KEY] else pd.DataFrame()
+        # stöd både compute_stats(rows) och compute_stats(rows, cfg)
         if "cfg" in compute_stats.__code__.co_varnames or compute_stats.__code__.co_argcount >= 2:
             stats = compute_stats(rows_df, CFG)
         else:
