@@ -1,497 +1,382 @@
-# sheets_utils.py  (Basversion 250822 – robust Google Sheets-hantering)
+# sheets_utils.py
+# Basversion 250822 – uppdaterad för robust auth + flexibla inställningar + säkra läs/skriv
 from __future__ import annotations
 
-import json
+import os
 import time
-from datetime import datetime, date, time as dtime
-from typing import Dict, Any, List, Optional
+import json
+import math
+from typing import Dict, List, Any, Optional
+from datetime import date, time as dtime, datetime
 
-import gspread
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import gspread
+from gspread.exceptions import APIError, WorksheetNotFound
+from google.oauth2.service_account import Credentials
 
+# =========================================================
+#  Auth & Spreadsheet
+# =========================================================
 
-# =========================
-# Hjälpfunktioner – datum/tid & numerik
-# =========================
-def _parse_date(x: Any) -> Optional[date]:
-    """Försöker tolka datum i vanliga format: YYYY-MM-DD, DD/MM/YYYY, DD-MM-YYYY, etc."""
-    if x is None or x == "":
-        return None
-    if isinstance(x, date) and not isinstance(x, datetime):
-        return x
-    if isinstance(x, datetime):
-        return x.date()
-    s = str(x).strip()
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%m/%d/%Y"):
+def _load_google_credentials_dict() -> dict:
+    """
+    Laddar service account-credar från st.secrets eller env.
+    Stödjer:
+      - st.secrets["GOOGLE_CREDENTIALS"] som dict ELLER JSON-sträng
+      - st.secrets["gcp_service_account"] (Streamlit-exemplet)
+      - os.environ["GOOGLE_CREDENTIALS"] (JSON-sträng)
+    Fixar även '\\n' -> '\n' i private_key.
+    """
+    raw = None
+
+    if "GOOGLE_CREDENTIALS" in st.secrets:
+        raw = st.secrets["GOOGLE_CREDENTIALS"]
+    elif "gcp_service_account" in st.secrets:
+        raw = st.secrets["gcp_service_account"]
+    elif os.environ.get("GOOGLE_CREDENTIALS"):
+        raw = os.environ["GOOGLE_CREDENTIALS"]
+
+    if raw is None:
+        raise RuntimeError("GOOGLE_CREDENTIALS saknas i secrets/ENV.")
+
+    # Dict direkt?
+    if isinstance(raw, dict):
+        creds_dict = dict(raw)
+    # Sträng → försök JSON
+    elif isinstance(raw, str):
+        s = raw.strip()
         try:
-            return datetime.strptime(s, fmt).date()
-        except Exception:
-            pass
-    # ISO-ish?
-    try:
-        return datetime.fromisoformat(s).date()
-    except Exception:
-        return None
+            creds_dict = json.loads(s)
+        except Exception as e:
+            raise RuntimeError("GOOGLE_CREDENTIALS är en sträng men inte giltig JSON.") from e
+    else:
+        raise RuntimeError(f"GOOGLE_CREDENTIALS hade oväntad typ: {type(raw)}")
+
+    pk = creds_dict.get("private_key")
+    if isinstance(pk, str) and "\\n" in pk:
+        creds_dict["private_key"] = pk.replace("\\n", "\n")
+
+    for k in ("type", "client_email", "private_key"):
+        if not creds_dict.get(k):
+            raise RuntimeError(f"GOOGLE_CREDENTIALS saknar fältet '{k}'.")
+
+    return creds_dict
 
 
-def _parse_time(x: Any) -> Optional[dtime]:
-    """Försöker tolka tid: HH:MM eller HH:MM:SS."""
-    if x is None or x == "":
-        return None
-    if isinstance(x, dtime):
-        return x
-    s = str(x).strip()
-    for fmt in ("%H:%M", "%H:%M:%S"):
-        try:
-            return datetime.strptime(s, fmt).time()
-        except Exception:
-            pass
-    # ISO-ish?
-    try:
-        return datetime.fromisoformat(s).time()
-    except Exception:
-        return None
+def _get_gspread_client() -> gspread.Client:
+    creds_dict = _load_google_credentials_dict()
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    return gspread.authorize(credentials)
 
 
-def _as_int(x: Any) -> Optional[int]:
-    try:
-        if x is None or x == "":
-            return None
-        return int(float(str(x).replace(",", ".").strip()))
-    except Exception:
-        return None
-
-
-def _as_float(x: Any) -> Optional[float]:
-    try:
-        if x is None or x == "":
-            return None
-        return float(str(x).replace(",", ".").strip())
-    except Exception:
-        return None
-
-
-def _clean_header_row(vals: List[List[Any]]) -> List[str]:
-    """Tar första raden som header och standardiserar kolumnnamn."""
-    if not vals:
-        return []
-    headers = vals[0]
-    fixed = []
-    for h in headers:
-        hs = str(h).strip()
-        fixed.append(hs if hs else "")
-    return fixed
-
-
-# =========================
-# Google-klient & Spreadsheet med backoff
-# =========================
-def _get_gspread_client() -> Optional[gspread.Client]:
+def _open_spreadsheet(retries: int = 3, base_delay: float = 0.8):
     """
-    Bygger en gspread-klient från st.secrets["GOOGLE_CREDENTIALS"].
-    Stöder både JSON-sträng och dict. Returnerar None vid fel.
+    Öppnar arket från SHEET_URL (i secrets eller ENV) med exponential backoff.
     """
-    try:
-        creds_blob = st.secrets.get("GOOGLE_CREDENTIALS")
-        if isinstance(creds_blob, str):
-            creds_info = json.loads(creds_blob)
-        elif isinstance(creds_blob, dict):
-            creds_info = creds_blob
-        else:
-            st.warning("GOOGLE_CREDENTIALS saknas eller har fel format i st.secrets.")
-            return None
-        return gspread.service_account_from_dict(creds_info)
-    except Exception as e:
-        st.warning(f"Kunde inte skapa Google-klient: {e}")
-        return None
-
-
-def _open_spreadsheet(max_retries: int = 5, backoff_s: float = 0.8, raise_on_fail: bool = False) -> Optional[gspread.Spreadsheet]:
-    """
-    Öppnar kalkylarket med exponential backoff. Returnerar None vid fel (default).
-    Sätt raise_on_fail=True om du vill bubbla upp felet.
-    """
-    url = st.secrets.get("SHEET_URL")
-    if not url:
-        st.warning("SHEET_URL saknas i st.secrets.")
-        return None
+    sheet_url = st.secrets.get("SHEET_URL") or os.environ.get("SHEET_URL")
+    if not sheet_url:
+        raise RuntimeError("SHEET_URL saknas i secrets/ENV.")
 
     client = _get_gspread_client()
-    if client is None:
-        return None
-
     last_err = None
-    for attempt in range(1, max_retries + 1):
+    for i in range(retries):
         try:
-            ss = client.open_by_url(url)
-            return ss
-        except Exception as e:
+            return client.open_by_url(sheet_url)
+        except APIError as e:
             last_err = e
-            if attempt < max_retries:
-                time.sleep(backoff_s * (2 ** (attempt - 1)))
-            else:
-                msg = f"Kunde inte öppna kalkylarket efter {max_retries} försök: {last_err}"
-                if raise_on_fail:
-                    raise RuntimeError(msg)
-                else:
-                    st.warning(msg)
-                    return None
-    return None
+            time.sleep(base_delay * (2 ** i))
+    raise RuntimeError(f"Kunde inte öppna kalkylarket efter flera försök: {last_err}")
 
 
-def _get_ws(ss: gspread.Spreadsheet, title: str, create_if_missing: bool = False) -> Optional[gspread.Worksheet]:
-    """Hämtar ett blad med namn 'title'. Skapar vid behov om flaggat."""
+# =========================================================
+#  Worksheet helpers
+# =========================================================
+
+def _get_worksheet_by_title(ss, title: str):
     try:
         return ss.worksheet(title)
-    except Exception:
-        if not create_if_missing:
-            return None
+    except WorksheetNotFound:
+        return None
+
+def _get_or_create_worksheet(ss, title: str, rows: int = 1000, cols: int = 50):
+    ws = _get_worksheet_by_title(ss, title)
+    if ws is None:
+        ws = ss.add_worksheet(title=title, rows=rows, cols=cols)
+    return ws
+
+def _with_retry(fn, *args, retries: int = 3, base_delay: float = 0.6, **kwargs):
+    last_err = None
+    for i in range(retries):
         try:
-            return ss.add_worksheet(title=title, rows=2000, cols=40)
-        except Exception as e:
-            st.warning(f"Kunde inte skapa blad '{title}': {e}")
-            return None
+            return fn(*args, **kwargs)
+        except APIError as e:
+            last_err = e
+            time.sleep(base_delay * (2 ** i))
+    if last_err:
+        raise last_err
+    raise RuntimeError("Operation misslyckades utan APIError.")
 
+# =========================================================
+#  Profiler – lista/profilblad
+# =========================================================
 
-# =========================
-# Offentliga funktioner (används av appen)
-# =========================
 def list_profiles() -> List[str]:
     """
-    Hämtar profiler från bladet 'Profil' (kolumn A). Returnerar tom lista vid fel.
-    Hoppar över tomma rader och vanliga rubrikord.
+    Läser bladet 'Profil' och returnerar alla namn i kolumn A (exkl. header/tomma).
     """
     ss = _open_spreadsheet()
-    if ss is None:
+    ws = _get_worksheet_by_title(ss, "Profil")
+    if ws is None:
         return []
-
-    try:
-        ws = _get_ws(ss, "Profil")
-        if ws is None:
-            return []
-        values = ws.col_values(1)  # kolumn A
-    except Exception:
-        return []
-
-    profs = []
-    for v in values:
-        name = str(v).strip()
-        if not name:
+    vals = _with_retry(ws.col_values, 1)  # kolumn A
+    out: List[str] = []
+    for i, v in enumerate(vals):
+        v = (v or "").strip()
+        if not v:
             continue
-        low = name.lower()
-        if low in ("profil", "profiles", "namn", "name"):
+        # hoppa ev. rubrikrad
+        if i == 0 and v.lower() in ("profil", "profiles", "namn", "name"):
             continue
-        profs.append(name)
-
+        out.append(v)
     # unika i ordning
     seen = set()
     uniq = []
-    for p in profs:
-        if p not in seen:
-            seen.add(p)
-            uniq.append(p)
+    for n in out:
+        if n not in seen:
+            seen.add(n)
+            uniq.append(n)
     return uniq
+
+# =========================================================
+#  Inställningar – läs/spara
+# =========================================================
+
+def _coerce_cfg_types(cfg: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Säkerställ att startdatum/fodelsedatum/starttid konverteras till rätt typer om de är strängar.
+    """
+    out = dict(cfg)
+
+    def _to_date(v):
+        if isinstance(v, date):
+            return v
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, str) and v:
+            try:
+                return datetime.fromisoformat(v).date()
+            except Exception:
+                try:
+                    return datetime.strptime(v, "%Y-%m-%d").date()
+                except Exception:
+                    return out.get("startdatum", date(1990,1,1))
+        return out.get("startdatum", date(1990,1,1))
+
+    def _to_time(v):
+        if isinstance(v, dtime):
+            return v
+        if isinstance(v, datetime):
+            return v.time().replace(microsecond=0)
+        if isinstance(v, str) and v:
+            for fmt in ("%H:%M:%S", "%H:%M"):
+                try:
+                    return datetime.strptime(v, fmt).time()
+                except Exception:
+                    pass
+        # fallback
+        return dtime(7, 0)
+
+    if "startdatum" in out:
+        out["startdatum"] = _to_date(out["startdatum"])
+    if "fodelsedatum" in out:
+        out["fodelsedatum"] = _to_date(out["fodelsedatum"])
+    if "starttid" in out:
+        out["starttid"] = _to_time(out["starttid"])
+    return out
+
+
+def _read_settings_from_ws(ws) -> Dict[str, Any]:
+    """
+    Förväntar sig antingen:
+      - A1="JSON", A2=<json-sträng>
+      - eller en key/value-tabell med två kolumner (key i kol A, value i kol B)
+    """
+    try:
+        a1 = _with_retry(ws.acell, "A1").value or ""
+    except Exception:
+        a1 = ""
+    a1 = a1.strip().upper()
+
+    # JSON-varianten
+    if a1 == "JSON":
+        raw = _with_retry(ws.acell, "A2").value or ""
+        raw = raw.strip()
+        if raw:
+            try:
+                cfg = json.loads(raw)
+                return cfg if isinstance(cfg, dict) else {}
+            except Exception:
+                pass
+
+    # key/value-variant
+    rows = _with_retry(ws.get_all_values)
+    cfg: Dict[str, Any] = {}
+    for r in rows:
+        if len(r) < 2:
+            continue
+        key = (r[0] or "").strip()
+        val = r[1]
+        if not key:
+            continue
+        # försök typa enkla tal/bool
+        v = val
+        if isinstance(val, str):
+            s = val.strip()
+            if s.lower() in ("true", "false"):
+                v = (s.lower() == "true")
+            else:
+                try:
+                    if "." in s.replace(",", "."):
+                        v = float(s.replace(",", "."))
+                    else:
+                        v = int(s)
+                except Exception:
+                    v = val
+        cfg[key] = v
+    return cfg
 
 
 def read_profile_settings(profile: str) -> Dict[str, Any]:
     """
-    Läser profilens inställningar från ett blad med titel = profile.
-    Förväntar K/V-layout: kolumn A = nyckel, kolumn B = värde.
-    Returnerar dict med typade värden (datum/tid/int/float) när möjligt.
-    Vid fel returneras {}.
+    Läser inställningar för en profil.
+    Primärt från bladet '<profil>__settings'. Om saknas, försöker ett par alternativ och till sist tom dict.
+    Konverterar datum/tid till rätt typer.
     """
     ss = _open_spreadsheet()
-    if ss is None:
-        return {}
-
-    ws = _get_ws(ss, profile)
-    if ws is None:
-        # Saknar inställningsblad -> inget att uppdatera
-        return {}
-
-    try:
-        vals = ws.get_all_values()  # lista av rader
-    except Exception:
-        return {}
-
-    out: Dict[str, Any] = {}
-    # För enkelhet: läs första två kolumner som nyckel/värde
-    for row in vals:
-        if not row:
-            continue
-        key = str(row[0]).strip() if len(row) >= 1 else ""
-        val = row[1] if len(row) >= 2 else ""
-        if not key:
-            continue
-
-        k = key  # behåll original-nyckeln som i appen
-        # Datatyper enligt kända fält i appens CFG
-        if k in ("startdatum", "Startdatum"):
-            d = _parse_date(val)
-            if d:
-                out["startdatum"] = d
-        elif k in ("starttid", "Starttid"):
-            t = _parse_time(val)
-            if t:
-                out["starttid"] = t
-        elif k in ("fodelsedatum", "Födelsedatum"):
-            d = _parse_date(val)
-            if d:
-                out["fodelsedatum"] = d
-        elif k in ("avgift_usd", "Avgift (USD)", "Avgift per prenumerant (USD)"):
-            f = _as_float(val)
-            if f is not None:
-                out["avgift_usd"] = f
-        elif k in ("PROD_STAFF", "Totalt antal personal"):
-            i = _as_int(val)
-            if i is not None:
-                out["PROD_STAFF"] = i
-        elif k in ("BONUS_AVAILABLE", "Bonus killar kvar"):
-            i = _as_int(val)
-            if i is not None:
-                out["BONUS_AVAILABLE"] = i
-        elif k in ("BONUS_PCT", "Bonus %"):
-            f = _as_float(val)
-            if f is not None:
-                out["BONUS_PCT"] = f
-        elif k in ("SUPER_BONUS_PCT", "Super-bonus %"):
-            f = _as_float(val)
-            if f is not None:
-                out["SUPER_BONUS_PCT"] = f
-        elif k in ("BMI_GOAL", "BM mål"):
-            f = _as_float(val)
-            if f is not None:
-                out["BMI_GOAL"] = f
-        elif k in ("HEIGHT_CM", "Längd (cm)"):
-            i = _as_int(val)
-            if i is not None:
-                out["HEIGHT_CM"] = i
-        elif k in ("ESK_MIN", "Eskilstuna min"):
-            i = _as_int(val)
-            if i is not None:
-                out["ESK_MIN"] = i
-        elif k in ("ESK_MAX", "Eskilstuna max"):
-            i = _as_int(val)
-            if i is not None:
-                out["ESK_MAX"] = i
-        elif k in ("MAX_PAPPAN", "MAX Pappans vänner"):
-            i = _as_int(val)
-            if i is not None:
-                out["MAX_PAPPAN"] = i
-        elif k in ("MAX_GRANNAR", "MAX Grannar"):
-            i = _as_int(val)
-            if i is not None:
-                out["MAX_GRANNAR"] = i
-        elif k in ("MAX_NILS_VANNER", "MAX Nils vänner"):
-            i = _as_int(val)
-            if i is not None:
-                out["MAX_NILS_VANNER"] = i
-        elif k in ("MAX_NILS_FAMILJ", "MAX Nils familj"):
-            i = _as_int(val)
-            if i is not None:
-                out["MAX_NILS_FAMILJ"] = i
-        elif k in ("MAX_BEKANTA", "MAX Bekanta"):
-            i = _as_int(val)
-            if i is not None:
-                out["MAX_BEKANTA"] = i
-        elif k in ("LBL_PAPPAN", "Etikett Pappans vänner"):
-            if str(val).strip():
-                out["LBL_PAPPAN"] = str(val).strip()
-        elif k in ("LBL_GRANNAR", "Etikett Grannar"):
-            if str(val).strip():
-                out["LBL_GRANNAR"] = str(val).strip()
-        elif k in ("LBL_NILS_VANNER", "Etikett Nils vänner"):
-            if str(val).strip():
-                out["LBL_NILS_VANNER"] = str(val).strip()
-        elif k in ("LBL_NILS_FAMILJ", "Etikett Nils familj"):
-            if str(val).strip():
-                out["LBL_NILS_FAMILJ"] = str(val).strip()
-        elif k in ("LBL_BEKANTA", "Etikett Bekanta"):
-            if str(val).strip():
-                out["LBL_BEKANTA"] = str(val).strip()
-        elif k in ("LBL_ESK", "Etikett Eskilstuna killar"):
-            if str(val).strip():
-                out["LBL_ESK"] = str(val).strip()
-        elif k in ("Sömn (h)", "Sömn timmar", "Sömn"):
-            f = _as_float(val)
-            if f is not None:
-                out["SÖMN (h)"] = f  # appen läser denna till CFG[EXTRA_SLEEP_KEY] via update
-
-        # Annars: okänt fält – hoppa över tyst
-    return out
-
-
-def read_profile_data(profile: str) -> pd.DataFrame:
-    """
-    Läser hela Data-bladet som DataFrame. Om kolumnen 'Profil' finns filtreras på angivet profile.
-    Returnerar tom DataFrame vid fel.
-    """
-    ss = _open_spreadsheet()
-    if ss is None:
-        return pd.DataFrame()
-
-    ws = _get_ws(ss, "Data")
-    if ws is None:
-        return pd.DataFrame()
-
-    try:
-        vals = ws.get_all_values()
-    except Exception:
-        return pd.DataFrame()
-
-    if not vals:
-        return pd.DataFrame()
-
-    headers = _clean_header_row(vals)
-    rows = vals[1:] if len(vals) > 1 else []
-    if not headers:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(rows, columns=headers)
-
-    # Om 'Profil' finns -> filtrera
-    if "Profil" in df.columns:
-        df = df[df["Profil"].astype(str).str.strip() == str(profile).strip()]
-
-    # Försök kasta kända numeriska kolumner till numeric
-    numeric_cols = [
-        "Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
-        "Tid S","Tid D","Vila","DT tid (sek/kille)","DT vila (sek/kille)",
-        "Älskar","Sover med",
-        "Bonus deltagit","Personal deltagit","Händer aktiv","Nils",
-        "Summa tid (sek)","Hångel (sek/kille)","Suger per kille (sek)","Händer per kille (sek)",
-        "Tid Älskar (sek)",
-        "Totalt Män","Prenumeranter","Intäkter","Kostnad män","Intäkt Känner",
-        "Intäkt företag","Lön Malin","Vinst",
-        "BM mål","Mål vikt (kg)","Super bonus ack"
+    # Kandidat-namn (kompatibilitet)
+    candidates = [
+        f"{profile}__settings",
+        f"{profile}__cfg",
+        f"{profile}_settings",
+        f"{profile}__inst",
+        f"{profile}__inställningar",
     ]
-    # Lägg även till etiketter som kan vara omdöpta
-    extra_sources = ["Pappans vänner","Grannar","Nils vänner","Nils familj","Bekanta","Eskilstuna killar"]
-    for col in numeric_cols + extra_sources:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(",", "."), errors="coerce")
+    ws = None
+    for name in candidates:
+        ws = _get_worksheet_by_title(ss, name)
+        if ws:
+            break
 
-    # Datum/tid
-    if "Datum" in df.columns:
-        # Behåll som str – appen konverterar själv där det behövs
-        pass
+    cfg: Dict[str, Any] = {}
+    if ws:
+        try:
+            cfg = _read_settings_from_ws(ws)
+        except Exception:
+            cfg = {}
 
-    return df.reset_index(drop=True)
+    # Slutlig typning för kritiska fält
+    cfg = _coerce_cfg_types(cfg)
+    return cfg
 
 
 def save_profile_settings(profile: str, cfg: Dict[str, Any]) -> None:
     """
-    Sparar (skriver över) profilens inställningar till bladet med titel = profile.
-    Lagrar som två kolumner: Nyckel | Värde
+    Sparar inställningar för profilen i blad '<profil>__settings' som JSON (A1='JSON', A2='<json>').
+    Datum/tid konverteras till ISO-strängar.
     """
     ss = _open_spreadsheet()
-    if ss is None:
-        st.warning("Kan inte spara – inget kalkylark.")
-        return
+    ws = _get_or_create_worksheet(ss, f"{profile}__settings")
 
-    ws = _get_ws(ss, profile, create_if_missing=True)
-    if ws is None:
-        st.warning(f"Kan inte spara – kunde inte öppna/skapa blad '{profile}'.")
-        return
-
-    # Nycklar vi bryr oss om att spara (samma som appen använder)
-    keys_order = [
-        "startdatum","starttid","fodelsedatum",
-        "avgift_usd","PROD_STAFF",
-        "BONUS_AVAILABLE","BONUS_PCT",
-        "SUPER_BONUS_PCT",
-        "BMI_GOAL","HEIGHT_CM",
-        "ESK_MIN","ESK_MAX",
-        "MAX_PAPPAN","MAX_GRANNAR","MAX_NILS_VANNER","MAX_NILS_FAMILJ","MAX_BEKANTA",
-        "LBL_PAPPAN","LBL_GRANNAR","LBL_NILS_VANNER","LBL_NILS_FAMILJ","LBL_BEKANTA","LBL_ESK",
-        "SÖMN (h)"
-    ]
-
-    rows = [["Nyckel","Värde"]]
-    for k in keys_order:
-        if k not in cfg:
-            continue
-        v = cfg[k]
-        if isinstance(v, date) and not isinstance(v, datetime):
-            sval = v.isoformat()
-        elif isinstance(v, dtime):
-            sval = v.strftime("%H:%M")
-        else:
-            sval = str(v)
-        rows.append([k, sval])
-
-    try:
-        ws.clear()
-        ws.update(rows)
-    except Exception as e:
-        st.warning(f"Kunde inte spara inställningar: {e}")
-
-
-def append_row_to_profile_data(profile: str, row_dict: Dict[str, Any]) -> None:
-    """
-    Appendar en rad till Data-bladet. Skapar bladet om det saknas.
-    Säkrar att header finns (union av befintlig header och nya fältnamn).
-    """
-    ss = _open_spreadsheet()
-    if ss is None:
-        st.warning("Kan inte spara data – inget kalkylark.")
-        return
-
-    ws = _get_ws(ss, "Data", create_if_missing=True)
-    if ws is None:
-        st.warning("Kan inte spara data – kunde inte öppna/skapa blad 'Data'.")
-        return
-
-    try:
-        vals = ws.get_all_values()
-    except Exception as e:
-        st.warning(f"Kunde inte läsa 'Data' för uppdatering: {e}")
-        return
-
-    # Befintlig header
-    if vals:
-        headers = _clean_header_row(vals)
-        data_rows = vals[1:]
-    else:
-        headers = []
-        data_rows = []
-
-    # Union av headers + nya fält
-    new_keys = list(row_dict.keys())
-    for k in new_keys:
-        if k not in headers:
-            headers.append(k)
-
-    # Bygg rad i header-ordning
-    def _fmt_cell(v: Any) -> str:
-        if isinstance(v, date) and not isinstance(v, datetime):
+    # Konvertera datum/tid till isoformat i en sanerad kopia
+    def _ser(v):
+        if isinstance(v, (date, datetime)):
             return v.isoformat()
         if isinstance(v, dtime):
-            return v.strftime("%H:%M")
-        if v is None:
-            return ""
-        return str(v)
+            return v.strftime("%H:%M:%S")
+        return v
 
-    new_row = [_fmt_cell(row_dict.get(h, "")) for h in headers]
+    to_save = {k: _ser(v) for k, v in cfg.items()}
 
-    # Skriv tillbaka
+    # Töm blad och skriv om
+    _with_retry(ws.clear)
+    _with_retry(ws.update, "A1", [["JSON"], [json.dumps(to_save, ensure_ascii=False)]])
+
+
+# =========================================================
+#  Profildata – läs/append
+# =========================================================
+
+def _ensure_headers(ws, desired_headers: List[str]) -> List[str]:
+    """
+    Ser till att headerraden innehåller minst desired_headers, i given ordning + ev. bef. kolumner.
+    Returnerar den slutliga headerlistan.
+    """
     try:
-        if not vals:
-            # Första gången: skriv header + första rad
-            ws.update([headers, new_row])
-        else:
-            # Om headern växer med nya kolumner -> uppdatera header först
-            if len(headers) != len(vals[0]):
-                # utöka alla befintliga rader till nya header-längden
-                widened = [headers]
-                for r in data_rows:
-                    widened.append(r + [""] * (len(headers) - len(r)))
-                widened.append(new_row)
-                ws.clear()
-                ws.update(widened)
-            else:
-                # vanlig append
-                ws.append_row(new_row, value_input_option="USER_ENTERED")
-    except Exception as e:
-        st.warning(f"Kunde inte appenda rad till 'Data': {e}")
+        current = _with_retry(ws.row_values, 1)
+    except Exception:
+        current = []
+
+    current = [c for c in current if c]  # rensa tomma i slutet
+    if not current:
+        # lägg första headern
+        _with_retry(ws.update, "A1", [desired_headers])
+        return desired_headers
+
+    # union – bevara befintlig ordning, lägg till nya sist
+    cur_set = set(current)
+    new_cols = [h for h in desired_headers if h not in cur_set]
+    final = current + new_cols
+    if new_cols:
+        _with_retry(ws.update, "A1", [final])
+    return final
+
+
+def read_profile_data(profile: str) -> pd.DataFrame:
+    """
+    Läser hela data-bladet för profilen -> DataFrame.
+    Om blad saknas returneras tom DF.
+    """
+    ss = _open_spreadsheet()
+    ws = _get_worksheet_by_title(ss, profile)
+    if ws is None:
+        return pd.DataFrame()
+
+    # Använd get_all_records (första raden = headers)
+    records: List[Dict[str, Any]] = _with_retry(ws.get_all_records, expected_headers=None, head=1, default_blank="")
+    return pd.DataFrame(records)
+
+
+def append_row_to_profile_data(profile: str, row: Dict[str, Any]) -> None:
+    """
+    Appendar en rad till profilens datablad.
+    Skapar bladet och headerraden om de saknas. Säkerställer att alla nycklar finns i headern.
+    """
+    ss = _open_spreadsheet()
+    ws = _get_or_create_worksheet(ss, profile)
+
+    # Säkerställ headers
+    headers = list(row.keys())
+    headers = _ensure_headers(ws, headers)
+
+    # Bygg radlist i headerordning
+    def _ser_cell(v):
+        if isinstance(v, (date, datetime)):
+            return v.isoformat()
+        if isinstance(v, dtime):
+            return v.strftime("%H:%M:%S")
+        if isinstance(v, float):
+            # undvik NaN/inf i Sheets
+            if math.isfinite(v):
+                return v
+            return ""
+        return v
+
+    values = [_ser_cell(row.get(h, "")) for h in headers]
+
+    # Append
+    _with_retry(ws.append_row, values, value_input_option="USER_ENTERED")
