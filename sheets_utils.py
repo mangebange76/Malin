@@ -1,12 +1,11 @@
 # sheets_utils.py
-# Basversion 250823 – utan merge/migrering och utan aggressiv typkonvertering
+# Version 250823-3 – batch-append + mindre läsningar (färre 429-fel)
 
 from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 from collections.abc import Mapping
 import time
-import datetime as dt
 
 import streamlit as st
 import gspread
@@ -34,7 +33,6 @@ def _load_google_credentials_dict() -> Dict[str, Any]:
     """
     if "GOOGLE_CREDENTIALS" not in st.secrets:
         raise RuntimeError("GOOGLE_CREDENTIALS saknas i st.secrets.")
-
     raw = st.secrets["GOOGLE_CREDENTIALS"]
 
     if isinstance(raw, Mapping):
@@ -167,7 +165,6 @@ def _coerce_setting(key: str, val: Any) -> Any:
     if s.lower() in ("true", "false"):
         return s.lower() == "true"
     try:
-        # OBS! Vi returnerar ev. nummer, men appen klarar också strängar.
         if "." in s or "," in s:
             s2 = s.replace(",", ".")
             return float(s2)
@@ -257,7 +254,6 @@ def _records_to_dataframe(records: List[Dict[str, Any]]) -> pd.DataFrame:
     """
     if not records:
         return pd.DataFrame()
-    # ersätt None med "" så pandas inte gör NaN
     normed = [{k: ("" if v is None else v) for k, v in rec.items()} for rec in records]
     return pd.DataFrame(normed, dtype=object)
 
@@ -268,51 +264,78 @@ def read_profile_data(profile: str) -> pd.DataFrame:
     """
     ss = _open_spreadsheet()
     ws = _get_or_create_primary_data_ws(ss, profile)
-
     try:
         records = ws.get_all_records(default_blank="")
     except APIError as e:
         raise RuntimeError(f"Kunde inte läsa data för '{profile}': {e}")
-
     return _records_to_dataframe(records)
+
+
+def _ensure_headers(ws: Worksheet, wanted_headers: List[str]) -> List[str]:
+    """Läs (minimalt) headern, skapa/utöka vid behov. Returnerar slutlig header-ordning."""
+    try:
+        existing = ws.row_values(1)  # en enda rad (minimal READ)
+    except APIError as e:
+        raise RuntimeError(f"Kunde inte läsa header för '{ws.title}': {e}")
+
+    headers = [h for h in existing if h] if existing else []
+    if not headers:
+        headers = list(wanted_headers)
+        if headers:
+            ws.update("A1", [headers])  # skriv bara header
+        return headers
+
+    # utöka header om nya kolumner finns
+    new_cols = [h for h in wanted_headers if h not in headers]
+    if new_cols:
+        headers_extended = headers + new_cols
+        ws.update("A1", [headers_extended])  # skriv endast header-raden
+        headers = headers_extended
+    return headers
+
 
 def append_row_to_profile_data(profile: str, row: Dict[str, Any]) -> None:
     """
-    Lägg till en rad i **primärbladet** 'Data - {profile}'.
-    Om nya kolumner dyker upp i `row` utökas headern på plats.
+    Lägg till EN rad i primärbladet 'Data - {profile}'.
+    Endast headern läses; därefter används Sheets-APPEND (ingen radindex-beräkning).
     """
     ss = _open_spreadsheet()
     ws = _get_or_create_primary_data_ws(ss, profile)
 
-    # Läs befintlig header och kropp
-    try:
-        existing = ws.get_all_values()
-    except APIError as e:
-        raise RuntimeError(f"Kunde inte läsa befintliga värden för '{ws.title}': {e}")
+    headers = _ensure_headers(ws, list(row.keys()))
+    values = [row.get(h, "") for h in headers]
+    # Använd append_row (enbart WRITE; ingen READ av kroppen)
+    ws.append_row(values, value_input_option="USER_ENTERED")
 
-    if not existing:
-        headers = list(row.keys())
-        values = [row.get(h, "") for h in headers]
-        ws.update("A1", [headers, values])
+
+def append_rows_to_profile_data(profile: str, rows: List[Dict[str, Any]], chunk_size: int = 100) -> None:
+    """
+    Lägg till MÅNGA rader effektivt i chunkar med append_rows.
+    Läser bara headern EN gång. Skapar/utökar headern vid behov.
+    """
+    if not rows:
         return
 
-    headers = existing[0] if existing else []
-    if not headers:
-        headers = list(row.keys())
-        ws.update("A1", [headers])
+    ss = _open_spreadsheet()
+    ws = _get_or_create_primary_data_ws(ss, profile)
 
-    # Utöka header vid behov
-    new_cols = [k for k in row.keys() if k not in headers]
-    if new_cols:
-        headers_extended = headers + new_cols
-        body = existing[1:] if len(existing) > 1 else []
-        # Fyll upp alla gamla rader till ny längd
-        body_ext = [r + [""] * (len(headers_extended) - len(r)) for r in body]
-        ws.clear()
-        ws.update("A1", [headers_extended])
-        if body_ext:
-            ws.update("A2", body_ext)
-        headers = headers_extended
+    # Samla union av keys för att täcka alla kolumner
+    union_keys = []
+    seen = set()
+    for r in rows:
+        for k in r.keys():
+            if k not in seen:
+                seen.add(k)
+                union_keys.append(k)
 
-    values = [row.get(h, "") for h in headers]
-    ws.append_row(values, value_input_option="USER_ENTERED")
+    headers = _ensure_headers(ws, union_keys)
+
+    # Packa i chunkar och skriv
+    total = len(rows)
+    i = 0
+    while i < total:
+        chunk = rows[i:i+chunk_size]
+        body = [[r.get(h, "") for h in headers] for r in chunk]
+        # append_rows är effektivt och kräver inte radindex
+        ws.append_rows(body, value_input_option="USER_ENTERED")
+        i += len(chunk)
