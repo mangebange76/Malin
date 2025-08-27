@@ -1249,109 +1249,141 @@ if _HAS_STATS:
     except Exception as e:
         st.error(f"Kunde inte beräkna statistik: {e}")
 
-# ==== Del 4/4 – Masskopiera till ca 365 dagar (med progress + ETA) ====
-
+# =============== MASSKOPIERING TILL ~365 DAGAR + PROGRESS/ETA ==================
 st.markdown("---")
-st.subheader("📆 Masskopiering till ~365 dagar")
+st.subheader("📆 Fyll ett helt år (kopiera rader)")
 
-with st.expander("Visa alternativ"):
-    target_days = st.number_input("Måldagar (≈365)", min_value=1, value=365, step=1)
-    also_save_sheets = st.checkbox("Spara även kopiorna till Google Sheets (risk för quota)", value=False)
-    throttle_ms = st.slider("Fördröjning mellan Sheets-sparningar (ms)", min_value=0, max_value=2000, value=800, step=50, help="Hjälper mot quota-fel om du sparar många rader.")
-    st.caption("Tips: Låt den vara AV om du redan har allt i Sheets. Du kan alltid exportera i efterhand.")
+# Försök detektera batch-funktionen från sheets_utils
+try:
+    from sheets_utils import append_rows_to_profile_data as _batch_append_rows
+except Exception:
+    _batch_append_rows = None  # fallback: per-rad
 
-copy_btn = st.button("📑 Skapa kopior lokalt (och ev. Sheets)")
+col_m1, col_m2 = st.columns([1,1])
+with col_m1:
+    include_sheets = st.checkbox("Spara även till Google Sheets (snabb batch om möjligt)", value=True)
+with col_m2:
+    chunk_size = st.number_input("Batch-storlek (rader per skrivning)", min_value=10, max_value=500, value=100, step=10)
 
-def _parse_date_safe(s: str) -> date | None:
-    try:
-        return datetime.strptime(str(s), "%Y-%m-%d").date()
-    except Exception:
-        return None
+def _weekday_sv(d: datetime.date) -> str:
+    veckodagar = ["Måndag","Tisdag","Onsdag","Torsdag","Fredag","Lördag","Söndag"]
+    return veckodagar[d.weekday()]
 
-def _weekday_sv(d: date) -> str:
-    return ["Måndag","Tisdag","Onsdag","Torsdag","Fredag","Lördag","Söndag"][d.weekday()]
+def _safe_copy_row_for_date_scene(src: dict, dt: datetime.date, scen_nr: int) -> dict:
+    """Kopierar en sparrad och sätter nytt Datum/Veckodag/Scen. Behåller övriga fält."""
+    dst = dict(src)
+    dst["Datum"] = dt.isoformat()
+    dst["Veckodag"] = _weekday_sv(dt)
+    dst["Scen"] = scen_nr
+    return dst
 
-if copy_btn:
-    rows_orig = list(st.session_state.get(ROWS_KEY, []))
-    if not rows_orig:
-        st.error("Det finns inga rader att kopiera.")
-    else:
-        # räkna nuvarande unika datum
-        existing_dates = []
-        for r in rows_orig:
-            d = _parse_date_safe(r.get("Datum", ""))
-            if d: existing_dates.append(d)
-        unique_days = len(set(existing_dates))
-        need = max(0, int(target_days) - unique_days)
+def _estimate_eta_str(done: int, total: int, start_ts: float) -> str:
+    import time as _t
+    elapsed = max(0.001, _t.time() - start_ts)
+    rate = done / elapsed  # rows per second
+    remain = max(0, total - done)
+    eta_sec = (remain / rate) if rate > 0 else 0
+    # formatera mm:ss
+    mm = int(eta_sec // 60); ss = int(round(eta_sec % 60))
+    return f"{mm:02d}:{ss:02d}"
 
-        if need <= 0:
-            st.info(f"Inga nya kopior behövs (har redan {unique_days} unika dagar).")
-        else:
-            prog = st.progress(0.0)
-            fact = st.empty()
-            t0 = _time.perf_counter()
+def _copy_year_run(include_sheets: bool, chunk_size: int):
+    rows = st.session_state.get(ROWS_KEY, [])
+    if not rows:
+        st.warning("Det finns inga lokala rader att kopiera.")
+        return
 
-            # bestäm start för kopior: dagen efter senaste datum (eller startdatum)
-            if existing_dates:
-                base_date = max(existing_dates) + timedelta(days=1)
-            else:
-                base_date = st.session_state[CFG_KEY]["startdatum"]
+    # Skapa ca 365 rader
+    TARGET_DAYS = 365
+    sim_start = st.session_state.get(NEXT_START_DT_KEY).date() if st.session_state.get(NEXT_START_DT_KEY) else datetime.today().date()
 
-            new_rows_local = []
-            profile = st.session_state.get(PROFILE_KEY, "")
+    # Bestäm start-scennummer som fortlöpande nummer efter befintliga rader
+    start_scen = (len(rows) + 1)
 
-            # för SCEN-nummer – fortsätt från sista
-            cur_scene = 0
+    # Förbered lista av NYA lokala rader (objekt)
+    new_rows_local: List[dict] = []
+    for i in range(TARGET_DAYS):
+        src = rows[i % len(rows)]
+        nd = sim_start + timedelta(days=i)
+        new_rows_local.append(_safe_copy_row_for_date_scene(src, nd, start_scen + i))
+
+    # Visa progress + ETA
+    prog = st.progress(0)
+    info_box = st.empty()
+    start_ts = time.time()
+
+    total = len(new_rows_local)
+    done = 0
+
+    # 1) Uppdatera lokalt (direkt)
+    st.session_state[ROWS_KEY].extend(new_rows_local)
+
+    # 2) Spara till Sheets (batch om möjligt)
+    if include_sheets:
+        profile = st.session_state.get(PROFILE_KEY, "")
+        # konvertera till "writable" (strängifiera datum/tid osv)
+        def _to_writable_value(v):
+            if isinstance(v, datetime):
+                return v.strftime("%Y-%m-%d %H:%M:%S")
+            if isinstance(v, date):
+                return v.isoformat()
+            if isinstance(v, time):
+                return v.strftime("%H:%M:%S")
+            return v
+
+        rows_for_sheets = [{k: _to_writable_value(v) for k, v in r.items()} for r in new_rows_local]
+
+        # Skriv i chunkar, med backoff på 429
+        i = 0
+        while i < total:
+            chunk = rows_for_sheets[i:i+chunk_size]
             try:
-                cur_scene = max(int(r.get("Scen", 0) or 0) for r in rows_orig)
-            except Exception:
-                cur_scene = len(rows_orig)
+                if _batch_append_rows:
+                    _batch_append_rows(profile, chunk, chunk_size=chunk_size)
+                else:
+                    # Fallback: per-rad append (långsammare)
+                    for rd in chunk:
+                        append_row_to_profile_data(profile, rd)
+                i += len(chunk)
+                done = i
+            except Exception as e:
+                # 429-fall (RATE_LIMIT) → enkel backoff
+                msg = str(e)
+                if "429" in msg or "RATE_LIMIT" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    wait_s = 12  # mild backoff
+                    info_box.info(f"⏳ Rate limit. Försöker igen om {wait_s}s… ({done}/{total})")
+                    time.sleep(wait_s)
+                else:
+                    st.error(f"Misslyckades att spara en kopierad batch: {e}")
+                    # hoppa över denna batch och gå vidare
+                    i += len(chunk)
+                    done = i
 
-            for i in range(need):
-                src = rows_orig[i % len(rows_orig)]
-                d = base_date + timedelta(days=i)
-                veckodag = _weekday_sv(d)
+            # uppdatera progress + ETA
+            pct = int(done * 100 / total)
+            eta = _estimate_eta_str(done, total, start_ts)
+            prog.progress(min(100, pct))
+            info_box.markdown(
+                f"**Färdig:** {pct}% &nbsp;•&nbsp; **Klarade rader:** {done}/{total} "
+                f"&nbsp;•&nbsp; **Uppskattad tid kvar:** {eta}"
+            )
+    else:
+        # Endast lokal kopia, uppdatera progress visuellt
+        for i in range(total):
+            done = i + 1
+            pct = int(done * 100 / total)
+            eta = _estimate_eta_str(done, total, start_ts)
+            if done % 10 == 0 or done == total:
+                prog.progress(min(100, pct))
+                info_box.markdown(
+                    f"**Färdig (lokalt):** {pct}% &nbsp;•&nbsp; **Klarade rader:** {done}/{total} "
+                    f"&nbsp;•&nbsp; **Uppskattad tid kvar:** {eta}"
+                )
 
-                row = copy.deepcopy(src)
-                row["Datum"] = d.isoformat()
-                row["Veckodag"] = veckodag
-                cur_scene += 1
-                row["Scen"] = cur_scene
+    # Avslut
+    prog.progress(100)
+    info_box.success("✅ Kopieringen klar.")
 
-                # Lägg in i lokalt minne (strömvis)
-                st.session_state[ROWS_KEY].append(row)
-                new_rows_local.append(row)
-
-                # Progress & ETA
-                done = i + 1
-                frac = done / need
-                dt = _time.perf_counter() - t0
-                avg_per = dt / done
-                eta_s = max(0.0, avg_per * (need - done))
-                prog.progress(min(1.0, frac))
-                fact.info(f"Kopierar... {done}/{need} ({frac*100:0.1f}%) • Återstår ~{eta_s:0.1f}s")
-
-                # Ev. spara till Sheets (rate-limit vänligt)
-                if also_save_sheets:
-                    try:
-                        row_for_sheets = _row_for_sheets(row)
-                        _save_to_sheets_for_profile(profile, row_for_sheets)
-                    except Exception as e:
-                        st.error(f"Misslyckades att spara en kopierad rad till Sheets: {e}")
-                    # throttla mellan requests för att minska quota-fel
-                    if throttle_ms > 0:
-                        _time.sleep(throttle_ms / 1000.0)
-
-            # efter loop: uppdatera HIST_MINMAX och tvingad nästa start
-            CFG = st.session_state[CFG_KEY]
-            for r in new_rows_local:
-                for col in ["Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
-                            CFG["LBL_PAPPAN"], CFG["LBL_GRANNAR"], CFG["LBL_NILS_VANNER"],
-                            CFG["LBL_NILS_FAMILJ"], CFG["LBL_BEKANTA"], CFG["LBL_ESK"]]:
-                    _add_hist_value(col, int(r.get(col, 0) or 0))
-
-            st.session_state[NEXT_START_DT_KEY] = _recompute_next_start_from_rows(st.session_state[ROWS_KEY])
-            st.session_state[SCENEINFO_KEY] = _current_scene_info()
-
-            prog.progress(1.0)
-            fact.success(f"✅ Skapade {need} kopior. Totalt rader: {len(st.session_state[ROWS_KEY])}.")
+# Körning
+if st.button("📑 Kopiera befintliga rader tills ~365 dagar är fyllda"):
+    _copy_year_run(include_sheets=include_sheets, chunk_size=int(chunk_size))
