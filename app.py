@@ -1,4 +1,4 @@
-# app.py — version 250823-2 (editable-decimal inputs fix)
+# app.py — version 250823-3 (adds mass-copy + sticky profile)
 import streamlit as st
 import random
 import json
@@ -136,37 +136,9 @@ def _init_cfg_defaults():
         "HARD_AGE_MULT": 1.0,
     }
 
-def _ensure_datetime_types(cfg: dict) -> None:
-    """Säkerställ att datum/tid i CFG är rätt typer även efter sheets-läsning."""
-    def to_date(v, fallback):
-        if isinstance(v, date) and not isinstance(v, datetime):
-            return v
-        if isinstance(v, str) and v.strip():
-            for fmt in ("%Y-%m-%d","%Y/%m/%d","%d/%m/%Y","%d-%m-%Y"):
-                try:
-                    return datetime.strptime(v.strip(), fmt).date()
-                except Exception:
-                    pass
-        return fallback
-    def to_time(v, fallback):
-        if isinstance(v, time):
-            return v
-        if isinstance(v, str) and v.strip():
-            parts = v.strip().split(":")
-            try:
-                hh = int(parts[0]); mm = int(parts[1]) if len(parts)>1 else 0; ss = int(parts[2]) if len(parts)>2 else 0
-                return time(hh, mm, ss)
-            except Exception:
-                pass
-        return fallback
-    cfg["startdatum"]   = to_date(cfg.get("startdatum"), date(1990,1,1))
-    cfg["fodelsedatum"] = to_date(cfg.get("fodelsedatum"), date(1970,1,1))
-    cfg["starttid"]     = to_time(cfg.get("starttid"), time(7,0))
-
 def _ensure_next_start_dt_exists():
     if NEXT_START_DT_KEY not in st.session_state:
         cfg = st.session_state[CFG_KEY]
-        _ensure_datetime_types(cfg)
         st.session_state[NEXT_START_DT_KEY] = datetime.combine(cfg["startdatum"], cfg["starttid"])
 
 def _current_scene_info():
@@ -183,14 +155,21 @@ def init_state():
     if ROWS_KEY not in st.session_state:
         st.session_state[ROWS_KEY] = []
     if HIST_MM_KEY not in st.session_state:
-        st.session_state[HIST_MINMAX] = {}
-    if HIST_MM_KEY not in st.session_state:
         st.session_state[HIST_MM_KEY] = {}
     if SCENARIO_KEY not in st.session_state:
         st.session_state[SCENARIO_KEY] = "Ny scen"
     if PROFILE_KEY not in st.session_state:
-        profs = list_profiles()
-        st.session_state[PROFILE_KEY] = (profs[0] if profs else "")
+        # Försök läsa från URL-param först (sticky profil)
+        try:
+            qp = st.experimental_get_query_params()
+            qp_prof = qp.get("profile", [None])[0]
+        except Exception:
+            qp_prof = None
+        if qp_prof:
+            st.session_state[PROFILE_KEY] = qp_prof
+        else:
+            profs = list_profiles()
+            st.session_state[PROFILE_KEY] = (profs[0] if profs else "")
 
     # BMI-ackumulatorer
     st.session_state.setdefault(BMI_SUM_KEY, 0.0)
@@ -254,18 +233,18 @@ def _coerce_cfg_types(cfg: dict) -> dict:
                   "HARD_AGE_MULT")
     for k in float_keys:
         if k in out:
-            try: out[k] = float(str(out[k]).replace(",", "."))
+            try: out[k] = float(out[k])
             except Exception: pass
 
     int_keys = ("PROD_STAFF","HEIGHT_CM","ESK_MIN","ESK_MAX","MAX_PAPPAN","MAX_GRANNAR","MAX_NILS_VANNER","MAX_NILS_FAMILJ","MAX_BEKANTA")
     for k in int_keys:
         if k in out:
-            try: out[k] = int(float(str(out[k]).replace(",", ".")))
+            try: out[k] = int(float(out[k]))
             except Exception: pass
 
     # sömn
     if EXTRA_SLEEP_KEY in out:
-        try: out[EXTRA_SLEEP_KEY] = float(str(out[EXTRA_SLEEP_KEY]).replace(",", "."))
+        try: out[EXTRA_SLEEP_KEY] = float(out[EXTRA_SLEEP_KEY])
         except Exception: pass
 
     return out
@@ -347,7 +326,6 @@ def _load_profile_settings_and_data(profile_name: str):
         if prof_cfg:
             coerced = _coerce_cfg_types(prof_cfg)
             st.session_state[CFG_KEY].update(coerced)
-            _ensure_datetime_types(st.session_state[CFG_KEY])
         else:
             st.warning(f"Inga inställningar hittades för '{profile_name}'. Använder lokala defaults.")
     except Exception as e:
@@ -538,63 +516,41 @@ def apply_scenario_fill():
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
 # =========================
-# Helpers: redigerbara decimal-fält (text_input -> float)
-# =========================
-def _float_from_text(s: str, fallback: float) -> float:
-    try:
-        s = str(s).strip().replace(" ", "").replace(",", ".")
-        if s == "":
-            return fallback
-        return float(s)
-    except Exception:
-        return fallback
-
-def float_input(label: str, cfg_key: str, help_text: str = None):
-    """Text-input som låter användaren sudda helt, men vi sparar till CFG som float när det går."""
-    if "TXT_" + cfg_key not in st.session_state:
-        st.session_state["TXT_" + cfg_key] = str(st.session_state[CFG_KEY].get(cfg_key, ""))
-    txt_val = st.text_input(label, key="TXT_" + cfg_key, help=help_text)
-    parsed = _float_from_text(txt_val, float(st.session_state[CFG_KEY].get(cfg_key, 0.0)))
-    st.session_state[CFG_KEY][cfg_key] = parsed
-    return parsed
-
-# =========================
 # Sidopanel – Inställningar & Profiler
 # =========================
 CFG = st.session_state[CFG_KEY]
 with st.sidebar:
     st.header("Inställningar (lokalt)")
 
-    # Basdatum (säkerställ typer innan widgets)
-    _ensure_datetime_types(CFG)
+    # Basdatum
     CFG["startdatum"]   = st.date_input("Startdatum", value=CFG["startdatum"])
     CFG["starttid"]     = st.time_input("Starttid", value=CFG["starttid"])
     CFG["fodelsedatum"] = st.date_input("Födelsedatum", value=CFG["fodelsedatum"])
 
     # ===== Ekonomi =====
     st.subheader("Ekonomi")
-    CFG["avgift_usd"]   = float_input("Avgift per prenumerant (USD)", "avgift_usd")
-    CFG["ECON_COST_PER_HOUR"] = float_input("Kostnad män (USD per person-timme)", "ECON_COST_PER_HOUR")
-    CFG["ECON_REVENUE_PER_KANNER"] = float_input("Intäkt per 'Känner' (USD)", "ECON_REVENUE_PER_KANNER")
+    CFG["avgift_usd"]   = st.number_input("Avgift per prenumerant (USD)", min_value=0.0, value=float(CFG["avgift_usd"]), step=0.5)
+    CFG["ECON_COST_PER_HOUR"] = st.number_input("Kostnad män (USD per person-timme)", min_value=0.0, value=float(CFG["ECON_COST_PER_HOUR"]), step=0.5)
+    CFG["ECON_REVENUE_PER_KANNER"] = st.number_input("Intäkt per 'Känner' (USD)", min_value=0.0, value=float(CFG["ECON_REVENUE_PER_KANNER"]), step=0.5)
 
     st.markdown("**Lön Malin – parametrar**")
-    CFG["ECON_WAGE_SHARE_PCT"] = float_input("Lön % av Intäkt företag", "ECON_WAGE_SHARE_PCT")
-    CFG["ECON_WAGE_MIN"] = float_input("Lön min (USD)", "ECON_WAGE_MIN")
-    CFG["ECON_WAGE_MAX"] = float_input("Lön max (USD)", "ECON_WAGE_MAX")
-    CFG["ECON_WAGE_AGE_MULT"] = float_input("Lön ålders-multiplikator", "ECON_WAGE_AGE_MULT")
+    CFG["ECON_WAGE_SHARE_PCT"] = st.number_input("Lön % av Intäkt företag", min_value=0.0, max_value=100.0, value=float(CFG["ECON_WAGE_SHARE_PCT"]), step=0.5)
+    CFG["ECON_WAGE_MIN"] = st.number_input("Lön min (USD)", min_value=0.0, value=float(CFG["ECON_WAGE_MIN"]), step=5.0)
+    CFG["ECON_WAGE_MAX"] = st.number_input("Lön max (USD)", min_value=0.0, value=float(CFG["ECON_WAGE_MAX"]), step=5.0)
+    CFG["ECON_WAGE_AGE_MULT"] = st.number_input("Lön ålders-multiplikator", min_value=0.5, max_value=1.5, value=float(CFG["ECON_WAGE_AGE_MULT"]), step=0.05)
 
     CFG["PROD_STAFF"]   = st.number_input("Totalt antal personal (lönebas)", min_value=0, value=int(CFG["PROD_STAFF"]), step=1)
 
     st.markdown(f"**Bonus killar kvar:** {int(CFG[BONUS_LEFT_KEY])}")
     st.markdown(f"**Super-bonus ack (antal):** {int(CFG.get(SUPER_ACC_KEY,0))}")
 
-    CFG["BONUS_PCT"]        = float_input("Bonus % (decimal, t.ex. 1.0 = 1%)", "BONUS_PCT")
-    CFG["SUPER_BONUS_PCT"]  = float_input("Super-bonus % (decimal, t.ex. 0.1 = 0.1%)", "SUPER_BONUS_PCT")
-    CFG["BMI_GOAL"]         = float_input("BM mål (BMI)", "BMI_GOAL")
+    CFG["BONUS_PCT"]        = st.number_input("Bonus % (decimal, t.ex. 1.0 = 1%)", min_value=0.0, value=float(CFG.get("BONUS_PCT",1.0)), step=0.1)
+    CFG["SUPER_BONUS_PCT"]  = st.number_input("Super-bonus % (decimal, t.ex. 0.1 = 0.1%)", min_value=0.0, value=float(CFG.get("SUPER_BONUS_PCT",0.1)), step=0.1)
+    CFG["BMI_GOAL"]         = st.number_input("BM mål (BMI)", min_value=10.0, max_value=40.0, value=float(CFG.get("BMI_GOAL",21.7)), step=0.1)
     CFG["HEIGHT_CM"]        = st.number_input("Längd (cm)", min_value=140, max_value=220, value=int(CFG.get("HEIGHT_CM",164)), step=1)
 
     # Sömn efter scen (timmar) – används i tvingad schemaläggning
-    CFG[EXTRA_SLEEP_KEY]    = float_input("Sömn efter scen (timmar)", EXTRA_SLEEP_KEY)
+    CFG[EXTRA_SLEEP_KEY]    = st.number_input("Sömn efter scen (timmar)", min_value=0.0, step=0.5, value=float(CFG.get(EXTRA_SLEEP_KEY,7)))
 
     st.markdown("---")
     st.subheader("Eskilstuna-intervall (fallback om ingen historik)")
@@ -622,17 +578,17 @@ with st.sidebar:
     st.subheader("Hårdhet – poäng (styrbart)")
     colH1, colH2 = st.columns(2)
     with colH1:
-        CFG["HARD_PT_DP"]   = float_input("Poäng: DP>0",   "HARD_PT_DP")
-        CFG["HARD_PT_DPP"]  = float_input("Poäng: DPP>0",  "HARD_PT_DPP")
-        CFG["HARD_PT_DAP"]  = float_input("Poäng: DAP>0",  "HARD_PT_DAP")
-        CFG["HARD_PT_TAP"]  = float_input("Poäng: TAP>0",  "HARD_PT_TAP")
-        CFG["HARD_PT_SVARTA"] = float_input("Poäng: Svarta>0", "HARD_PT_SVARTA")
+        CFG["HARD_PT_DP"] = st.number_input("Poäng: DP>0", min_value=0.0, value=float(CFG["HARD_PT_DP"]), step=1.0)
+        CFG["HARD_PT_DPP"] = st.number_input("Poäng: DPP>0", min_value=0.0, value=float(CFG["HARD_PT_DPP"]), step=1.0)
+        CFG["HARD_PT_DAP"] = st.number_input("Poäng: DAP>0", min_value=0.0, value=float(CFG["HARD_PT_DAP"]), step=1.0)
+        CFG["HARD_PT_TAP"] = st.number_input("Poäng: TAP>0", min_value=0.0, value=float(CFG["HARD_PT_TAP"]), step=1.0)
+        CFG["HARD_PT_SVARTA"] = st.number_input("Poäng: Svarta>0", min_value=0.0, value=float(CFG["HARD_PT_SVARTA"]), step=1.0)
     with colH2:
-        CFG["HARD_PT_TOT50"]   = float_input("Poäng: Tot Män ≥ 50",   "HARD_PT_TOT50")
-        CFG["HARD_PT_TOT300"]  = float_input("Poäng: Tot Män ≥ 300",  "HARD_PT_TOT300")
-        CFG["HARD_PT_TOT500"]  = float_input("Poäng: Tot Män ≥ 500",  "HARD_PT_TOT500")
-        CFG["HARD_PT_TOT800"]  = float_input("Poäng: Tot Män ≥ 800",  "HARD_PT_TOT800")
-        CFG["HARD_PT_TOT1000"] = float_input("Poäng: Tot Män ≥ 1000", "HARD_PT_TOT1000")
+        CFG["HARD_PT_TOT50"] = st.number_input("Poäng: Tot Män ≥ 50", min_value=0.0, value=float(CFG["HARD_PT_TOT50"]), step=1.0)
+        CFG["HARD_PT_TOT300"] = st.number_input("Poäng: Tot Män ≥ 300", min_value=0.0, value=float(CFG["HARD_PT_TOT300"]), step=1.0)
+        CFG["HARD_PT_TOT500"] = st.number_input("Poäng: Tot Män ≥ 500", min_value=0.0, value=float(CFG["HARD_PT_TOT500"]), step=1.0)
+        CFG["HARD_PT_TOT800"] = st.number_input("Poäng: Tot Män ≥ 800", min_value=0.0, value=float(CFG["HARD_PT_TOT800"]), step=1.0)
+        CFG["HARD_PT_TOT1000"] = st.number_input("Poäng: Tot Män ≥ 1000", min_value=0.0, value=float(CFG["HARD_PT_TOT1000"]), step=1.0)
 
     # Ålder för hårdhet – räkna ut & låt användaren fintrimma multiplikatorn
     try:
@@ -642,7 +598,7 @@ with st.sidebar:
     except Exception:
         alder = 30
     st.caption(f"Ålder (beräknad): {alder} år")
-    CFG["HARD_AGE_MULT"] = float_input("Hårdhet – ålders-multiplikator", "HARD_AGE_MULT")
+    CFG["HARD_AGE_MULT"] = st.number_input("Hårdhet – ålders-multiplikator", min_value=0.5, max_value=2.0, value=float(CFG["HARD_AGE_MULT"]), step=0.1)
 
     st.markdown("---")
     st.subheader("Scenario")
@@ -656,18 +612,34 @@ with st.sidebar:
         st.rerun()
 
     # =========================
-    # Profiler & Sheets
+    # Profiler & Sheets (STICKY profil även efter idle)
     # =========================
     st.markdown("---")
     st.subheader("Profiler (Sheets)")
     profiles = list_profiles()
     if not profiles:
         st.info("Inga profiler funna i fliken 'Profil'. Lägg till namn i kolumn A i bladet 'Profil'.")
+
+    # Försök bevara/återställa från URL-param om möjligt
+    try:
+        qp = st.experimental_get_query_params()
+        qp_prof = qp.get("profile", [None])[0]
+    except Exception:
+        qp_prof = None
+    if qp_prof and qp_prof in profiles:
+        st.session_state[PROFILE_KEY] = qp_prof
+
     # bevara aktiv profil om den fortfarande finns i listan
     current_profile = st.session_state.get(PROFILE_KEY, profiles[0] if profiles else "")
     idx = profiles.index(current_profile) if (profiles and current_profile in profiles) else 0
-    selected_profile = st.selectbox("Välj profil", options=profiles or ["(saknas)"], index=idx)
+
+    selected_profile = st.selectbox("Välj profil", options=profiles or ["(saknas)"], index=idx, key="PROFILE_SELECT")
     st.session_state[PROFILE_KEY] = selected_profile
+    # Skriv in i URL så den överlever idle/refresh
+    try:
+        st.experimental_set_query_params(profile=selected_profile)
+    except Exception:
+        pass
 
     colP1, colP2 = st.columns(2)
     with colP1:
@@ -677,7 +649,6 @@ with st.sidebar:
                 if prof_cfg:
                     coerced = _coerce_cfg_types(prof_cfg)
                     st.session_state[CFG_KEY].update(coerced)
-                    _ensure_datetime_types(st.session_state[CFG_KEY])
                     st.success(f"✅ Läste in inställningar för '{selected_profile}'.")
                 else:
                     st.warning(f"Inga inställningar hittades på bladet '{selected_profile}'.")
@@ -1111,7 +1082,7 @@ else:
 st.caption("Obs: Vila-scenarion genererar inga prenumeranter, intäkter, kostnader eller lön. Bonus kvar minskas dock med 'Bonus deltagit'.")
 
 # =========================
-# Spar & statistik
+# Sparrad – full rad (base + preview) och nollställ None
 # =========================
 CFG = st.session_state[CFG_KEY]
 LBL_PAPPAN   = CFG["LBL_PAPPAN"]
@@ -1235,6 +1206,131 @@ with cR:
             st.success("✅ Sparad till Google Sheets.")
         except Exception as e:
             st.error(f"Misslyckades att spara till Sheets: {e}")
+
+# =========================
+# 📅 Masskopiera rader till ~365 dagar
+# =========================
+import math
+
+st.markdown("---")
+st.subheader("📅 Masskopiera till ~365 dagar (kopiera alla rader)")
+
+colMK1, colMK2 = st.columns([2,1])
+with colMK2:
+    write_to_sheets = st.checkbox("Skriv även till Google Sheets", value=True)
+with colMK1:
+    if st.button("✨ Kopiera rader tills ~365 dagar"):
+        try:
+            rows = list(st.session_state.get(ROWS_KEY, []))
+            profile = st.session_state.get(PROFILE_KEY, "")
+            if not rows:
+                st.warning("Det finns inga rader att kopiera.")
+            else:
+                # --- Hjälpare
+                def _parse_date(s):
+                    try:  # förväntas vara 'YYYY-MM-DD'
+                        return datetime.strptime(str(s).strip(), "%Y-%m-%d").date()
+                    except Exception:
+                        return None
+
+                veckodagar = ["Måndag","Tisdag","Onsdag","Torsdag","Fredag","Lördag","Söndag"]
+
+                # --- Samla datuminfo från befintliga rader
+                dated_rows = []
+                for r in rows:
+                    d = _parse_date(r.get("Datum", ""))
+                    if d: dated_rows.append((r, d))
+                if not dated_rows:
+                    st.error("Hittade inga giltiga datum i befintliga rader (kolumn 'Datum').")
+                else:
+                    # Unika datum och spann
+                    unique_days = sorted({d for _, d in dated_rows})
+                    base_span_days = len(unique_days)
+                    if base_span_days == 0:
+                        st.error("Kunde inte beräkna dagspann från befintliga datum.")
+                    else:
+                        min_date = min(unique_days)
+                        max_date = max(unique_days)
+
+                        # Hur många dagar saknas upp till ~365?
+                        need_days = max(0, 365 - base_span_days)
+                        cycles = math.ceil(need_days / base_span_days) if need_days > 0 else 0
+
+                        if cycles <= 0:
+                            st.info("Det finns redan ~365 (eller fler) unika datum. Inga kopior gjordes.")
+                        else:
+                            # Starta dagen direkt efter senaste befintliga
+                            base_start = max_date + timedelta(days=1)
+
+                            # Ta fram högsta scennummer (om möjligt)
+                            def _to_int(x, default=0):
+                                try: return int(float(x))
+                                except Exception: return default
+                            last_scen = 0
+                            for r,_ in dated_rows:
+                                last_scen = max(last_scen, _to_int(r.get("Scen", 0), 0))
+
+                            # För ordningsbevarande: sortera grundmönstret efter datum (och bibehåll radernas inbördes ordning)
+                            dated_rows_sorted = sorted(dated_rows, key=lambda t: t[1])
+
+                            # För snabb koll av helpers
+                            have_row_for_sheets = "_row_for_sheets" in globals()
+
+                            # Etiketter för hist-uppdatering om de finns i CFG
+                            CFG = st.session_state[CFG_KEY]
+                            LBL_PAPPAN = CFG.get("LBL_PAPPAN", "Pappans vänner")
+                            LBL_GRANNAR = CFG.get("LBL_GRANNAR", "Grannar")
+                            LBL_NV      = CFG.get("LBL_NILS_VANNER", "Nils vänner")
+                            LBL_NF      = CFG.get("LBL_NILS_FAMILJ", "Nils familj")
+                            LBL_BEK     = CFG.get("LBL_BEKANTA", "Bekanta")
+                            LBL_ESK     = CFG.get("LBL_ESK", "Eskilstuna killar")
+
+                            appended_local = 0
+                            appended_sheets = 0
+
+                            for c in range(cycles):
+                                for (r, d) in dated_rows_sorted:
+                                    offset = (d - min_date).days
+                                    new_date = base_start + timedelta(days=c * base_span_days + offset)
+                                    new_weekday = veckodagar[new_date.weekday()]
+
+                                    new_row = dict(r)
+                                    new_row["Datum"] = new_date.isoformat()
+                                    new_row["Veckodag"] = new_weekday
+                                    last_scen += 1
+                                    new_row["Scen"] = last_scen
+
+                                    # Sätt profil om fältet finns
+                                    new_row["Profil"] = profile
+
+                                    # Lägg till lokalt
+                                    st.session_state[ROWS_KEY].append(new_row)
+                                    appended_local += 1
+
+                                    # Uppdatera min/max för slump (om helper finns)
+                                    try:
+                                        for col in [
+                                            "Män","Svarta","Fitta","Rumpa","DP","DPP","DAP","TAP",
+                                            LBL_PAPPAN, LBL_GRANNAR, LBL_NV, LBL_NF, LBL_BEK, LBL_ESK
+                                        ]:
+                                            if col in new_row and "_add_hist_value" in globals():
+                                                _add_hist_value(col, int(float(new_row.get(col, 0) or 0)))
+                                    except Exception:
+                                        pass
+
+                                    # Skriv till Sheets (valfritt)
+                                    if write_to_sheets and profile:
+                                        try:
+                                            to_write = _row_for_sheets(new_row) if have_row_for_sheets else new_row
+                                            append_row_to_profile_data(profile, to_write)
+                                            appended_sheets += 1
+                                        except Exception as e:
+                                            st.error(f"Misslyckades att spara en kopierad rad till Sheets: {e}")
+                                            # Fortsätt ändå med resterande
+
+                            st.success(f"✅ Klart! Lade till {appended_local} rader lokalt" + (f" och {appended_sheets} till Sheets." if write_to_sheets else "."))
+        except Exception as e:
+            st.error(f"Masskopiering misslyckades: {e}")
 
 # =========================
 # Visa lokala rader + Statistik
