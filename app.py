@@ -1,14 +1,11 @@
-# app.py — version 250823-3 (Del 1/4)
+# app.py — version 250823-2 (Del 1/4)
 import streamlit as st
 import random
 import json
-import time
-import math
 import pandas as pd
-from datetime import date, time as dtime, datetime, timedelta
+from datetime import date, time, datetime, timedelta
 
 # ===== Moduler (måste finnas i samma mapp) =====
-import sheets_utils as su
 from sheets_utils import (
     list_profiles, read_profile_settings, read_profile_data,
     save_profile_settings, append_row_to_profile_data
@@ -79,7 +76,7 @@ def _init_cfg_defaults():
     return {
         # Basdatum
         "startdatum":   date(1990,1,1),
-        "starttid":     dtime(7,0),
+        "starttid":     time(7,0),
         "fodelsedatum": date(1970,1,1),
 
         # Ekonomi – styrbart
@@ -139,31 +136,6 @@ def _init_cfg_defaults():
         "HARD_AGE_MULT": 1.0,
     }
 
-def _get_query_profile_or_none():
-    # Streamlit 1.30+: st.query_params (Mapping); annars experimental_*
-    try:
-        qp = st.query_params
-        p = qp.get("profile", None)
-        if isinstance(p, list):  # defensive
-            p = p[0] if p else None
-        return p
-    except Exception:
-        try:
-            qp = st.experimental_get_query_params()
-            lst = qp.get("profile", [])
-            return lst[0] if lst else None
-        except Exception:
-            return None
-
-def _set_query_profile(p: str):
-    try:
-        st.query_params["profile"] = p
-    except Exception:
-        try:
-            st.experimental_set_query_params(profile=p)
-        except Exception:
-            pass
-
 def _ensure_next_start_dt_exists():
     if NEXT_START_DT_KEY not in st.session_state:
         cfg = st.session_state[CFG_KEY]
@@ -183,18 +155,13 @@ def init_state():
     if ROWS_KEY not in st.session_state:
         st.session_state[ROWS_KEY] = []
     if HIST_MM_KEY not in st.session_state:
-        st.session_state[HIST_MINMAX] = {}
+        st.session_state[HIST_MM_KEY] = {}   # <-- FIX: korrekt nyckel
+
     if SCENARIO_KEY not in st.session_state:
         st.session_state[SCENARIO_KEY] = "Ny scen"
-
-    # Profil från URL om möjligt (håller över idle/server-restart)
     if PROFILE_KEY not in st.session_state:
         profs = list_profiles()
-        url_prof = _get_query_profile_or_none()
-        if url_prof and url_prof in profs:
-            st.session_state[PROFILE_KEY] = url_prof
-        else:
-            st.session_state[PROFILE_KEY] = (profs[0] if profs else "")
+        st.session_state[PROFILE_KEY] = (profs[0] if profs else "")
 
     # BMI-ackumulatorer
     st.session_state.setdefault(BMI_SUM_KEY, 0.0)
@@ -234,15 +201,15 @@ def _coerce_cfg_types(cfg: dict) -> dict:
         return out.get("startdatum", date(1990,1,1))  # fallback
 
     def _to_time(v):
-        if isinstance(v, dtime): return v
+        if isinstance(v, time): return v
         if isinstance(v, str) and v.strip():
             parts = v.strip().split(":")
             try:
                 hh = int(parts[0]); mm = int(parts[1]) if len(parts) > 1 else 0
-                return dtime(hh, mm)
+                return time(hh, mm)
             except Exception:
                 pass
-        return out.get("starttid", dtime(7,0))  # fallback
+        return out.get("starttid", time(7,0))  # fallback
 
     # Kända nycklar som kan komma som strängar
     if "startdatum"   in out: out["startdatum"]   = _to_date(out["startdatum"])
@@ -258,7 +225,7 @@ def _coerce_cfg_types(cfg: dict) -> dict:
                   "HARD_AGE_MULT")
     for k in float_keys:
         if k in out:
-            try: out[k] = float(str(out[k]).replace(",", "."))
+            try: out[k] = float(out[k])
             except Exception: pass
 
     int_keys = ("PROD_STAFF","HEIGHT_CM","ESK_MIN","ESK_MAX","MAX_PAPPAN","MAX_GRANNAR","MAX_NILS_VANNER","MAX_NILS_FAMILJ","MAX_BEKANTA")
@@ -269,7 +236,7 @@ def _coerce_cfg_types(cfg: dict) -> dict:
 
     # sömn
     if EXTRA_SLEEP_KEY in out:
-        try: out[EXTRA_SLEEP_KEY] = float(str(out[EXTRA_SLEEP_KEY]).replace(",", "."))
+        try: out[EXTRA_SLEEP_KEY] = float(out[EXTRA_SLEEP_KEY])
         except Exception: pass
 
     return out
@@ -295,32 +262,32 @@ def _recompute_next_start_from_rows(rows):
         end_sleep = end_dt + timedelta(hours=sleep_h)
 
         if end_sleep.date() > cur.date():
-            base7 = datetime.combine(end_sleep.date(), dtime(7,0))
-            if end_sleep.time() <= dtime(7,0):
+            base7 = datetime.combine(end_sleep.date(), time(7,0))
+            if end_sleep.time() <= time(7,0):
                 cur = base7
             else:
                 # ceil to next hour
                 cur = (end_sleep.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
         else:
-            cur = datetime.combine(cur.date() + timedelta(days=1), dtime(7,0))
+            cur = datetime.combine(cur.date() + timedelta(days=1), time(7,0))
     return cur
 
 def _add_hist_value(col, v):
     try: v = int(v)
     except Exception: v = 0
-    mm = st.session_state[HIST_MINMAX].get(col)
-    if mm: st.session_state[HIST_MINMAX][col] = (min(mm[0],v), max(mm[1],v))
-    else:  st.session_state[HIST_MINMAX][col] = (v, v)
+    mm = st.session_state[HIST_MM_KEY].get(col)
+    if mm: st.session_state[HIST_MM_KEY][col] = (min(mm[0],v), max(mm[1],v))
+    else:  st.session_state[HIST_MM_KEY][col] = (v, v)
 
 def _minmax_from_hist(colname: str):
-    mm = st.session_state[HIST_MINMAX].get(colname)
+    mm = st.session_state[HIST_MM_KEY].get(colname)
     if mm: return mm
     vals = []
     for r in st.session_state[ROWS_KEY]:
         try: vals.append(int(r.get(colname, 0)))
         except Exception: pass
     mm = (min(vals), max(vals)) if vals else (0,0)
-    st.session_state[HIST_MINMAX][colname] = mm
+    st.session_state[HIST_MM_KEY][colname] = mm
     return mm
 
 def _hist_hi(colname: str) -> int:
@@ -361,7 +328,7 @@ def _load_profile_settings_and_data(profile_name: str):
         df = read_profile_data(profile_name)
         st.session_state[ROWS_KEY] = df.to_dict(orient="records") if (df is not None and not df.empty) else []
         # Bygg min/max för slump
-        st.session_state[HIST_MINMAX] = {}
+        st.session_state[HIST_MM_KEY] = {}
         CFG = st.session_state[CFG_KEY]
         LBL_PAPPAN = CFG["LBL_PAPPAN"]; LBL_GRANNAR = CFG["LBL_GRANNAR"]
         LBL_NV = CFG["LBL_NILS_VANNER"]; LBL_NF = CFG["LBL_NILS_FAMILJ"]
@@ -539,220 +506,6 @@ def apply_scenario_fill():
         st.session_state["in_svarta"] = int(st.session_state[CFG_KEY].get(SUPER_ACC_KEY, 0))
 
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
-
-# ======== Hjälpkomponent för enklare decimalinmatning =========
-def float_text_input(label: str, key: str, default: float) -> float:
-    """Textfält som accepterar , eller . och går att tömma innan inmatning."""
-    cur = st.session_state.get(key, default)
-    s = st.text_input(label, value=str(cur), key=f"{key}__txt")
-    try:
-        val = float(str(s).replace(",", "."))
-    except Exception:
-        val = cur
-    st.session_state[key] = val
-    return val
-
-# =========================
-# Sidopanel – Inställningar & Profiler
-# =========================
-CFG = st.session_state[CFG_KEY]
-with st.sidebar:
-    st.header("Inställningar (lokalt)")
-
-    # Basdatum
-    CFG["startdatum"]   = st.date_input("Startdatum", value=CFG["startdatum"])
-    CFG["starttid"]     = st.time_input("Starttid", value=CFG["starttid"])
-    CFG["fodelsedatum"] = st.date_input("Födelsedatum", value=CFG["fodelsedatum"])
-
-    # ===== Ekonomi =====
-    st.subheader("Ekonomi")
-    CFG["avgift_usd"]   = float_text_input("Avgift per prenumerant (USD)", "avgift_usd", float(CFG["avgift_usd"]))
-    CFG["ECON_COST_PER_HOUR"] = float_text_input("Kostnad män (USD per person-timme)", "ECON_COST_PER_HOUR", float(CFG["ECON_COST_PER_HOUR"]))
-    CFG["ECON_REVENUE_PER_KANNER"] = float_text_input("Intäkt per 'Känner' (USD)", "ECON_REVENUE_PER_KANNER", float(CFG["ECON_REVENUE_PER_KANNER"]))
-
-    st.markdown("**Lön Malin – parametrar**")
-    CFG["ECON_WAGE_SHARE_PCT"] = float_text_input("Lön % av Intäkt företag", "ECON_WAGE_SHARE_PCT", float(CFG["ECON_WAGE_SHARE_PCT"]))
-    CFG["ECON_WAGE_MIN"] = float_text_input("Lön min (USD)", "ECON_WAGE_MIN", float(CFG["ECON_WAGE_MIN"]))
-    CFG["ECON_WAGE_MAX"] = float_text_input("Lön max (USD)", "ECON_WAGE_MAX", float(CFG["ECON_WAGE_MAX"]))
-    CFG["ECON_WAGE_AGE_MULT"] = float_text_input("Lön ålders-multiplikator", "ECON_WAGE_AGE_MULT", float(CFG["ECON_WAGE_AGE_MULT"]))
-
-    CFG["PROD_STAFF"]   = st.number_input("Totalt antal personal (lönebas)", min_value=0, value=int(CFG["PROD_STAFF"]), step=1)
-
-    st.markdown(f"**Bonus killar kvar:** {int(CFG[BONUS_LEFT_KEY])}")
-    st.markdown(f"**Super-bonus ack (antal):** {int(CFG.get(SUPER_ACC_KEY,0))}")
-
-    CFG["BONUS_PCT"]        = float_text_input("Bonus % (decimal, t.ex. 1.0 = 1%)", "BONUS_PCT", float(CFG.get("BONUS_PCT",1.0)))
-    CFG["SUPER_BONUS_PCT"]  = float_text_input("Super-bonus % (decimal, t.ex. 0.1 = 0.1%)", "SUPER_BONUS_PCT", float(CFG.get("SUPER_BONUS_PCT",0.1)))
-    CFG["BMI_GOAL"]         = float_text_input("BM mål (BMI)", "BMI_GOAL", float(CFG.get("BMI_GOAL",21.7)))
-    CFG["HEIGHT_CM"]        = st.number_input("Längd (cm)", min_value=140, max_value=220, value=int(CFG.get("HEIGHT_CM",164)), step=1)
-
-    # Sömn efter scen (timmar) – används i tvingad schemaläggning
-    CFG[EXTRA_SLEEP_KEY]    = float_text_input("Sömn efter scen (timmar)", EXTRA_SLEEP_KEY, float(CFG.get(EXTRA_SLEEP_KEY,7)))
-
-    st.markdown("---")
-    st.subheader("Eskilstuna-intervall (fallback om ingen historik)")
-    CFG["ESK_MIN"] = st.number_input("Eskilstuna min", min_value=0, value=int(CFG["ESK_MIN"]), step=1)
-    CFG["ESK_MAX"] = st.number_input("Eskilstuna max", min_value=CFG["ESK_MIN"], value=int(CFG["ESK_MAX"]), step=1)
-
-    st.markdown("---")
-    st.subheader("Maxvärden (källor)")
-    CFG["MAX_PAPPAN"]       = st.number_input("MAX Pappans vänner", min_value=0, value=int(CFG["MAX_PAPPAN"]), step=1)
-    CFG["MAX_GRANNAR"]      = st.number_input("MAX Grannar",        min_value=0, value=int(CFG["MAX_GRANNAR"]), step=1)
-    CFG["MAX_NILS_VANNER"]  = st.number_input("MAX Nils vänner",    min_value=0, value=int(CFG["MAX_NILS_VANNER"]), step=1)
-    CFG["MAX_NILS_FAMILJ"]  = st.number_input("MAX Nils familj",    min_value=0, value=int(CFG["MAX_NILS_FAMILJ"]), step=1)
-    CFG["MAX_BEKANTA"]      = st.number_input("MAX Bekanta",        min_value=0, value=int(CFG["MAX_BEKANTA"]), step=1)
-
-    st.markdown("---")
-    st.subheader("Egna etiketter (slår igenom i input/live)")
-    CFG["LBL_PAPPAN"]      = st.text_input("Etikett för Pappans vänner", value=CFG["LBL_PAPPAN"])
-    CFG["LBL_GRANNAR"]     = st.text_input("Etikett för Grannar", value=CFG["LBL_GRANNAR"])
-    CFG["LBL_NILS_VANNER"] = st.text_input("Etikett för Nils vänner", value=CFG["LBL_NILS_VANNER"])
-    CFG["LBL_NILS_FAMILJ"] = st.text_input("Etikett för Nils familj", value=CFG["LBL_NILS_FAMILJ"])
-    CFG["LBL_BEKANTA"]     = st.text_input("Etikett för Bekanta", value=CFG["LBL_BEKANTA"])
-    CFG["LBL_ESK"]         = st.text_input("Etikett för Eskilstuna killar", value=CFG["LBL_ESK"])
-
-    st.markdown("---")
-    st.subheader("Hårdhet – poäng (styrbart)")
-    colH1, colH2 = st.columns(2)
-    with colH1:
-        CFG["HARD_PT_DP"]   = st.number_input("Poäng: DP>0", min_value=0.0, value=float(CFG["HARD_PT_DP"]), step=1.0)
-        CFG["HARD_PT_DPP"]  = st.number_input("Poäng: DPP>0", min_value=0.0, value=float(CFG["HARD_PT_DPP"]), step=1.0)
-        CFG["HARD_PT_DAP"]  = st.number_input("Poäng: DAP>0", min_value=0.0, value=float(CFG["HARD_PT_DAP"]), step=1.0)
-        CFG["HARD_PT_TAP"]  = st.number_input("Poäng: TAP>0", min_value=0.0, value=float(CFG["HARD_PT_TAP"]), step=1.0)
-        CFG["HARD_PT_SVARTA"]= st.number_input("Poäng: Svarta>0", min_value=0.0, value=float(CFG["HARD_PT_SVARTA"]), step=1.0)
-    with colH2:
-        CFG["HARD_PT_TOT50"]   = st.number_input("Poäng: Tot Män ≥ 50", min_value=0.0, value=float(CFG["HARD_PT_TOT50"]), step=1.0)
-        CFG["HARD_PT_TOT300"]  = st.number_input("Poäng: Tot Män ≥ 300", min_value=0.0, value=float(CFG["HARD_PT_TOT300"]), step=1.0)
-        CFG["HARD_PT_TOT500"]  = st.number_input("Poäng: Tot Män ≥ 500", min_value=0.0, value=float(CFG["HARD_PT_TOT500"]), step=1.0)
-        CFG["HARD_PT_TOT800"]  = st.number_input("Poäng: Tot Män ≥ 800", min_value=0.0, value=float(CFG["HARD_PT_TOT800"]), step=1.0)
-        CFG["HARD_PT_TOT1000"] = st.number_input("Poäng: Tot Män ≥ 1000", min_value=0.0, value=float(CFG["HARD_PT_TOT1000"]), step=1.0)
-
-    # Ålder för hårdhet – räkna ut & låt användaren fintrimma multiplikatorn
-    try:
-        alder = CFG["startdatum"].year - CFG["fodelsedatum"].year - (
-            (CFG["startdatum"].month, CFG["startdatum"].day) < (CFG["fodelsedatum"].month, CFG["fodelsedatum"].day)
-        )
-    except Exception:
-        alder = 30
-    st.caption(f"Ålder (beräknad): {alder} år")
-    CFG["HARD_AGE_MULT"] = st.number_input("Hårdhet – ålders-multiplikator", min_value=0.5, max_value=2.0, value=float(CFG["HARD_AGE_MULT"]), step=0.1)
-
-    st.markdown("---")
-    st.subheader("Scenario")
-    st.session_state[SCENARIO_KEY] = st.selectbox(
-        "Välj",
-        ["Ny scen","Slumpa scen vit","Slumpa scen svart","Vila på jobbet","Vila i hemmet (dag 1–7)","Super bonus"],
-        index=["Ny scen","Slumpa scen vit","Slumpa scen svart","Vila på jobbet","Vila i hemmet (dag 1–7)","Super bonus"].index(st.session_state[SCENARIO_KEY])
-    )
-    if st.button("⬇️ Hämta värden"):
-        apply_scenario_fill()
-        st.rerun()
-
-    # =========================
-    # Profiler & Sheets (med URL-parameter så valet överlever idle/restart)
-    # =========================
-    st.markdown("---")
-    st.subheader("Profiler (Sheets)")
-    profiles = list_profiles()
-    if not profiles:
-        st.info("Inga profiler funna i fliken 'Profil'. Lägg till namn i kolumn A i bladet 'Profil'.")
-    # bevara aktiv profil / eller från URL
-    current_profile = st.session_state.get(PROFILE_KEY, profiles[0] if profiles else "")
-    url_prof = _get_query_profile_or_none()
-    if url_prof and url_prof in profiles and url_prof != current_profile:
-        current_profile = url_prof
-        st.session_state[PROFILE_KEY] = url_prof
-    idx = profiles.index(current_profile) if (profiles and current_profile in profiles) else 0
-    selected_profile = st.selectbox("Välj profil", options=profiles or ["(saknas)"], index=idx, key="__profile_select")
-    if selected_profile != st.session_state.get(PROFILE_KEY, ""):
-        st.session_state[PROFILE_KEY] = selected_profile
-        _set_query_profile(selected_profile)
-
-    colP1, colP2 = st.columns(2)
-    with colP1:
-        if st.button("📥 Läs in profilens inställningar (endast)"):
-            try:
-                prof_cfg = read_profile_settings(selected_profile)
-                if prof_cfg:
-                    coerced = _coerce_cfg_types(prof_cfg)
-                    st.session_state[CFG_KEY].update(coerced)
-                    st.success(f"✅ Läste in inställningar för '{selected_profile}'.")
-                else:
-                    st.warning(f"Inga inställningar hittades på bladet '{selected_profile}'.")
-            except Exception as e:
-                st.error(f"Kunde inte läsa profilens inställningar: {e}")
-
-    with colP2:
-        if st.button("📥 Läs in profilens data (allt)"):
-            _load_profile_settings_and_data(selected_profile)
-
-    st.caption(f"GOOGLE_CREDENTIALS: {'✅' if 'GOOGLE_CREDENTIALS' in st.secrets else '❌'} • SHEET_URL: {'✅' if 'SHEET_URL' in st.secrets else '❌'}")
-
-    if st.button("💾 Spara inställningar till profil"):
-        try:
-            save_profile_settings(selected_profile, st.session_state[CFG_KEY])
-            st.success("✅ Inställningar sparade till profilbladet.")
-        except Exception as e:
-            st.error(f"Misslyckades att spara inställningar: {e}")
-
-# ==== Auto-ladda profil vid första sidladdning ====
-if not st.session_state.get(FIRST_BOOT_KEY, False):
-    prof = st.session_state.get(PROFILE_KEY, "")
-    if prof:
-        _load_profile_settings_and_data(prof)
-        st.session_state[FIRST_BOOT_KEY] = True
-    else:
-        st.warning("Hittade ingen profil att läsa in.")
-
-# =========================
-# Inmatning (etiketter av inställningar), exakt ordning
-# =========================
-st.subheader("Input (exakt ordning)")
-c1,c2 = st.columns(2)
-
-CFG = st.session_state[CFG_KEY]
-LBL_PAPPAN = CFG["LBL_PAPPAN"]; LBL_GRANNAR = CFG["LBL_GRANNAR"]
-LBL_NV = CFG["LBL_NILS_VANNER"]; LBL_NF = CFG["LBL_NILS_FAMILJ"]
-LBL_BEK = CFG["LBL_BEKANTA"]; LBL_ESK = CFG["LBL_ESK"]
-
-labels = {
-    "in_man":"Män","in_svarta":"Svarta",
-    "in_fitta":"Fitta","in_rumpa":"Rumpa","in_dp":"DP","in_dpp":"DPP","in_dap":"DAP","in_tap":"TAP",
-    "in_tid_s":"Tid S (sek)","in_tid_d":"Tid D (sek)","in_vila":"Vila (sek)",
-    "in_dt_tid":"DT tid (sek/kille)","in_dt_vila":"DT vila (sek/kille)",
-    "in_alskar":"Älskar","in_sover":"Sover med (0/1)",
-    "in_pappan":f"{LBL_PAPPAN} (MAX {int(CFG['MAX_PAPPAN'])})",
-    "in_grannar":f"{LBL_GRANNAR} (MAX {int(CFG['MAX_GRANNAR'])})",
-    "in_nils_vanner":f"{LBL_NV} (MAX {int(CFG['MAX_NILS_VANNER'])})",
-    "in_nils_familj":f"{LBL_NF} (MAX {int(CFG['MAX_NILS_FAMILJ'])})",
-    "in_bekanta":f"{LBL_BEK} (MAX {int(CFG['MAX_BEKANTA'])})",
-    "in_eskilstuna":f"{LBL_ESK} ({int(CFG['ESK_MIN'])}–{int(CFG['ESK_MAX'])})",
-    "in_bonus_deltagit":f"Bonus deltagit (kvar {int(CFG[BONUS_LEFT_KEY])})",
-    "in_personal_deltagit":f"Personal deltagit (av {int(CFG['PROD_STAFF'])})",
-    "in_hander_aktiv":"Händer aktiv (1=Ja, 0=Nej)",
-    "in_nils":"Nils (0/1/2)"
-}
-
-with c1:
-    for key in [
-        "in_man","in_svarta",
-        "in_fitta","in_rumpa","in_dp","in_dpp","in_dap","in_tap",
-        "in_tid_s","in_tid_d","in_vila"
-    ]:
-        st.number_input(labels[key], min_value=0, step=1, key=key)
-
-with c2:
-    for key in ["in_dt_tid","in_dt_vila","in_alskar"]:
-        st.number_input(labels[key], min_value=0, step=1, key=key)
-    st.number_input(labels["in_sover"], min_value=0, max_value=1, step=1, key="in_sover")
-    for key in [
-        "in_pappan","in_grannar","in_nils_vanner","in_nils_familj",
-        "in_bekanta","in_eskilstuna",
-        "in_bonus_deltagit","in_personal_deltagit",
-    ]:
-        st.number_input(labels[key], min_value=0, step=1, key=key)
-    st.number_input(labels["in_hander_aktiv"], min_value=0, max_value=1, step=1, key="in_hander_aktiv")
-    st.number_input(labels["in_nils"], min_value=0, step=1, key="in_nils")
 
 # app.py — version 250823-3 (Del 2/4)
 
