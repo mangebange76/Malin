@@ -1,4 +1,4 @@
-# app.py — version 250823-2 (Del 1/3)
+# app.py — version 250823-2 (editable-decimal inputs fix)
 import streamlit as st
 import random
 import json
@@ -136,9 +136,37 @@ def _init_cfg_defaults():
         "HARD_AGE_MULT": 1.0,
     }
 
+def _ensure_datetime_types(cfg: dict) -> None:
+    """Säkerställ att datum/tid i CFG är rätt typer även efter sheets-läsning."""
+    def to_date(v, fallback):
+        if isinstance(v, date) and not isinstance(v, datetime):
+            return v
+        if isinstance(v, str) and v.strip():
+            for fmt in ("%Y-%m-%d","%Y/%m/%d","%d/%m/%Y","%d-%m-%Y"):
+                try:
+                    return datetime.strptime(v.strip(), fmt).date()
+                except Exception:
+                    pass
+        return fallback
+    def to_time(v, fallback):
+        if isinstance(v, time):
+            return v
+        if isinstance(v, str) and v.strip():
+            parts = v.strip().split(":")
+            try:
+                hh = int(parts[0]); mm = int(parts[1]) if len(parts)>1 else 0; ss = int(parts[2]) if len(parts)>2 else 0
+                return time(hh, mm, ss)
+            except Exception:
+                pass
+        return fallback
+    cfg["startdatum"]   = to_date(cfg.get("startdatum"), date(1990,1,1))
+    cfg["fodelsedatum"] = to_date(cfg.get("fodelsedatum"), date(1970,1,1))
+    cfg["starttid"]     = to_time(cfg.get("starttid"), time(7,0))
+
 def _ensure_next_start_dt_exists():
     if NEXT_START_DT_KEY not in st.session_state:
         cfg = st.session_state[CFG_KEY]
+        _ensure_datetime_types(cfg)
         st.session_state[NEXT_START_DT_KEY] = datetime.combine(cfg["startdatum"], cfg["starttid"])
 
 def _current_scene_info():
@@ -154,6 +182,8 @@ def init_state():
         st.session_state[CFG_KEY] = _init_cfg_defaults()
     if ROWS_KEY not in st.session_state:
         st.session_state[ROWS_KEY] = []
+    if HIST_MM_KEY not in st.session_state:
+        st.session_state[HIST_MINMAX] = {}
     if HIST_MM_KEY not in st.session_state:
         st.session_state[HIST_MM_KEY] = {}
     if SCENARIO_KEY not in st.session_state:
@@ -224,18 +254,18 @@ def _coerce_cfg_types(cfg: dict) -> dict:
                   "HARD_AGE_MULT")
     for k in float_keys:
         if k in out:
-            try: out[k] = float(out[k])
+            try: out[k] = float(str(out[k]).replace(",", "."))
             except Exception: pass
 
     int_keys = ("PROD_STAFF","HEIGHT_CM","ESK_MIN","ESK_MAX","MAX_PAPPAN","MAX_GRANNAR","MAX_NILS_VANNER","MAX_NILS_FAMILJ","MAX_BEKANTA")
     for k in int_keys:
         if k in out:
-            try: out[k] = int(float(out[k]))
+            try: out[k] = int(float(str(out[k]).replace(",", ".")))
             except Exception: pass
 
     # sömn
     if EXTRA_SLEEP_KEY in out:
-        try: out[EXTRA_SLEEP_KEY] = float(out[EXTRA_SLEEP_KEY])
+        try: out[EXTRA_SLEEP_KEY] = float(str(out[EXTRA_SLEEP_KEY]).replace(",", "."))
         except Exception: pass
 
     return out
@@ -317,6 +347,7 @@ def _load_profile_settings_and_data(profile_name: str):
         if prof_cfg:
             coerced = _coerce_cfg_types(prof_cfg)
             st.session_state[CFG_KEY].update(coerced)
+            _ensure_datetime_types(st.session_state[CFG_KEY])
         else:
             st.warning(f"Inga inställningar hittades för '{profile_name}'. Använder lokala defaults.")
     except Exception as e:
@@ -507,41 +538,63 @@ def apply_scenario_fill():
     st.session_state[SCENEINFO_KEY] = _current_scene_info()
 
 # =========================
+# Helpers: redigerbara decimal-fält (text_input -> float)
+# =========================
+def _float_from_text(s: str, fallback: float) -> float:
+    try:
+        s = str(s).strip().replace(" ", "").replace(",", ".")
+        if s == "":
+            return fallback
+        return float(s)
+    except Exception:
+        return fallback
+
+def float_input(label: str, cfg_key: str, help_text: str = None):
+    """Text-input som låter användaren sudda helt, men vi sparar till CFG som float när det går."""
+    if "TXT_" + cfg_key not in st.session_state:
+        st.session_state["TXT_" + cfg_key] = str(st.session_state[CFG_KEY].get(cfg_key, ""))
+    txt_val = st.text_input(label, key="TXT_" + cfg_key, help=help_text)
+    parsed = _float_from_text(txt_val, float(st.session_state[CFG_KEY].get(cfg_key, 0.0)))
+    st.session_state[CFG_KEY][cfg_key] = parsed
+    return parsed
+
+# =========================
 # Sidopanel – Inställningar & Profiler
 # =========================
 CFG = st.session_state[CFG_KEY]
 with st.sidebar:
     st.header("Inställningar (lokalt)")
 
-    # Basdatum
+    # Basdatum (säkerställ typer innan widgets)
+    _ensure_datetime_types(CFG)
     CFG["startdatum"]   = st.date_input("Startdatum", value=CFG["startdatum"])
     CFG["starttid"]     = st.time_input("Starttid", value=CFG["starttid"])
     CFG["fodelsedatum"] = st.date_input("Födelsedatum", value=CFG["fodelsedatum"])
 
     # ===== Ekonomi =====
     st.subheader("Ekonomi")
-    CFG["avgift_usd"]   = st.number_input("Avgift per prenumerant (USD)", min_value=0.0, value=float(CFG["avgift_usd"]), step=0.5)
-    CFG["ECON_COST_PER_HOUR"] = st.number_input("Kostnad män (USD per person-timme)", min_value=0.0, value=float(CFG["ECON_COST_PER_HOUR"]), step=0.5)
-    CFG["ECON_REVENUE_PER_KANNER"] = st.number_input("Intäkt per 'Känner' (USD)", min_value=0.0, value=float(CFG["ECON_REVENUE_PER_KANNER"]), step=0.5)
+    CFG["avgift_usd"]   = float_input("Avgift per prenumerant (USD)", "avgift_usd")
+    CFG["ECON_COST_PER_HOUR"] = float_input("Kostnad män (USD per person-timme)", "ECON_COST_PER_HOUR")
+    CFG["ECON_REVENUE_PER_KANNER"] = float_input("Intäkt per 'Känner' (USD)", "ECON_REVENUE_PER_KANNER")
 
     st.markdown("**Lön Malin – parametrar**")
-    CFG["ECON_WAGE_SHARE_PCT"] = st.number_input("Lön % av Intäkt företag", min_value=0.0, max_value=100.0, value=float(CFG["ECON_WAGE_SHARE_PCT"]), step=0.5)
-    CFG["ECON_WAGE_MIN"] = st.number_input("Lön min (USD)", min_value=0.0, value=float(CFG["ECON_WAGE_MIN"]), step=5.0)
-    CFG["ECON_WAGE_MAX"] = st.number_input("Lön max (USD)", min_value=0.0, value=float(CFG["ECON_WAGE_MAX"]), step=5.0)
-    CFG["ECON_WAGE_AGE_MULT"] = st.number_input("Lön ålders-multiplikator", min_value=0.5, max_value=1.5, value=float(CFG["ECON_WAGE_AGE_MULT"]), step=0.05)
+    CFG["ECON_WAGE_SHARE_PCT"] = float_input("Lön % av Intäkt företag", "ECON_WAGE_SHARE_PCT")
+    CFG["ECON_WAGE_MIN"] = float_input("Lön min (USD)", "ECON_WAGE_MIN")
+    CFG["ECON_WAGE_MAX"] = float_input("Lön max (USD)", "ECON_WAGE_MAX")
+    CFG["ECON_WAGE_AGE_MULT"] = float_input("Lön ålders-multiplikator", "ECON_WAGE_AGE_MULT")
 
     CFG["PROD_STAFF"]   = st.number_input("Totalt antal personal (lönebas)", min_value=0, value=int(CFG["PROD_STAFF"]), step=1)
 
     st.markdown(f"**Bonus killar kvar:** {int(CFG[BONUS_LEFT_KEY])}")
     st.markdown(f"**Super-bonus ack (antal):** {int(CFG.get(SUPER_ACC_KEY,0))}")
 
-    CFG["BONUS_PCT"]        = st.number_input("Bonus % (decimal, t.ex. 1.0 = 1%)", min_value=0.0, value=float(CFG.get("BONUS_PCT",1.0)), step=0.1)
-    CFG["SUPER_BONUS_PCT"]  = st.number_input("Super-bonus % (decimal, t.ex. 0.1 = 0.1%)", min_value=0.0, value=float(CFG.get("SUPER_BONUS_PCT",0.1)), step=0.1)
-    CFG["BMI_GOAL"]         = st.number_input("BM mål (BMI)", min_value=10.0, max_value=40.0, value=float(CFG.get("BMI_GOAL",21.7)), step=0.1)
+    CFG["BONUS_PCT"]        = float_input("Bonus % (decimal, t.ex. 1.0 = 1%)", "BONUS_PCT")
+    CFG["SUPER_BONUS_PCT"]  = float_input("Super-bonus % (decimal, t.ex. 0.1 = 0.1%)", "SUPER_BONUS_PCT")
+    CFG["BMI_GOAL"]         = float_input("BM mål (BMI)", "BMI_GOAL")
     CFG["HEIGHT_CM"]        = st.number_input("Längd (cm)", min_value=140, max_value=220, value=int(CFG.get("HEIGHT_CM",164)), step=1)
 
     # Sömn efter scen (timmar) – används i tvingad schemaläggning
-    CFG[EXTRA_SLEEP_KEY]    = st.number_input("Sömn efter scen (timmar)", min_value=0.0, step=0.5, value=float(CFG.get(EXTRA_SLEEP_KEY,7)))
+    CFG[EXTRA_SLEEP_KEY]    = float_input("Sömn efter scen (timmar)", EXTRA_SLEEP_KEY)
 
     st.markdown("---")
     st.subheader("Eskilstuna-intervall (fallback om ingen historik)")
@@ -569,17 +622,17 @@ with st.sidebar:
     st.subheader("Hårdhet – poäng (styrbart)")
     colH1, colH2 = st.columns(2)
     with colH1:
-        CFG["HARD_PT_DP"] = st.number_input("Poäng: DP>0", min_value=0.0, value=float(CFG["HARD_PT_DP"]), step=1.0)
-        CFG["HARD_PT_DPP"] = st.number_input("Poäng: DPP>0", min_value=0.0, value=float(CFG["HARD_PT_DPP"]), step=1.0)
-        CFG["HARD_PT_DAP"] = st.number_input("Poäng: DAP>0", min_value=0.0, value=float(CFG["HARD_PT_DAP"]), step=1.0)
-        CFG["HARD_PT_TAP"] = st.number_input("Poäng: TAP>0", min_value=0.0, value=float(CFG["HARD_PT_TAP"]), step=1.0)
-        CFG["HARD_PT_SVARTA"] = st.number_input("Poäng: Svarta>0", min_value=0.0, value=float(CFG["HARD_PT_SVARTA"]), step=1.0)
+        CFG["HARD_PT_DP"]   = float_input("Poäng: DP>0",   "HARD_PT_DP")
+        CFG["HARD_PT_DPP"]  = float_input("Poäng: DPP>0",  "HARD_PT_DPP")
+        CFG["HARD_PT_DAP"]  = float_input("Poäng: DAP>0",  "HARD_PT_DAP")
+        CFG["HARD_PT_TAP"]  = float_input("Poäng: TAP>0",  "HARD_PT_TAP")
+        CFG["HARD_PT_SVARTA"] = float_input("Poäng: Svarta>0", "HARD_PT_SVARTA")
     with colH2:
-        CFG["HARD_PT_TOT50"] = st.number_input("Poäng: Tot Män ≥ 50", min_value=0.0, value=float(CFG["HARD_PT_TOT50"]), step=1.0)
-        CFG["HARD_PT_TOT300"] = st.number_input("Poäng: Tot Män ≥ 300", min_value=0.0, value=float(CFG["HARD_PT_TOT300"]), step=1.0)
-        CFG["HARD_PT_TOT500"] = st.number_input("Poäng: Tot Män ≥ 500", min_value=0.0, value=float(CFG["HARD_PT_TOT500"]), step=1.0)
-        CFG["HARD_PT_TOT800"] = st.number_input("Poäng: Tot Män ≥ 800", min_value=0.0, value=float(CFG["HARD_PT_TOT800"]), step=1.0)
-        CFG["HARD_PT_TOT1000"] = st.number_input("Poäng: Tot Män ≥ 1000", min_value=0.0, value=float(CFG["HARD_PT_TOT1000"]), step=1.0)
+        CFG["HARD_PT_TOT50"]   = float_input("Poäng: Tot Män ≥ 50",   "HARD_PT_TOT50")
+        CFG["HARD_PT_TOT300"]  = float_input("Poäng: Tot Män ≥ 300",  "HARD_PT_TOT300")
+        CFG["HARD_PT_TOT500"]  = float_input("Poäng: Tot Män ≥ 500",  "HARD_PT_TOT500")
+        CFG["HARD_PT_TOT800"]  = float_input("Poäng: Tot Män ≥ 800",  "HARD_PT_TOT800")
+        CFG["HARD_PT_TOT1000"] = float_input("Poäng: Tot Män ≥ 1000", "HARD_PT_TOT1000")
 
     # Ålder för hårdhet – räkna ut & låt användaren fintrimma multiplikatorn
     try:
@@ -589,7 +642,7 @@ with st.sidebar:
     except Exception:
         alder = 30
     st.caption(f"Ålder (beräknad): {alder} år")
-    CFG["HARD_AGE_MULT"] = st.number_input("Hårdhet – ålders-multiplikator", min_value=0.5, max_value=2.0, value=float(CFG["HARD_AGE_MULT"]), step=0.1)
+    CFG["HARD_AGE_MULT"] = float_input("Hårdhet – ålders-multiplikator", "HARD_AGE_MULT")
 
     st.markdown("---")
     st.subheader("Scenario")
@@ -624,6 +677,7 @@ with st.sidebar:
                 if prof_cfg:
                     coerced = _coerce_cfg_types(prof_cfg)
                     st.session_state[CFG_KEY].update(coerced)
+                    _ensure_datetime_types(st.session_state[CFG_KEY])
                     st.success(f"✅ Läste in inställningar för '{selected_profile}'.")
                 else:
                     st.warning(f"Inga inställningar hittades på bladet '{selected_profile}'.")
@@ -702,8 +756,6 @@ with c2:
     st.number_input(labels["in_hander_aktiv"], min_value=0, max_value=1, step=1, key="in_hander_aktiv")
     st.number_input(labels["in_nils"], min_value=0, step=1, key="in_nils")
 
-# ==== Del 2/3 – Live, hårdhet, ekonomi, BMI, tider, varningar ====
-
 # =========================
 # Bygg basrad från inputs
 # =========================
@@ -765,7 +817,6 @@ def build_base_from_inputs():
     base["_starttid"]     = start_dt.time()  # T V I N G A D starttid
     return base
 
-
 # =========================
 # Hårdhet enligt styrbara regler
 # =========================
@@ -797,7 +848,6 @@ def _hardhet_from(base, preview, CFG):
         hard = 0.0
 
     return float(hard)
-
 
 # =========================
 # Ekonomiberäkningar (styrbara)
@@ -852,7 +902,6 @@ def _econ_compute(base, preview, CFG):
 
     out["Vinst"] = float(out["Intäkt företag"]) - float(out["Lön Malin"])
     return out
-
 
 # =========================
 # Live
@@ -1061,10 +1110,8 @@ else:
 
 st.caption("Obs: Vila-scenarion genererar inga prenumeranter, intäkter, kostnader eller lön. Bonus kvar minskas dock med 'Bonus deltagit'.")
 
-# ==== Del 3/3 – Spara, lokala rader, statistik ====
-
 # =========================
-# Sparrad – full rad (base + preview) och nollställ None
+# Spar & statistik
 # =========================
 CFG = st.session_state[CFG_KEY]
 LBL_PAPPAN   = CFG["LBL_PAPPAN"]
