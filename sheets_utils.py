@@ -1,11 +1,11 @@
 # sheets_utils.py
-# Version 250823-3 – batch-append + mindre läsningar (färre 429-fel)
+# Version 250823-2 — förbättrad settings-hantering & låg-läsning-append
 
 from __future__ import annotations
 import json
-from typing import Any, Dict, List, Optional
-from collections.abc import Mapping
 import time
+from typing import Any, Dict, List, Optional, Tuple
+from collections.abc import Mapping
 
 import streamlit as st
 import gspread
@@ -33,6 +33,7 @@ def _load_google_credentials_dict() -> Dict[str, Any]:
     """
     if "GOOGLE_CREDENTIALS" not in st.secrets:
         raise RuntimeError("GOOGLE_CREDENTIALS saknas i st.secrets.")
+
     raw = st.secrets["GOOGLE_CREDENTIALS"]
 
     if isinstance(raw, Mapping):
@@ -134,8 +135,14 @@ def list_profiles() -> List[str]:
 # =============================
 
 def _coerce_setting(key: str, val: Any) -> Any:
+    """
+    Robust typning:
+      - Tomt fält -> "" (inte None)
+      - Svenska tal: tar bort mellanrum/nbsp och byter komma till punkt
+      - Datum/tid försöksvis konverterade
+    """
     if val is None:
-        return None
+        return ""
     s = str(val).strip()
 
     def _to_date(x: str):
@@ -162,15 +169,22 @@ def _coerce_setting(key: str, val: Any) -> Any:
         t = _to_time(s)
         return t if t else s
 
+    if s == "":
+        return ""
+
     if s.lower() in ("true", "false"):
         return s.lower() == "true"
+
+    # Försök numerik med svensk formatering
     try:
-        if "." in s or "," in s:
-            s2 = s.replace(",", ".")
-            return float(s2)
-        return int(s)
+        s_num = s.replace("\xa0", " ").replace(" ", "")
+        if "," in s_num or "." in s_num:
+            s_num = s_num.replace(",", ".")
+            return float(s_num)
+        return int(s_num)
     except Exception:
-        return val
+        return s  # lämna som sträng om vi inte kan tolka
+
 
 def _read_kv_sheet(ws: Worksheet) -> Dict[str, Any]:
     values = ws.get_all_values()
@@ -203,28 +217,47 @@ def _read_kv_sheet(ws: Worksheet) -> Dict[str, Any]:
     return out
 
 def _settings_candidates(profile: str) -> List[str]:
+    # Sökordning vid läsning/sparning
     return [f"Settings - {profile}", f"{profile}__settings", profile]
 
-def read_profile_settings(profile: str) -> Dict[str, Any]:
+def read_profile_settings(profile: str) -> Tuple[Dict[str, Any], Optional[str]]:
+    """
+    Returnerar (inställnings-dict, blad-titel-som-användes).
+    """
     ss = _open_spreadsheet()
     ws = None
+    used_title: Optional[str] = None
     for title in _settings_candidates(profile):
         ws = _get_ws_by_title(ss, title)
         if ws is not None:
+            used_title = title
             break
     if ws is None:
-        return {}
+        return {}, None
     try:
-        return _read_kv_sheet(ws)
+        return _read_kv_sheet(ws), used_title
     except APIError as e:
         raise RuntimeError(f"Kunde inte läsa inställningar för '{profile}': {e}")
 
-def save_profile_settings(profile: str, cfg: Dict[str, Any]) -> None:
+def save_profile_settings(profile: str, cfg: Dict[str, Any], target_title: Optional[str] = None) -> None:
+    """
+    Sparar till angivet settings-blad. Om target_title saknas väljs första existerande
+    i kandidatlistan, annars skapas 'Settings - {profile}'.
+    """
     ss = _open_spreadsheet()
-    title = _settings_candidates(profile)[0]  # 'Settings - {profile}'
-    ws = _get_ws_by_title(ss, title)
+
+    if not target_title:
+        for title in _settings_candidates(profile):
+            ws = _get_ws_by_title(ss, title)
+            if ws is not None:
+                target_title = title
+                break
+        if not target_title:
+            target_title = _settings_candidates(profile)[0]
+
+    ws = _get_ws_by_title(ss, target_title)
     if ws is None:
-        ws = ss.add_worksheet(title=title, rows=2, cols=2)
+        ws = ss.add_worksheet(title=target_title, rows=2, cols=2)
 
     def _to_writable(v: Any) -> Any:
         try:
@@ -235,7 +268,7 @@ def save_profile_settings(profile: str, cfg: Dict[str, Any]) -> None:
                 return v.strftime("%H:%M:%S")
         except Exception:
             pass
-        return v
+        return "" if v is None else v
 
     rows = [[k, _to_writable(v)] for k, v in cfg.items()]
     ws.clear()
@@ -254,6 +287,7 @@ def _records_to_dataframe(records: List[Dict[str, Any]]) -> pd.DataFrame:
     """
     if not records:
         return pd.DataFrame()
+    # ersätt None med "" så pandas inte gör NaN
     normed = [{k: ("" if v is None else v) for k, v in rec.items()} for rec in records]
     return pd.DataFrame(normed, dtype=object)
 
@@ -264,78 +298,46 @@ def read_profile_data(profile: str) -> pd.DataFrame:
     """
     ss = _open_spreadsheet()
     ws = _get_or_create_primary_data_ws(ss, profile)
+
     try:
         records = ws.get_all_records(default_blank="")
     except APIError as e:
         raise RuntimeError(f"Kunde inte läsa data för '{profile}': {e}")
+
     return _records_to_dataframe(records)
-
-
-def _ensure_headers(ws: Worksheet, wanted_headers: List[str]) -> List[str]:
-    """Läs (minimalt) headern, skapa/utöka vid behov. Returnerar slutlig header-ordning."""
-    try:
-        existing = ws.row_values(1)  # en enda rad (minimal READ)
-    except APIError as e:
-        raise RuntimeError(f"Kunde inte läsa header för '{ws.title}': {e}")
-
-    headers = [h for h in existing if h] if existing else []
-    if not headers:
-        headers = list(wanted_headers)
-        if headers:
-            ws.update("A1", [headers])  # skriv bara header
-        return headers
-
-    # utöka header om nya kolumner finns
-    new_cols = [h for h in wanted_headers if h not in headers]
-    if new_cols:
-        headers_extended = headers + new_cols
-        ws.update("A1", [headers_extended])  # skriv endast header-raden
-        headers = headers_extended
-    return headers
-
 
 def append_row_to_profile_data(profile: str, row: Dict[str, Any]) -> None:
     """
-    Lägg till EN rad i primärbladet 'Data - {profile}'.
-    Endast headern läses; därefter används Sheets-APPEND (ingen radindex-beräkning).
+    Lägg till en rad i **primärbladet** 'Data - {profile}' med minimala läsningar:
+      1) Läs bara headern (rad 1)
+      2) Utöka headern om nya kolumner finns (uppdatera endast rad 1)
+      3) Append:a rad med värden i header-ordning
     """
     ss = _open_spreadsheet()
     ws = _get_or_create_primary_data_ws(ss, profile)
 
-    headers = _ensure_headers(ws, list(row.keys()))
-    values = [row.get(h, "") for h in headers]
-    # Använd append_row (enbart WRITE; ingen READ av kroppen)
-    ws.append_row(values, value_input_option="USER_ENTERED")
+    # Läs endast headern (en läsning)
+    try:
+        headers = ws.row_values(1)
+    except APIError as e:
+        raise RuntimeError(f"Kunde inte läsa header för '{ws.title}': {e}")
 
-
-def append_rows_to_profile_data(profile: str, rows: List[Dict[str, Any]], chunk_size: int = 100) -> None:
-    """
-    Lägg till MÅNGA rader effektivt i chunkar med append_rows.
-    Läser bara headern EN gång. Skapar/utökar headern vid behov.
-    """
-    if not rows:
+    if not headers:
+        # Skapa header + första raden
+        headers = list(row.keys())
+        ws.update("A1", [headers])
+        values = [row.get(h, "") for h in headers]
+        ws.append_row(values, value_input_option="USER_ENTERED")
         return
 
-    ss = _open_spreadsheet()
-    ws = _get_or_create_primary_data_ws(ss, profile)
+    # Ev. utöka headern utan att läsa/kopiera hela bladet
+    new_cols = [k for k in row.keys() if k not in headers]
+    if new_cols:
+        headers_extended = headers + new_cols
+        # Uppdatera bara rad 1 med nya rubriker (påverkar inte befintliga data-rader)
+        ws.update("A1", [headers_extended])
+        headers = headers_extended
 
-    # Samla union av keys för att täcka alla kolumner
-    union_keys = []
-    seen = set()
-    for r in rows:
-        for k in r.keys():
-            if k not in seen:
-                seen.add(k)
-                union_keys.append(k)
-
-    headers = _ensure_headers(ws, union_keys)
-
-    # Packa i chunkar och skriv
-    total = len(rows)
-    i = 0
-    while i < total:
-        chunk = rows[i:i+chunk_size]
-        body = [[r.get(h, "") for h in headers] for r in chunk]
-        # append_rows är effektivt och kräver inte radindex
-        ws.append_rows(body, value_input_option="USER_ENTERED")
-        i += len(chunk)
+    # Append:a i header-ordning
+    values = [row.get(h, "") for h in headers]
+    ws.append_row(values, value_input_option="USER_ENTERED")
