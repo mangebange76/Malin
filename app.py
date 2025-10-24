@@ -1122,6 +1122,7 @@ cL, cR = st.columns([1,1])
 
 def _save_to_sheets_for_profile(profile: str, row_dict: dict):
     append_row_to_profile_data(profile, row_dict)
+    _time.sleep(1)  # 1 sekunds fördröjning per sparning till Google Sheets
 
 with cL:
     if st.button("💾 Spara raden (lokalt)"):
