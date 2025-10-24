@@ -1093,7 +1093,7 @@ def _row_for_sheets(row_dict: dict) -> dict:
     return {k: _to_writable_value(v) for k, v in row_dict.items()}
 
 def _after_save_housekeeping(preview_row: dict, is_vila: bool, is_superbonus: bool):
-    """Bonus- och superbonuslogik + uppdatera ack i CFG."""
+    """Bonus- och superbonuslogik + uppdatera ack i CFG och spara till profilbladet."""
     CFG = st.session_state[CFG_KEY]
     pren = int(preview_row.get("Prenumeranter", 0))
     bonus_pct = float(CFG.get("BONUS_PCT", 1.0)) / 100.0
@@ -1105,6 +1105,12 @@ def _after_save_housekeeping(preview_row: dict, is_vila: bool, is_superbonus: bo
     minus_bonus = int(preview_row.get("Bonus deltagit", 0))
     CFG[BONUS_LEFT_KEY] = max(0, int(CFG.get(BONUS_LEFT_KEY,0)) - minus_bonus + add_bonus)
     CFG[SUPER_ACC_KEY]  = max(0, int(CFG.get(SUPER_ACC_KEY,0)) + add_super)
+
+    # Persistera direkt till profilens inställningsblad
+    try:
+        save_profile_settings(st.session_state.get(PROFILE_KEY, ""), CFG)
+    except Exception as e:
+        st.warning(f"Kunde inte spara bonus/superbonus till profilbladet: {e}")
 
 def _update_forced_next_start_after_save(saved_row: dict, forced_next_dt: datetime):
     """Efter sparning: uppdatera tvingad NEXT_START_DT."""
@@ -1161,16 +1167,37 @@ with cR:
             st.error(f"Misslyckades att spara till Sheets: {e}")
 
 # =========================
-# Kopiera rader ~365d (batch-skrivning för färre API-anrop)
+# Kopiera rader (batch-skrivning + dagar från Startdatum → senaste i databasen)
 # =========================
 st.markdown("---")
-st.subheader("📅 Kopiera rader för ~365 dagar")
+st.subheader("📅 Kopiera rader")
+
+def _max_date_in_rows(rows) -> date | None:
+    md = None
+    for r in rows:
+        try:
+            d = datetime.strptime(str(r.get("Datum","")), "%Y-%m-%d").date()
+            if (md is None) or (d > md):
+                md = d
+        except Exception:
+            continue
+    return md
 
 colK1, colK2 = st.columns([2,1])
 with colK1:
     do_save_sheets = st.checkbox("Spara kopior till Google Sheets (batch)", value=True)
 with colK2:
-    approx_days = st.number_input("Antal dagar att skapa (≈365)", min_value=1, max_value=2000, value=365, step=1)
+    start_date = CFG.get("startdatum", date.today())
+    latest_dt  = _max_date_in_rows(st.session_state.get(ROWS_KEY, []))
+    if latest_dt and latest_dt >= start_date:
+        default_days = max(1, (latest_dt - start_date).days + 1)
+    else:
+        default_days = 365
+    approx_days = st.number_input(
+        "Antal dagar att skapa (auto från Startdatum → senaste i databasen)",
+        min_value=1, max_value=2000, value=default_days, step=1,
+        help=f"Start: {start_date.isoformat()} • Senast i databasen: {latest_dt.isoformat() if latest_dt else '—'}"
+    )
 
 BATCH_SIZE = 200   # skriv i chunkar (t.ex. 200 rader per API-anrop)
 progress_box = st.empty()
@@ -1201,7 +1228,7 @@ def _batch_append(profile: str, rows_list: list[dict]) -> bool:
     if not rows_list:
         return True
     try:
-        # Kräver att du lagt till append_rows_to_profile_data_batch i sheets_utils.py
+        # Kräver append_rows_to_profile_data_batch i sheets_utils.py
         from sheets_utils import append_rows_to_profile_data_batch
         total = len(rows_list)
         written = 0
@@ -1228,8 +1255,8 @@ if st.button("📚 Skapa kopior nu"):
         start_ts = _time.time()
         created = 0
         profile = st.session_state.get(PROFILE_KEY, "")
-        # basdatum: använd profilens startdatum som konsekvent årsbas
-        start_date = CFG.get("startdatum", date.today())
+        start_date = CFG.get("startdatum", date.today())  # bas: valt startdatum
+
         # börja scenräkning efter nuvarande max
         try:
             max_scen = max(int(r.get("Scen", 0) or 0) for r in src_rows) if src_rows else 0
