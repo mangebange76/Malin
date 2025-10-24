@@ -830,7 +830,6 @@ def _fallback_tot_men(base: dict, CFG: dict) -> int:
 def _econ_compute_betyg(base: dict, preview: dict, CFG: dict) -> dict:
     out = {}
     typ = str(base.get("Typ",""))
-    alder = max(1, _alder_from_cfg(CFG))
     hardhet = _hardhet_betyg(base, preview, CFG)
     out["Hårdhet"] = hardhet
 
@@ -1162,23 +1161,24 @@ with cR:
             st.error(f"Misslyckades att spara till Sheets: {e}")
 
 # =========================
-# Kopiera rader ~365d (med throttling, progress & ETA)
+# Kopiera rader ~365d (batch-skrivning för färre API-anrop)
 # =========================
 st.markdown("---")
 st.subheader("📅 Kopiera rader för ~365 dagar")
 
 colK1, colK2 = st.columns([2,1])
 with colK1:
-    do_save_sheets = st.checkbox("Spara varje kopia direkt till Google Sheets", value=True)
+    do_save_sheets = st.checkbox("Spara kopior till Google Sheets (batch)", value=True)
 with colK2:
-    approx_days = st.number_input("Antal dagar att skapa (≈365)", min_value=1, max_value=1000, value=365, step=1)
+    approx_days = st.number_input("Antal dagar att skapa (≈365)", min_value=1, max_value=2000, value=365, step=1)
 
+BATCH_SIZE = 200   # skriv i chunkar (t.ex. 200 rader per API-anrop)
 progress_box = st.empty()
 eta_box = st.empty()
 bar = st.progress(0)
 
 def _safe_save_with_backoff(profile: str, row_for_sheet: dict, max_retries: int = 4):
-    """Försök spara, backoff vid 429 / RATE_LIMIT. Returnerar True vid lyckat."""
+    """Fallback: per-rad-skrivning med kort backoff om batch ej finns."""
     for attempt in range(max_retries):
         try:
             _save_to_sheets_for_profile(profile, row_for_sheet)
@@ -1186,8 +1186,8 @@ def _safe_save_with_backoff(profile: str, row_for_sheet: dict, max_retries: int 
         except Exception as e:
             msg = str(e)
             if "429" in msg or "RATE_LIMIT" in msg or "RESOURCE_EXHAUSTED" in msg:
-                sleep_s = min(60 * (attempt + 1), 240)
-                st.warning(f"Rate-limit från Sheets. Väntar {sleep_s}s (försök {attempt+1}/{max_retries})…")
+                sleep_s = min(5 * (attempt + 1), 20) + random.uniform(0, 1.5)
+                st.warning(f"Rate-limit från Sheets. Väntar {sleep_s:.1f}s (försök {attempt+1}/{max_retries})…")
                 _time.sleep(sleep_s)
                 continue
             else:
@@ -1195,6 +1195,30 @@ def _safe_save_with_backoff(profile: str, row_for_sheet: dict, max_retries: int 
                 return False
     st.error("Misslyckades efter flera försök (rate-limit).")
     return False
+
+def _batch_append(profile: str, rows_list: list[dict]) -> bool:
+    """Batch-skriv rader i chunkar för att undvika rate limits. Faller tillbaka till per-rad om batch-API saknas."""
+    if not rows_list:
+        return True
+    try:
+        # Kräver att du lagt till append_rows_to_profile_data_batch i sheets_utils.py
+        from sheets_utils import append_rows_to_profile_data_batch
+        total = len(rows_list)
+        written = 0
+        for i in range(0, total, BATCH_SIZE):
+            chunk = rows_list[i:i+BATCH_SIZE]
+            n = append_rows_to_profile_data_batch(profile, chunk)
+            written += n
+            _time.sleep(1)  # liten paus mellan batch-anrop
+        st.success(f"✅ Batch-sparade {written} rader till Google Sheets.")
+        return True
+    except Exception as e:
+        st.warning(f"Batch-skrivning ej tillgänglig ({e}). Försöker per rad med backoff…")
+        ok_all = True
+        for r in rows_list:
+            if not _safe_save_with_backoff(profile, r):
+                ok_all = False
+        return ok_all
 
 if st.button("📚 Skapa kopior nu"):
     src_rows = st.session_state.get(ROWS_KEY, [])
@@ -1212,6 +1236,8 @@ if st.button("📚 Skapa kopior nu"):
         except Exception:
             max_scen = len(src_rows)
 
+        to_write_batch = []  # samlar rader som ska sparas i batch
+
         for i in range(approx_days):
             src = _copy.deepcopy(src_rows[i % len(src_rows)])
             new_date = start_date + timedelta(days=i)
@@ -1220,16 +1246,14 @@ if st.button("📚 Skapa kopior nu"):
             src["Veckodag"] = veckodagar[new_date.weekday()]
             max_scen += 1
             src["Scen"] = max_scen
-            # (låt övriga fält vara exakt kopior)
+            # (övriga fält: exakt kopior)
 
             # lokalt
             st.session_state[ROWS_KEY].append(src)
+            created += 1
 
-            ok = True
             if do_save_sheets:
-                ok = _safe_save_with_backoff(profile, _row_for_sheets(src))
-            if ok:
-                created += 1
+                to_write_batch.append(_row_for_sheets(src))
 
             # progress + ETA
             pct = created / float(approx_days)
@@ -1238,6 +1262,10 @@ if st.button("📚 Skapa kopior nu"):
             eta = (elapsed / pct - elapsed) if pct > 0 else 0.0
             progress_box.info(f"Skapat {created}/{approx_days} rader ({pct*100:.1f}%).")
             eta_box.caption(f"Uppskattad tid kvar: ~{int(eta)//60} min {int(eta)%60} s")
+
+        # Skriv allt i batch (färre API-anrop -> minimerar rate limits)
+        if do_save_sheets and to_write_batch:
+            _batch_append(profile, to_write_batch)
 
         st.success(f"Klart. Skapade {created} rader.")
         # uppdatera min/max efter mass-kopiering (för slump)
@@ -1248,6 +1276,15 @@ if st.button("📚 Skapa kopior nu"):
                     _add_hist_value(col, int(r.get(col,0) or 0))
                 except Exception:
                     pass
+
+# Extra: batch-spara ALLA lokala rader i efterhand (om du kopierat utan autospara)
+if st.button("📤 Spara ALLA lokala rader (batch)"):
+    profile = st.session_state.get(PROFILE_KEY, "")
+    if not st.session_state[ROWS_KEY]:
+        st.info("Inga lokala rader att spara.")
+    else:
+        all_rows = [_row_for_sheets(r) for r in st.session_state[ROWS_KEY]]
+        _batch_append(profile, all_rows)
 
 # =========================
 # Visa lokala rader + Statistik
