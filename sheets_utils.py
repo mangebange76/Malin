@@ -311,3 +311,108 @@ def append_row_to_profile_data(profile: str, row: Dict[str, Any]) -> None:
 
     values = [row.get(h, "") for h in headers]
     ws.append_row(values, value_input_option="USER_ENTERED")
+
+
+# =============================
+# Data – batch-append (färre API-anrop + backoff)
+# =============================
+
+from datetime import date as _dt_date, time as _dt_time, datetime as _dt_datetime
+
+def append_rows_to_profile_data_batch(profile: str, rows: List[Dict[str, Any]], chunk_size: int = 200) -> int:
+    """
+    Append:ar många rader till primärbladet 'Data - {profile}' i få API-anrop.
+    - Skapar bladet vid behov
+    - Läser endast header-raden
+    - Utökar header om nya kolumner dyker upp
+    - Skrivning i chunkar (chunk_size) med exponential backoff vid 429
+
+    Returnerar antal skrivna rader.
+    """
+    if not rows:
+        return 0
+
+    ss = get_spreadsheet()
+    ws = _get_or_create_primary_data_ws(ss, profile)
+
+    # 1) Läs befintlig header (billigt)
+    try:
+        headers = ws.row_values(1)
+    except APIError as e:
+        raise RuntimeError(f"Kunde inte läsa header för '{ws.title}': {e}")
+
+    # 2) Bygg målheader: befintlig ordning + nya nycklar i den ordning de dyker upp
+    if not headers:
+        seen = set()
+        headers = []
+        for r in rows:
+            for k in r.keys():
+                if k not in seen:
+                    headers.append(k)
+                    seen.add(k)
+        try:
+            ws.update("A1", [headers])
+        except APIError as e:
+            raise RuntimeError(f"Kunde inte skriva header till '{ws.title}': {e}")
+    else:
+        seen = set(headers)
+        new_cols = []
+        for r in rows:
+            for k in r.keys():
+                if k not in seen:
+                    new_cols.append(k)
+                    seen.add(k)
+        if new_cols:
+            headers_extended = headers + new_cols
+            try:
+                ws.update("A1", [headers_extended])
+            except APIError as e:
+                raise RuntimeError(f"Kunde inte uppdatera header för '{ws.title}': {e}")
+            headers = headers_extended
+
+    # 3) Normalisera cellvärden (datum/tid -> sträng, None -> "")
+    def _to_cell(v: Any) -> Any:
+        if v is None:
+            return ""
+        if isinstance(v, _dt_datetime):
+            return v.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(v, _dt_date):
+            return v.isoformat()
+        if isinstance(v, _dt_time):
+            return v.strftime("%H:%M:%S")
+        return v
+
+    total_written = 0
+
+    # 4) Skriv i chunkar med backoff
+    i = 0
+    n = len(rows)
+    while i < n:
+        chunk = rows[i:i+chunk_size]
+        values_2d = [[_to_cell(r.get(h, "")) for h in headers] for r in chunk]
+
+        delay = 0.5
+        attempts = 0
+        while True:
+            try:
+                # Ett API-anrop per chunk
+                ws.append_rows(values_2d, value_input_option="USER_ENTERED", insert_data_option="INSERT_ROWS")
+                total_written += len(values_2d)
+                break
+            except APIError as e:
+                msg = str(e)
+                # Hantera rate limit/backoff
+                if "429" in msg or "RATE_LIMIT" in msg or "RESOURCE_EXCEEDED" in msg or "RESOURCE_EXHAUSTED" in msg:
+                    time.sleep(delay)
+                    delay = min(8.0, delay * 1.8)
+                    attempts += 1
+                    if attempts > 7:
+                        raise RuntimeError(f"Misslyckades med batch-append till '{ws.title}' efter flera försök: {e}")
+                    continue
+                # Annat fel -> bubbla upp
+                raise
+        # liten paus mellan chunk-anrop för att vara snäll mot API:t
+        time.sleep(1.0)
+        i += len(chunk)
+
+    return total_written
